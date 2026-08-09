@@ -64,6 +64,8 @@ def test_filter_valves_normalize_legacy_integer_budgets() -> None:
         "1.0",
         "1,000",
         "500001",
+        "١",
+        "１２３",
     ],
 )
 def test_filter_valves_reject_noncanonical_or_out_of_range_budgets(value: object) -> None:

@@ -6,6 +6,7 @@ import anyio
 import httpx
 from fastapi import FastAPI
 
+from assistant_core.api.routes.context import ContextRequest
 from assistant_core.auth.hmac import sign_request
 from assistant_core.config import Settings
 from assistant_core.main import create_app
@@ -72,19 +73,11 @@ def test_context_returns_the_empty_contract() -> None:
     }
 
 
-def test_context_default_budget_is_300000_in_the_exact_signed_payload() -> None:
-    """Omitting max_tokens uses the policy default without changing the empty response."""
-    app = create_app(Settings(hmac_secret="a" * 32))
+def test_context_request_defaults_to_the_configured_300000_budget() -> None:
+    """Omitting max_tokens parses to the policy budget before endpoint handling."""
+    request = ContextRequest.model_validate({"native_user_id": "user-1"})
 
-    response = anyio.run(post_context, app)
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "context_text": "",
-        "token_estimate": 0,
-        "sources": [],
-        "degraded": False,
-    }
+    assert request.max_tokens == 300_000
 
 
 def test_context_rejects_missing_or_invalid_signatures() -> None:
