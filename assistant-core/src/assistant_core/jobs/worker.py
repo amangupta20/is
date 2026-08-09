@@ -8,7 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from assistant_core.config import get_settings
 from assistant_core.db.session import create_database
+from assistant_core.events.models import EventInbox
 from assistant_core.jobs.repository import claim_next_job, complete_job, fail_job
+from assistant_core.turns.repository import (
+    INVALID_TURN_PAYLOAD_ERROR,
+    InvalidTurnPayloadError,
+    materialize_completed_turn,
+)
 
 UNSUPPORTED_KIND_ERROR = "unsupported_job_kind"
 IDLE_POLL_SECONDS = 1.0
@@ -18,11 +24,27 @@ class UnsupportedJobKindError(ValueError):
     """Raised when a worker receives a job kind it cannot process."""
 
 
-async def handle(kind: str, payload: dict[str, JsonValue]) -> None:
-    """Handle one foundation job without performing downstream work yet."""
-    del payload
+async def handle(
+    session: AsyncSession, kind: str, payload: dict[str, JsonValue]
+) -> None:
+    """Route one job, materializing only completed-turn inbox events."""
     if kind != "process_event":
         raise UnsupportedJobKindError(UNSUPPORTED_KIND_ERROR)
+
+    event_id = payload.get("event_id")
+    if (
+        set(payload) != {"event_id"}
+        or not isinstance(event_id, str)
+        or not event_id.strip()
+        or len(event_id) > 200
+    ):
+        raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
+
+    event = await session.get(EventInbox, event_id)
+    if event is None:
+        raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
+    if event.event_type == "turn.completed.v1":
+        await materialize_completed_turn(session, event)
 
 
 async def process_one(session: AsyncSession) -> bool:
@@ -32,7 +54,9 @@ async def process_one(session: AsyncSession) -> bool:
         return False
 
     try:
-        await handle(job.kind, job.payload)
+        await handle(session, job.kind, job.payload)
+    except InvalidTurnPayloadError:
+        await fail_job(session, job, INVALID_TURN_PAYLOAD_ERROR)
     except Exception:  # noqa: BLE001 - all ordinary handler failures share one safe code
         await fail_job(session, job, "handler_failed")
     else:

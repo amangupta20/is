@@ -1,7 +1,9 @@
 """Static contracts for the local deployment package."""
 
 import re
+import runpy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -248,3 +250,63 @@ def test_committed_deployment_assets_contain_no_credential_bearing_url() -> None
     database_urls = re.findall(r"postgres(?:ql)?(?:\+asyncpg)?://[^\s`]+", assets)
     assert all("REPLACE" in url for url in database_urls)
     assert not re.search(r"(?i)(password|secret)=[^\s\n]*(?!REPLACE)[A-Za-z0-9]{16,}", assets)
+
+
+def test_completed_turn_migration_has_stable_schema_qualified_operations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The migration creates and reverses the completed-turn objects explicitly."""
+    migration = ASSISTANT_CORE / "migrations" / "versions" / "0003_completed_turn.py"
+    assert migration.is_file()
+
+    operations: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    def record(name: str):  # type: ignore[no-untyped-def]
+        def operation(*args: object, **kwargs: object) -> None:
+            operations.append((name, args, kwargs))
+
+        return operation
+
+    fake_op = SimpleNamespace(
+        create_table=record("create_table"),
+        create_index=record("create_index"),
+        drop_index=record("drop_index"),
+        drop_table=record("drop_table"),
+        f=lambda name: name,
+    )
+    monkeypatch.setattr("alembic.op", fake_op)
+    namespace = runpy.run_path(str(migration))
+
+    assert namespace["revision"] == "0003_completed_turn"
+    assert namespace["down_revision"] == "0002_event_inbox_jobs"
+
+    namespace["upgrade"]()
+    assert [name for name, _args, _kwargs in operations] == [
+        "create_table",
+        "create_index",
+    ]
+    create_table = operations[0]
+    assert create_table[1][0] == "completed_turn"
+    assert create_table[2]["schema"] == "assistant_core"
+    table_objects = create_table[1][1:]
+    foreign_keys = [
+        item for item in table_objects if item.__class__.__name__ == "ForeignKeyConstraint"
+    ]
+    assert len(foreign_keys) == 1
+    assert foreign_keys[0].elements[0].target_fullname == "assistant_core.user_identity.id"
+    assert operations[1] == (
+        "create_index",
+        ("ix_assistant_core_completed_turn_native_chat_id", "completed_turn", ["native_chat_id"]),
+        {"unique": False, "schema": "assistant_core"},
+    )
+
+    operations.clear()
+    namespace["downgrade"]()
+    assert operations == [
+        (
+            "drop_index",
+            ("ix_assistant_core_completed_turn_native_chat_id",),
+            {"table_name": "completed_turn", "schema": "assistant_core"},
+        ),
+        ("drop_table", ("completed_turn",), {"schema": "assistant_core"}),
+    ]

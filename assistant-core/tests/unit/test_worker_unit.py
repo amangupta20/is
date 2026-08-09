@@ -1,20 +1,75 @@
 """Focused unit tests for the foundation job worker."""
 
 import asyncio
+import uuid
 from datetime import UTC, datetime
 
 import anyio
 import pytest
 from sqlalchemy.dialects import postgresql
 
+from assistant_core.events.models import EventInbox
 from assistant_core.jobs.models import Job
 
 
-def test_process_event_handler_is_an_explicit_noop() -> None:
-    """The foundation handler accepts process_event without side effects."""
-    from assistant_core.jobs.worker import handle
+def inbox_event(event_type: str = "chat.created") -> EventInbox:
+    """Build one event available to a worker unit test."""
+    return EventInbox(
+        event_id="exact-event-id",
+        event_type=event_type,
+        user_id=uuid.uuid4(),
+        native_chat_id="chat-1",
+        native_message_id="assistant-1",
+        occurred_at=datetime(2026, 8, 10, tzinfo=UTC),
+        payload={"source": "metadata-only"},
+    )
 
-    anyio.run(handle, "process_event", {"opaque": "payload"})
+
+@pytest.mark.parametrize("event_type", ["chat.created", "turn.oversized.v1"])
+def test_metadata_only_events_are_successful_noops(
+    monkeypatch: pytest.MonkeyPatch, event_type: str
+) -> None:
+    """Lifecycle and oversized markers remain metadata-only in Phase 2A."""
+    from assistant_core.jobs import worker
+
+    event = inbox_event(event_type)
+
+    class Session:
+        async def get(self, model: object, key: object) -> EventInbox:
+            assert model is EventInbox
+            assert key == "exact-event-id"
+            return event
+
+    async def unexpected(*_args: object) -> bool:
+        pytest.fail("metadata-only event was materialized")
+
+    monkeypatch.setattr(worker, "materialize_completed_turn", unexpected)
+    anyio.run(worker.handle, Session(), "process_event", {"event_id": "exact-event-id"})  # type: ignore[arg-type]
+
+
+def test_completed_event_loads_exact_inbox_row_and_materializes_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The process-event payload selects the exact inbox event for routing."""
+    from assistant_core.jobs import worker
+
+    event = inbox_event("turn.completed.v1")
+    calls: list[EventInbox] = []
+
+    class Session:
+        async def get(self, model: object, key: object) -> EventInbox:
+            assert model is EventInbox
+            assert key == "exact-event-id"
+            return event
+
+    async def materialize(session: object, selected: EventInbox) -> bool:
+        assert isinstance(session, Session)
+        calls.append(selected)
+        return True
+
+    monkeypatch.setattr(worker, "materialize_completed_turn", materialize)
+    anyio.run(worker.handle, Session(), "process_event", {"event_id": "exact-event-id"})  # type: ignore[arg-type]
+    assert calls == [event]
 
 
 def test_unsupported_kind_raises_constant_payload_free_error() -> None:
@@ -29,7 +84,9 @@ def test_unsupported_kind_raises_constant_payload_free_error() -> None:
 
     async def exercise() -> None:
         with pytest.raises(UnsupportedJobKindError) as captured:
-            await handle("unsupported", {"secret": secret_marker})
+            await handle(  # type: ignore[arg-type]
+                object(), "unsupported", {"secret": secret_marker}
+            )
 
         assert str(captured.value) == UNSUPPORTED_KIND_ERROR
         assert secret_marker not in str(captured.value)
@@ -78,7 +135,7 @@ def test_process_one_does_not_swallow_exit_signals(
     async def claim(_session: object) -> Job:
         return job
 
-    async def stop(_kind: str, _payload: object) -> None:
+    async def stop(_session: object, _kind: str, _payload: object) -> None:
         raise signal_type()
 
     async def unexpected(*_args: object) -> None:
@@ -93,6 +150,37 @@ def test_process_one_does_not_swallow_exit_signals(
             await worker.process_one(object())  # type: ignore[arg-type]
 
     anyio.run(exercise)
+
+
+def test_invalid_completed_turn_uses_fixed_safe_failure_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invalid content cannot become a persisted worker error string."""
+    from assistant_core.jobs import worker
+    from assistant_core.turns.repository import InvalidTurnPayloadError
+
+    job = Job(identity_key="unit-invalid", kind="process_event", payload={"event_id": "e"})
+    failures: list[str] = []
+
+    async def claim(_session: object) -> Job:
+        return job
+
+    async def reject(*_args: object) -> None:
+        raise InvalidTurnPayloadError("invalid_turn_payload")
+
+    async def fail(_session: object, _job: Job, code: str) -> None:
+        failures.append(code)
+
+    async def unexpected(*_args: object) -> None:
+        pytest.fail("invalid turn was completed")
+
+    monkeypatch.setattr(worker, "claim_next_job", claim)
+    monkeypatch.setattr(worker, "handle", reject)
+    monkeypatch.setattr(worker, "fail_job", fail)
+    monkeypatch.setattr(worker, "complete_job", unexpected)
+
+    anyio.run(worker.process_one, object())  # type: ignore[arg-type]
+    assert failures == ["invalid_turn_payload"]
 
 
 def test_worker_builds_database_from_settings_and_always_disposes(
