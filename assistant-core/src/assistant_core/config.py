@@ -1,0 +1,34 @@
+"""Runtime configuration for assistant-core."""
+
+from __future__ import annotations
+
+from typing import Self
+
+from pydantic import model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEVELOPMENT_HMAC_SECRET = "development-hmac-secret-change-me"
+
+
+class Settings(BaseSettings):
+    """Validated configuration sourced from ASSISTANT_ environment variables."""
+
+    model_config = SettingsConfigDict(env_prefix="ASSISTANT_", extra="ignore")
+
+    environment: str = "development"
+    database_url: str = "postgresql://postgres:postgres@localhost:5432/assistant_core"
+    hmac_secret: str = DEVELOPMENT_HMAC_SECRET
+    request_clock_skew_seconds: int = 60
+    context_timeout_seconds: float = 1.5
+    log_level: str = "INFO"
+
+    @model_validator(mode="after")
+    def validate_production_hmac_secret(self) -> Self:
+        """Reject unsafe HMAC secrets when running in production."""
+        if self.environment.lower() == "production" and (
+            self.hmac_secret == DEVELOPMENT_HMAC_SECRET or len(self.hmac_secret.encode()) < 32
+        ):
+            raise ValueError(
+                "production requires a non-development HMAC secret of at least 32 bytes"
+            )
+        return self
