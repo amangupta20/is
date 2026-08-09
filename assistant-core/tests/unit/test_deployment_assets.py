@@ -85,14 +85,14 @@ def test_env_example_has_only_safe_documented_assistant_settings() -> None:
     assert "REPLACE" in assignments["ASSISTANT_DATABASE_URL"]
     assert "REPLACE" in assignments["ASSISTANT_HMAC_SECRET"]
     assert "32" in assignments["ASSISTANT_HMAC_SECRET"]
-    assert "@sha256:REPLACE" in assignments["ASSISTANT_IMAGE"]
+    assert assignments["ASSISTANT_IMAGE"] == "assistant-core:local"
     assert "ASSISTANT_ADAPTER_HMAC_SECRET" not in env_example
     assert "Supavisor" in env_example
     assert "Dokploy" in env_example
 
 
-def test_compose_uses_one_private_immutable_image_without_host_ports() -> None:
-    """Migration, API, and worker share a hardened private-network image contract."""
+def test_compose_builds_one_private_local_image_without_host_ports() -> None:
+    """Git Compose builds one hardened local image for migration, API, and worker."""
     compose = read_required(REPOSITORY_ROOT / "deploy" / "compose.assistant.yml")
 
     assert re.findall(
@@ -102,7 +102,20 @@ def test_compose_uses_one_private_immutable_image_without_host_ports() -> None:
         "assistant-core",
         "assistant-worker",
     ]
-    assert compose.count("image: ${ASSISTANT_IMAGE:?set ASSISTANT_IMAGE}") == 3
+    assert compose.count("image: ${ASSISTANT_IMAGE:-assistant-core:local}") == 3
+    assert "build:\n      context: ../assistant-core\n      dockerfile: Dockerfile" in compose
+    assert "pull_policy: build" in compose
+    assert "env_file:" not in compose
+    for variable in (
+        "ASSISTANT_ENVIRONMENT",
+        "ASSISTANT_DATABASE_URL",
+        "ASSISTANT_HMAC_SECRET",
+        "ASSISTANT_REQUEST_CLOCK_SKEW_SECONDS",
+        "ASSISTANT_CONTEXT_TIMEOUT_SECONDS",
+        "ASSISTANT_LOG_LEVEL",
+        "ASSISTANT_OTLP_ENDPOINT",
+    ):
+        assert compose.count(f"{variable}: ${{{variable}") == 3
     assert "ports:" not in compose
     assert 'expose:\n      - "8080"' in compose
     assert compose.count("condition: service_completed_successfully") == 2
@@ -141,7 +154,7 @@ def test_postgres_bootstrap_is_guarded_idempotent_and_least_privilege() -> None:
     assert "drop " not in lowered
 
 
-def test_operations_runbook_marks_live_work_pending_and_documents_recovery() -> None:
+def test_operations_runbook_marks_live_work_pending_and_documents_git_recovery() -> None:
     """Operators receive exact commands and no unverified deployment claims."""
     runbook = read_required(REPOSITORY_ROOT / "docs" / "runbooks" / "assistant-core-operations.md")
 
@@ -159,7 +172,13 @@ def test_operations_runbook_marks_live_work_pending_and_documents_recovery() -> 
         "/status",
         "/metrics/",
         "disable",
-        "prior image",
+        "https://github.com/amangupta20/is",
+        "assistant-foundation",
+        "./deploy/compose.assistant.yml",
+        "Docker Compose from Git",
+        "generated .env",
+        "prior known-good Git commit",
+        "never automatically downgraded",
         "no automatic database downgrade",
         "dual-secret verification is not implemented",
         "ordinary Open WebUI chat remains usable",

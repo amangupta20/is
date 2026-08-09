@@ -1,9 +1,9 @@
 # Assistant Core Operations
 
 This runbook packages the optional Open WebUI companion for a later deployment. The
-workstation has no Docker runtime, and no image was built, published, or deployed in
-Slice 1F1. Docker build, amd64/arm64 manifest inspection, Dokploy rollout, native
-event-shape capture, and the real end-to-end smoke test are **pending Slice 1F2**.
+workstation has no Docker runtime. Slice 1F2A changes the deployment contract to build
+from Git, but Docker build, Oracle ARM64 runtime, Dokploy rollout, adapter import, and
+live smoke verification remain **pending**.
 
 Ordinary Open WebUI chat remains usable when the optional companion is disabled or
 unavailable. Context enrichment and lifecycle forwarding are designed to fail open.
@@ -17,8 +17,9 @@ unavailable. Context enrichment and lifecycle forwarding are designed to fail op
   never in Git or an image layer.
 - Use the already-verified Supavisor endpoint and `assistant_core` role. The current
   role and schema already exist; do not run the bootstrap script for this installation.
-- Ensure an amd64/arm64-capable Buildx builder, registry, immutable image digest, and
-  an existing private Docker network shared with Open WebUI are available for Slice 1F2.
+- Ensure the target is Oracle ARM64-compatible and an existing private Docker network
+  shared with Open WebUI is available. A registry digest is not required for this
+  Git-based Compose deployment.
 - Rotate the database credential before any build, adapter import, or deployment work.
 
 For a genuinely new installation only, an administrator may review and run
@@ -26,25 +27,32 @@ For a genuinely new installation only, an administrator may review and run
 `assistant_password`. It creates or login-enables the role without granting access to
 other schemas or tables. This script was not run in Slice 1F1.
 
-## Build and publish (pending Slice 1F2)
+## Git build contract (pending runtime verification)
 
-Run these only on the approved multi-architecture builder after credential rotation:
+Dokploy must be configured as **Docker Compose from Git** with these exact source
+settings:
 
-```sh
-docker buildx build --platform linux/amd64,linux/arm64 --tag REGISTRY/assistant-core:TAG --push assistant-core
-docker buildx imagetools inspect REGISTRY/assistant-core:TAG
-```
+- Git repository: `https://github.com/amangupta20/is`
+- Branch: `assistant-foundation`
+- Compose path: `./deploy/compose.assistant.yml`
 
-Record the resulting digest and set `ASSISTANT_IMAGE` to that immutable digest. The
-build, ARM manifest verification, registry push, and container runtime smoke are
-pending Slice 1F2; the commands above have not been executed here.
+The `assistant-migrate` service owns the single Compose build with context
+`../assistant-core` and `Dockerfile`; `pull_policy: build` makes each deployment build
+from Dokploy's freshly cloned source. Migration, API, and worker use the same local
+`ASSISTANT_IMAGE` tag, avoiding independent source builds. Docker build and Oracle
+ARM64 runtime verification remain pending; no registry publication or amd64/arm64
+manifest inspection was performed for Slice 1F2A.
 
 ## Dokploy and startup order
 
 1. Create or select the private network shared with Open WebUI and set
    `ASSISTANT_NETWORK` to its exact name. Do not add a public host-port mapping.
-2. Configure every value shown in `deploy/.env.assistant.example` through Dokploy.
-   Leave `ASSISTANT_OTLP_ENDPOINT` empty when no approved collector exists.
+2. Dokploy stores configuration in its generated .env file; configure the values shown in
+   `deploy/.env.assistant.example` in Dokploy's environment UI. Compose explicitly
+   interpolates each assistant runtime variable into all three containers, so do not
+   commit or mount a `deploy/.env.assistant` service env file. For local use, copy the
+   example to ignored `deploy/.env.assistant` and pass it with `--env-file`. Leave
+   `ASSISTANT_OTLP_ENDPOINT` empty when no approved collector exists.
 3. Invoke the deployment contract from the repository root exactly as follows when
    locally validating on a Docker-capable host:
 
@@ -58,8 +66,8 @@ pending Slice 1F2; the commands above have not been executed here.
 5. Keep port 8080 private. OpenWebUI reaches `http://assistant-core:8080` on the shared
    network.
 
-No Compose invocation, migration, database access, or Dokploy action occurred in
-Slice 1F1.
+No Compose invocation, Docker build, migration, database access, or Dokploy action
+occurred for Slice 1F2A.
 
 ## Adapter Valve configuration and import order
 
@@ -76,7 +84,7 @@ After migration and API health checks pass, import and enable adapters in this o
    on delivery.
 3. `assistant_core_tool.py`, then call its redacted status action.
 
-Adapter import and native event-shape capture are pending Slice 1F2.
+Adapter import and native event-shape capture remain pending Slice 1F2A.
 
 ## Internal verification
 
@@ -114,7 +122,5 @@ Dual-secret verification is not implemented. Use a brief adapter disable window:
 ## Rollback
 
 Disable the adapters first so ordinary Open WebUI chat continues without the
-companion. Restore the prior image digest for API and worker, rerun the Compose/Dokploy
-rollout, and verify liveness/readiness before re-enabling adapters. Rollback has **no automatic database downgrade**:
-do not run a reverse migration automatically. Stop
-and review migration compatibility if the prior image cannot use the current schema.
+companion. In Dokploy, select and redeploy the prior known-good Git commit, then verify
+liveness/readiness before re-enabling adapters. Database migrations are never automatically downgraded: rollback has no automatic database downgrade; do not run a reverse migration automatically. Stop and review migration compatibility if the prior Git commit cannot use the current schema.
