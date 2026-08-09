@@ -2,7 +2,6 @@
 
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
 
 router = APIRouter()
 
@@ -19,7 +18,7 @@ async def readiness(request: Request) -> dict[str, str]:
     try:
         async with request.app.state.engine.connect() as connection:
             await connection.execute(text("select 1"))
-    except SQLAlchemyError as exc:
+    except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="database unavailable",

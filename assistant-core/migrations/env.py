@@ -10,9 +10,12 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from assistant_core.config import Settings
 from assistant_core.db.base import Base
+from assistant_core.db.migration_filter import (
+    TARGET_SCHEMA,
+    include_name,
+    include_object,
+)
 from assistant_core.db.session import make_async_database_url
-
-TARGET_SCHEMA = "assistant_core"
 
 config = context.config
 
@@ -22,25 +25,13 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def include_name(
-    name: str | None,
-    type_: str,
-    parent_names: dict[str, str | None],
-) -> bool:
-    """Allow schema and table discovery only inside assistant_core."""
-    if type_ == "schema":
-        return name == TARGET_SCHEMA
-    if type_ == "table":
-        return parent_names.get("schema_name") == TARGET_SCHEMA
-    return True
-
-
 def migration_options() -> dict[str, object]:
     """Return the shared schema-safe Alembic configuration."""
     return {
         "target_metadata": target_metadata,
         "include_schemas": True,
         "include_name": include_name,
+        "include_object": include_object,
         "version_table_schema": TARGET_SCHEMA,
         "compare_type": True,
     }
