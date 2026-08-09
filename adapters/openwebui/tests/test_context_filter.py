@@ -17,6 +17,18 @@ context_filter = importlib.import_module("context_filter")
 Filter = context_filter.Filter
 
 
+def test_filter_valves_are_json_persistable_and_mark_the_secret_as_password() -> None:
+    """Open WebUI can persist Valve values while rendering the secret as a password."""
+    filter_ = Filter()
+    filter_.valves = Filter.Valves(hmac_secret="persistable-secret")
+
+    persisted = json.dumps(filter_.valves.model_dump(exclude_unset=True))
+    schema = Filter.Valves.model_json_schema()
+
+    assert json.loads(persisted) == {"hmac_secret": "persistable-secret"}
+    assert schema["properties"]["hmac_secret"]["input"] == {"type": "password"}
+
+
 def test_empty_context_leaves_the_native_body_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     """An intentionally empty response does not alter the native prompt."""
     filter_ = Filter()

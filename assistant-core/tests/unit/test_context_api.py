@@ -94,15 +94,17 @@ def test_context_rejects_missing_or_invalid_signatures() -> None:
     assert [response.status_code for response in responses] == [401, 401, 401, 401]
 
 
-def test_context_rejects_malformed_and_stale_timestamps() -> None:
+def test_context_rejects_malformed_stale_and_future_timestamps() -> None:
     """Only current integer Unix timestamps are accepted."""
     app = create_app(Settings(hmac_secret="a" * 32, request_clock_skew_seconds=1))
 
     malformed = anyio.run(lambda: send_context(app, timestamp="not-a-timestamp"))
     stale = anyio.run(lambda: send_context(app, timestamp=str(int(time.time()) - 2)))
+    future = anyio.run(lambda: send_context(app, timestamp=str(int(time.time()) + 2)))
 
     assert malformed.status_code == 401
     assert stale.status_code == 401
+    assert future.status_code == 401
 
 
 def test_context_validates_the_bounded_request_schema() -> None:
@@ -120,10 +122,31 @@ def test_context_validates_the_bounded_request_schema() -> None:
     excessive_tokens = anyio.run(
         lambda: send_context(app, body=b'{"native_user_id":"user-1","max_tokens":16001}')
     )
+    negative_tokens = anyio.run(
+        lambda: send_context(app, body=b'{"native_user_id":"user-1","max_tokens":-1}')
+    )
+    long_chat_id = anyio.run(
+        lambda: send_context(
+            app,
+            body=(b'{"native_user_id":"user-1","native_chat_id":"' + b"c" * 201 + b'"}'),
+        )
+    )
+    long_message_id = anyio.run(
+        lambda: send_context(
+            app,
+            body=(b'{"native_user_id":"user-1","native_message_id":"' + b"m" * 201 + b'"}'),
+        )
+    )
 
-    assert [response.status_code for response in [extra, empty_user, excessive_text, excessive_tokens]] == [
-        422,
-        422,
-        422,
-        422,
-    ]
+    assert [
+        response.status_code
+        for response in [
+            extra,
+            empty_user,
+            excessive_text,
+            excessive_tokens,
+            negative_tokens,
+            long_chat_id,
+            long_message_id,
+        ]
+    ] == [422, 422, 422, 422, 422, 422, 422]

@@ -10,7 +10,7 @@ import json
 import time
 
 import httpx
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field
 
 
 class Filter:
@@ -20,7 +20,10 @@ class Filter:
         """Administrator-managed companion connection settings."""
 
         assistant_core_url: str = Field(default="http://assistant-core:8080")
-        hmac_secret: SecretStr = Field(default=SecretStr("development-hmac-secret-change-me"))
+        hmac_secret: str = Field(
+            default="development-hmac-secret-change-me",
+            json_schema_extra={"input": {"type": "password"}},
+        )
         timeout_seconds: float = Field(default=1.5, ge=0.1, le=5.0)
         max_context_tokens: int = Field(default=4_000, ge=0, le=16_000)
         priority: int = Field(default=-100)
@@ -36,7 +39,7 @@ class Filter:
         timestamp = str(int(time.time()))
         digest = hashlib.sha256(request_body).hexdigest()
         canonical = f"POST\n{path}\n{timestamp}\n{digest}".encode()
-        secret = self.valves.hmac_secret.get_secret_value().encode()
+        secret = self.valves.hmac_secret.encode()
         signature = hmac.new(secret, canonical, hashlib.sha256).hexdigest()
         async with httpx.AsyncClient(timeout=self.valves.timeout_seconds) as client:
             response = await client.post(
