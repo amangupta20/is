@@ -155,19 +155,11 @@ async def exercise_rejections(event_id: str, native_user_id: str) -> None:
         try:
             body = event_body(event_id, native_user_id)
             unsigned = await post_event(app, body, signed=False)
+            invalid_body = json.loads(body)
+            invalid_body["schema_version"] = 2
             invalid = await post_event(
                 app,
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "event_id": "",
-                        "event_type": "codex.test",
-                        "native_user_id": native_user_id,
-                        "occurred_at": "2026-08-09T12:00:00Z",
-                        "payload": {},
-                    },
-                    separators=(",", ":"),
-                ).encode(),
+                json.dumps(invalid_body, separators=(",", ":")).encode(),
             )
 
             assert unsigned.status_code == 401
