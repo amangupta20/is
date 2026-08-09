@@ -1,0 +1,83 @@
+"""Foundation worker for durable assistant jobs."""
+
+import asyncio
+import signal
+
+from pydantic import JsonValue
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from assistant_core.config import get_settings
+from assistant_core.db.session import create_database
+from assistant_core.jobs.repository import claim_next_job, complete_job, fail_job
+
+UNSUPPORTED_KIND_ERROR = "unsupported_job_kind"
+IDLE_POLL_SECONDS = 1.0
+
+
+class UnsupportedJobKindError(ValueError):
+    """Raised when a worker receives a job kind it cannot process."""
+
+
+async def handle(kind: str, payload: dict[str, JsonValue]) -> None:
+    """Handle one foundation job without performing downstream work yet."""
+    del payload
+    if kind != "process_event":
+        raise UnsupportedJobKindError(UNSUPPORTED_KIND_ERROR)
+
+
+async def process_one(session: AsyncSession) -> bool:
+    """Claim and process at most one job from an open worker session."""
+    job = await claim_next_job(session)
+    if job is None:
+        return False
+
+    try:
+        await handle(job.kind, job.payload)
+    except Exception:  # noqa: BLE001 - all ordinary handler failures share one safe code
+        await fail_job(session, job, "handler_failed")
+    else:
+        await complete_job(session, job)
+    return True
+
+
+async def run_worker(stop_event: asyncio.Event | None = None) -> None:
+    """Run the single-job polling loop until a graceful stop is requested."""
+    settings = get_settings()
+    engine, session_factory = create_database(settings.database_url)
+    resolved_stop_event = stop_event or asyncio.Event()
+    loop = asyncio.get_running_loop()
+    registered_signals: list[signal.Signals] = []
+
+    try:
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(signum, resolved_stop_event.set)
+            except (NotImplementedError, RuntimeError):
+                continue
+            registered_signals.append(signum)
+
+        while not resolved_stop_event.is_set():
+            async with session_factory() as session:
+                processed = await process_one(session)
+
+            if not processed:
+                try:
+                    await asyncio.wait_for(
+                        resolved_stop_event.wait(),
+                        timeout=IDLE_POLL_SECONDS,
+                    )
+                except TimeoutError:
+                    pass
+    finally:
+        for signum in registered_signals:
+            loop.remove_signal_handler(signum)
+        await engine.dispose()
+
+
+def main() -> None:
+    """Run the worker module as a standalone process."""
+    asyncio.run(run_worker())
+
+
+if __name__ == "__main__":
+    main()

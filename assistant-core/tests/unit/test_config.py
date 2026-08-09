@@ -35,3 +35,14 @@ def test_production_rejects_short_hmac_secret() -> None:
     """Production requires at least 32 encoded secret bytes."""
     with pytest.raises(ValidationError):
         Settings(environment="production", hmac_secret="too-short")
+
+
+def test_get_settings_builds_current_environment_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The worker-facing settings factory reads current ASSISTANT_ values."""
+    from assistant_core.config import get_settings
+
+    monkeypatch.setenv("ASSISTANT_LOG_LEVEL", "DEBUG")
+
+    assert get_settings().log_level == "DEBUG"

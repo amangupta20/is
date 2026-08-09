@@ -32,3 +32,8 @@ class Settings(BaseSettings):
                 "production requires a non-development HMAC secret of at least 32 bytes"
             )
         return self
+
+
+def get_settings() -> Settings:
+    """Build settings from the current assistant environment."""
+    return Settings()
