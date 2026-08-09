@@ -11,6 +11,7 @@ from pathlib import Path
 import anyio
 import httpx
 import pytest
+from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 context_filter = importlib.import_module("context_filter")
@@ -27,6 +28,18 @@ def test_filter_valves_are_json_persistable_and_mark_the_secret_as_password() ->
 
     assert json.loads(persisted) == {"hmac_secret": "persistable-secret"}
     assert schema["properties"]["hmac_secret"]["input"] == {"type": "password"}
+
+
+def test_filter_valves_default_to_and_accept_the_open_webui_maximum() -> None:
+    """The Valve budget matches the largest value accepted by Open WebUI's UI."""
+    assert Filter.Valves().max_context_tokens == 9_999
+    assert Filter.Valves(max_context_tokens=9_999).max_context_tokens == 9_999
+
+
+def test_filter_valves_reject_a_budget_above_the_open_webui_maximum() -> None:
+    """Open WebUI must not persist a budget its numeric UI rejects."""
+    with pytest.raises(ValidationError):
+        Filter.Valves(max_context_tokens=10_000)
 
 
 def test_empty_context_leaves_the_native_body_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -88,7 +101,7 @@ def test_filter_signs_exact_compact_sorted_bytes_sent_to_companion(
         "native_chat_id": "chat-1",
         "native_message_id": "message-1",
         "request_text": "x" * 16_000,
-        "max_tokens": 4_000,
+        "max_tokens": 9_999,
     }
 
     async def companion(request: httpx.Request) -> httpx.Response:

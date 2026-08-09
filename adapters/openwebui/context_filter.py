@@ -25,7 +25,7 @@ class Filter:
             json_schema_extra={"input": {"type": "password"}},
         )
         timeout_seconds: float = Field(default=1.5, ge=0.1, le=5.0)
-        max_context_tokens: int = Field(default=4_000, ge=0, le=16_000)
+        max_context_tokens: int = Field(default=9_999, ge=0, le=9_999)
         priority: int = Field(default=-100)
 
     def __init__(self) -> None:
