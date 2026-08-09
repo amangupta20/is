@@ -9,11 +9,13 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from assistant_core.config import Settings
+from assistant_core.db import models as db_models
 from assistant_core.db.base import Base
 from assistant_core.db.migration_filter import (
     TARGET_SCHEMA,
     include_name,
     include_object,
+    qualify_target_schema,
 )
 from assistant_core.db.session import make_async_database_url
 
@@ -23,6 +25,8 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
+
+_ = db_models
 
 
 def migration_options() -> dict[str, object]:
@@ -57,6 +61,7 @@ def run_migrations_offline() -> None:
 
 def do_run_migrations(connection: Connection) -> None:
     """Run configured migrations over a synchronous Alembic connection."""
+    qualify_target_schema(connection.dialect)
     context.configure(connection=connection, **migration_options())
 
     with context.begin_transaction():

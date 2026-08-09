@@ -1,10 +1,13 @@
 """Tests for database construction and metadata boundaries."""
 
 import anyio
+import pytest
 from sqlalchemy import Column, Integer, MetaData, Table
+from sqlalchemy.engine.default import DefaultDialect
 
+from assistant_core.db import migration_filter
 from assistant_core.db.base import NAMING_CONVENTION, Base
-from assistant_core.db.migration_filter import include_object
+from assistant_core.db.migration_filter import include_name, include_object
 from assistant_core.db.session import create_database
 
 
@@ -50,3 +53,31 @@ def test_alembic_object_filter_rejects_metadata_tables_outside_assistant_schema(
     assert include_object(assistant_table, assistant_table.name, "table", False, None)
     assert not include_object(public_table, public_table.name, "table", False, None)
     assert not include_object(other_table, other_table.name, "table", False, None)
+
+
+def test_alembic_name_filter_accepts_only_explicit_target_schema() -> None:
+    """Unqualified and foreign schemas remain outside autogenerate reflection."""
+    assert not include_name(None, "schema", {})
+    assert not include_name("event_inbox", "table", {"schema_name": None})
+    assert include_name("assistant_core", "schema", {})
+    assert include_name("event_inbox", "table", {"schema_name": "assistant_core"})
+    assert not include_name("public", "schema", {})
+    assert not include_name("foreign_table", "table", {"schema_name": "public"})
+
+
+def test_migration_guard_requires_assistant_core_as_connection_default() -> None:
+    """Default-schema reflection is safe only for the dedicated assistant role."""
+    migration_filter.validate_default_schema("assistant_core")
+
+    with pytest.raises(RuntimeError, match="assistant_core"):
+        migration_filter.validate_default_schema("public")
+
+
+def test_migration_reflection_keeps_target_schema_explicit() -> None:
+    """Alembic must not normalize assistant_core tables and foreign keys to no schema."""
+    dialect = DefaultDialect()
+    dialect.default_schema_name = "assistant_core"
+
+    migration_filter.qualify_target_schema(dialect)
+
+    assert dialect.default_schema_name == migration_filter.REFLECTION_DEFAULT_SCHEMA

@@ -1,8 +1,10 @@
 """Schema guardrails shared by Alembic migration modes."""
 
+from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.sql.schema import SchemaItem
 
 TARGET_SCHEMA = "assistant_core"
+REFLECTION_DEFAULT_SCHEMA = "__alembic_non_target_default__"
 
 
 def include_name(
@@ -16,6 +18,18 @@ def include_name(
     if type_ == "table":
         return parent_names.get("schema_name") == TARGET_SCHEMA
     return True
+
+
+def validate_default_schema(default_schema_name: str | None) -> None:
+    """Require the dedicated role before treating Alembic's None schema as the target."""
+    if default_schema_name != TARGET_SCHEMA:
+        raise RuntimeError(f"migration connection default schema must be {TARGET_SCHEMA}")
+
+
+def qualify_target_schema(dialect: Dialect) -> None:
+    """Keep target reflection schema-qualified after validating the dedicated role."""
+    validate_default_schema(dialect.default_schema_name)
+    dialect.default_schema_name = REFLECTION_DEFAULT_SCHEMA
 
 
 def include_object(
