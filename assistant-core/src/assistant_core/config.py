@@ -8,6 +8,7 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEVELOPMENT_HMAC_SECRET = "development-hmac-secret-change-me"
+SAMPLE_HMAC_SECRET = "REPLACE_WITH_NEW_RANDOM_VALUE_OF_AT_LEAST_32_BYTES"
 
 
 class Settings(BaseSettings):
@@ -27,7 +28,8 @@ class Settings(BaseSettings):
     def validate_production_hmac_secret(self) -> Self:
         """Reject unsafe HMAC secrets when running in production."""
         if self.environment.lower() == "production" and (
-            self.hmac_secret == DEVELOPMENT_HMAC_SECRET or len(self.hmac_secret.encode()) < 32
+            self.hmac_secret in {DEVELOPMENT_HMAC_SECRET, SAMPLE_HMAC_SECRET}
+            or len(self.hmac_secret.encode()) < 32
         ):
             raise ValueError(
                 "production requires a non-development HMAC secret of at least 32 bytes"

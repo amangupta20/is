@@ -21,11 +21,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         try:
+            if application.state.tracing_runtime is not None:
+                application.state.tracing_runtime.start()
             yield
         finally:
             try:
-                if application.state.tracer_provider is not None:
-                    application.state.tracer_provider.shutdown()
+                if application.state.tracing_runtime is not None:
+                    application.state.tracing_runtime.shutdown()
             finally:
                 await application.state.engine.dispose()
 

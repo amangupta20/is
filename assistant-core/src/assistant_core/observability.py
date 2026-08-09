@@ -2,6 +2,8 @@
 
 import logging
 import re
+from collections.abc import Sequence
+from threading import Lock
 from time import perf_counter
 from uuid import uuid4
 
@@ -11,9 +13,17 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from prometheus_client import make_asgi_app
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
+from opentelemetry.sdk.util.instrumentation import InstrumentationScope
+from opentelemetry.trace import SpanContext, SpanKind, Status, TraceState
+from prometheus_client import (
+    CollectorRegistry,
+    GCCollector,
+    PlatformCollector,
+    ProcessCollector,
+    make_asgi_app,
+)
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -22,7 +32,147 @@ from assistant_core.config import Settings
 CORRELATION_HEADER = "x-correlation-id"
 CORRELATION_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 MAX_DURATION_MS = 86_400_000.0
+INTERNAL_ERROR_BODY = b'{"detail":"internal server error"}'
 HTTP_LOGGER = structlog.get_logger("assistant_core.http")
+
+
+class UvicornErrorRedactionFilter(logging.Filter):
+    """Replace error-level Uvicorn records with one content-free constant."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno >= logging.ERROR or record.exc_info is not None:
+            record.msg = "unhandled server error"
+            record.args = ()
+            record.exc_info = None
+            record.exc_text = None
+            record.stack_info = None
+        return True
+
+
+class HTTPXInstrumentationManager:
+    """Own the process-global HTTPX wrapper for one active provider at a time."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._provider: TracerProvider | None = None
+        self._instrumentor: HTTPXClientInstrumentor | None = None
+        self._references = 0
+
+    def acquire(self, provider: TracerProvider) -> None:
+        """Instrument HTTPX or share an existing binding to the same provider."""
+        with self._lock:
+            if self._provider is not None:
+                if self._provider is not provider:
+                    raise RuntimeError("HTTPX tracing already has a different active provider")
+                self._references += 1
+                return
+
+            instrumentor = HTTPXClientInstrumentor()
+            instrumentor.instrument(tracer_provider=provider)
+            self._instrumentor = instrumentor
+            self._provider = provider
+            self._references = 1
+
+    def release(self, provider: TracerProvider) -> None:
+        """Remove the global wrapper when its final owner exits."""
+        with self._lock:
+            if self._provider is not provider or self._instrumentor is None:
+                raise RuntimeError("HTTPX tracing provider is not active")
+
+            self._references -= 1
+            if self._references == 0:
+                self._instrumentor.uninstrument()
+                self._instrumentor = None
+                self._provider = None
+
+
+HTTPX_INSTRUMENTATION_MANAGER = HTTPXInstrumentationManager()
+
+SAFE_SPAN_ATTRIBUTES = frozenset(
+    {
+        "http.flavor",
+        "http.method",
+        "http.request.method",
+        "http.response.status_code",
+        "http.status_code",
+        "network.protocol.version",
+    }
+)
+SAFE_RESOURCE_ATTRIBUTES = frozenset(
+    {
+        "deployment.environment.name",
+        "service.name",
+        "telemetry.sdk.language",
+        "telemetry.sdk.name",
+        "telemetry.sdk.version",
+    }
+)
+
+
+def _safe_span_name(kind: SpanKind) -> str:
+    if kind is SpanKind.SERVER:
+        return "assistant-core.server"
+    if kind is SpanKind.CLIENT:
+        return "assistant-core.client"
+    return "assistant-core.internal"
+
+
+def _sanitized_context(context: SpanContext | None) -> SpanContext | None:
+    if context is None:
+        return None
+    return SpanContext(
+        trace_id=context.trace_id,
+        span_id=context.span_id,
+        is_remote=context.is_remote,
+        trace_flags=context.trace_flags,
+        trace_state=TraceState(),
+    )
+
+
+def _sanitized_span(span: ReadableSpan) -> ReadableSpan:
+    """Clone a finished span using only bounded, content-free telemetry fields."""
+    attributes = {
+        key: value
+        for key, value in (span.attributes or {}).items()
+        if key in SAFE_SPAN_ATTRIBUTES
+    }
+    resource = Resource(
+        {
+            key: value
+            for key, value in span.resource.attributes.items()
+            if key in SAFE_RESOURCE_ATTRIBUTES
+        }
+    )
+    return ReadableSpan(
+        name=_safe_span_name(span.kind),
+        context=_sanitized_context(span.context),
+        parent=_sanitized_context(span.parent),
+        resource=resource,
+        attributes=attributes,
+        events=(),
+        links=(),
+        kind=span.kind,
+        status=Status(span.status.status_code),
+        start_time=span.start_time,
+        end_time=span.end_time,
+        instrumentation_scope=InstrumentationScope(name="assistant-core.observability"),
+    )
+
+
+class SanitizingSpanExporter(SpanExporter):
+    """Ensure URL, payload, and exception content never reaches an exporter."""
+
+    def __init__(self, delegate: SpanExporter) -> None:
+        self._delegate = delegate
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        return self._delegate.export(tuple(_sanitized_span(span) for span in spans))
+
+    def shutdown(self) -> None:
+        self._delegate.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return self._delegate.force_flush(timeout_millis)
 
 
 def configure_logging(log_level: str) -> None:
@@ -31,6 +181,11 @@ def configure_logging(log_level: str) -> None:
     logging.basicConfig(level=resolved_level, format="%(message)s")
     logging.getLogger().setLevel(resolved_level)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    uvicorn_error_logger = logging.getLogger("uvicorn.error")
+    for existing_filter in tuple(uvicorn_error_logger.filters):
+        if isinstance(existing_filter, UvicornErrorRedactionFilter):
+            uvicorn_error_logger.removeFilter(existing_filter)
+    uvicorn_error_logger.addFilter(UvicornErrorRedactionFilter())
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -64,18 +219,48 @@ class CorrelationIdMiddleware:
         correlation_id = _correlation_id(Headers(scope=scope).get(CORRELATION_HEADER))
         started_at = perf_counter()
         status_code = 500
+        response_started = False
+        response_complete = False
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(correlation_id=correlation_id)
 
         async def send_with_correlation_id(message: Message) -> None:
-            nonlocal status_code
+            nonlocal response_complete, response_started, status_code
             if message["type"] == "http.response.start":
                 status_code = message["status"]
+                response_started = True
                 MutableHeaders(scope=message)[CORRELATION_HEADER] = correlation_id
+            elif message["type"] == "http.response.body" and not message.get("more_body", False):
+                response_complete = True
             await send(message)
 
         try:
-            await self.app(scope, receive, send_with_correlation_id)
+            try:
+                await self.app(scope, receive, send_with_correlation_id)
+            except Exception:  # noqa: BLE001 - boundary converts ordinary failures safely
+                generated_response = False
+                if not response_started:
+                    generated_response = True
+                    await send_with_correlation_id(
+                        {
+                            "type": "http.response.start",
+                            "status": 500,
+                            "headers": [
+                                (b"content-type", b"application/json"),
+                                (b"content-length", str(len(INTERNAL_ERROR_BODY)).encode()),
+                            ],
+                        }
+                    )
+                if not response_complete:
+                    try:
+                        await send_with_correlation_id(
+                            {
+                                "type": "http.response.body",
+                                "body": INTERNAL_ERROR_BODY if generated_response else b"",
+                            }
+                        )
+                    except Exception:  # noqa: BLE001, S110 - response completion is best effort
+                        pass
         finally:
             route = scope.get("route")
             route_path = getattr(route, "path", "unmatched")
@@ -92,7 +277,33 @@ class CorrelationIdMiddleware:
                 structlog.contextvars.clear_contextvars()
 
 
-def configure_tracing(app: FastAPI, settings: Settings) -> TracerProvider | None:
+class TracingRuntime:
+    """Own app and process tracing resources across one application lifespan."""
+
+    def __init__(self, app: FastAPI, provider: TracerProvider) -> None:
+        self.app = app
+        self.provider = provider
+        self._httpx_active = False
+
+    def start(self) -> None:
+        """Bind global client instrumentation to this active provider."""
+        HTTPX_INSTRUMENTATION_MANAGER.acquire(self.provider)
+        self._httpx_active = True
+
+    def shutdown(self) -> None:
+        """Remove instrumentation before shutting down the provider."""
+        try:
+            if self._httpx_active:
+                HTTPX_INSTRUMENTATION_MANAGER.release(self.provider)
+                self._httpx_active = False
+        finally:
+            try:
+                FastAPIInstrumentor.uninstrument_app(self.app)
+            finally:
+                self.provider.shutdown()
+
+
+def configure_tracing(app: FastAPI, settings: Settings) -> TracingRuntime | None:
     """Enable OTLP tracing only when an explicit endpoint is configured."""
     if settings.otlp_endpoint is None or not settings.otlp_endpoint.strip():
         return None
@@ -104,16 +315,28 @@ def configure_tracing(app: FastAPI, settings: Settings) -> TracerProvider | None
         }
     )
     provider = TracerProvider(resource=resource)
-    exporter = OTLPSpanExporter(endpoint=settings.otlp_endpoint)
+    exporter = SanitizingSpanExporter(OTLPSpanExporter(endpoint=settings.otlp_endpoint))
     provider.add_span_processor(BatchSpanProcessor(exporter))
     FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)
-    HTTPXClientInstrumentor().instrument(tracer_provider=provider)
-    return provider
+    return TracingRuntime(app, provider)
+
+
+def create_metrics_registry() -> CollectorRegistry:
+    """Create an isolated registry containing only bounded runtime collectors."""
+    registry = CollectorRegistry()
+    GCCollector(registry=registry)
+    PlatformCollector(registry=registry)
+    ProcessCollector(registry=registry)
+    return registry
 
 
 def setup_observability(app: FastAPI, settings: Settings) -> None:
     """Attach request observability before application routes are registered."""
     configure_logging(settings.log_level)
     app.add_middleware(CorrelationIdMiddleware)
-    app.mount("/metrics", make_asgi_app(), name="metrics")
-    app.state.tracer_provider = configure_tracing(app, settings)
+    app.state.metrics_registry = create_metrics_registry()
+    app.mount("/metrics", make_asgi_app(registry=app.state.metrics_registry), name="metrics")
+    app.state.tracing_runtime = configure_tracing(app, settings)
+    app.state.tracer_provider = (
+        app.state.tracing_runtime.provider if app.state.tracing_runtime is not None else None
+    )

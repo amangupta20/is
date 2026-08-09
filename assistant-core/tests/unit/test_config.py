@@ -38,6 +38,15 @@ def test_production_rejects_short_hmac_secret() -> None:
         Settings(environment="production", hmac_secret="too-short")
 
 
+def test_production_rejects_committed_sample_hmac_secret() -> None:
+    """The visible deployment placeholder is never accepted as production entropy."""
+    with pytest.raises(ValidationError):
+        Settings(
+            environment="production",
+            hmac_secret="REPLACE_WITH_NEW_RANDOM_VALUE_OF_AT_LEAST_32_BYTES",
+        )
+
+
 def test_get_settings_builds_current_environment_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
