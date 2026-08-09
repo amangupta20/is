@@ -45,6 +45,20 @@ class _RecordingClient:
         return _Response()
 
 
+class _RaisingGetMapping(dict[str, object]):
+    def __init__(self, failure: BaseException) -> None:
+        super().__init__()
+        self.failure = failure
+
+    def get(self, key: str, default: object = None) -> object:
+        raise self.failure
+
+
+class _RaisingString:
+    def __str__(self) -> str:
+        raise RuntimeError("unsafe identifier conversion")
+
+
 def test_allowlisted_event_forwards_normalized_metadata_and_exact_signature(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -162,6 +176,121 @@ def test_irrelevant_or_unidentifiable_events_are_ignored(
     monkeypatch.setattr(module.httpx, "AsyncClient", unexpected_client)
 
     asyncio.run(module.Event().event(event, __event_id__=event_id, __event_name__=event_name))
+
+
+def test_unhashable_event_name_is_ignored_without_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+
+    def unexpected_client(**_kwargs: object) -> None:
+        pytest.fail("invalid event name attempted delivery")
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", unexpected_client)
+
+    asyncio.run(
+        module.Event().event(
+            {"user": {"id": "user"}},
+            __event_id__="event",
+            __event_name__=["chat.finished"],
+        )
+    )
+
+
+def test_mapping_access_exception_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+
+    def unexpected_client(**_kwargs: object) -> None:
+        pytest.fail("malformed mapping attempted delivery")
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", unexpected_client)
+
+    asyncio.run(
+        module.Event().event(
+            _RaisingGetMapping(RuntimeError("unsafe mapping access")),
+            __event_id__="event",
+            __event_name__="chat.finished",
+        )
+    )
+
+
+def test_identifier_string_conversion_exception_is_fail_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module()
+
+    def unexpected_client(**_kwargs: object) -> None:
+        pytest.fail("malformed identifier attempted delivery")
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", unexpected_client)
+
+    asyncio.run(
+        module.Event().event(
+            {"actor": {"id": _RaisingString()}},
+            __event_id__="event",
+            __event_name__="chat.finished",
+        )
+    )
+
+
+def test_diagnostic_output_exception_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+
+    class _FailingClient(_RecordingClient):
+        async def post(self, url: str, **kwargs: Any) -> _Response:
+            raise RuntimeError("delivery failed")
+
+    def fail_output(*_args: object, **_kwargs: object) -> None:
+        raise OSError("diagnostic output failed")
+
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda *, timeout: _FailingClient({}, timeout),
+    )
+    monkeypatch.setattr(module, "print", fail_output, raising=False)
+
+    asyncio.run(
+        module.Event().event(
+            {"user": {"id": "user"}},
+            __event_id__="event",
+            __event_name__="chat.finished",
+        )
+    )
+
+
+def test_mapping_access_baseexception_still_propagates() -> None:
+    module = _module()
+
+    with pytest.raises(SystemExit):
+        asyncio.run(
+            module.Event().event(
+                _RaisingGetMapping(SystemExit()),
+                __event_id__="event",
+                __event_name__="chat.finished",
+            )
+        )
+
+
+def test_delivery_cancellation_still_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+
+    class _CancelledClient(_RecordingClient):
+        async def post(self, url: str, **kwargs: Any) -> _Response:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda *, timeout: _CancelledClient({}, timeout),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            module.Event().event(
+                {"user": {"id": "user"}},
+                __event_id__="event",
+                __event_name__="chat.finished",
+            )
+        )
 
 
 def test_delivery_failure_is_bounded_payload_free_and_fail_open(
