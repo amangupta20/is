@@ -3,14 +3,54 @@
 import re
 from pathlib import Path
 
+import pytest
+
 ASSISTANT_CORE = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = ASSISTANT_CORE.parent
+COMPOSE_SERVICES = ("assistant-migrate", "assistant-core", "assistant-worker")
+LOCAL_ASSISTANT_IMAGE = "${ASSISTANT_IMAGE:-assistant-core:local}"
+ASSISTANT_BUILD_BLOCK = "build:\n      context: ../assistant-core\n      dockerfile: Dockerfile"
 
 
 def read_required(path: Path) -> str:
     """Read a required asset after producing a useful assertion on absence."""
     assert path.is_file(), f"required deployment asset is missing: {path}"
     return path.read_text(encoding="utf-8")
+
+
+def compose_service_sections(compose: str) -> dict[str, str]:
+    """Return each assistant service's Compose section without adjacent sections."""
+    heading_pattern = re.compile(
+        rf"^  (?P<name>{'|'.join(COMPOSE_SERVICES)}):$", re.MULTILINE
+    )
+    headings = list(heading_pattern.finditer(compose))
+    assert [heading.group("name") for heading in headings] == list(COMPOSE_SERVICES)
+
+    service_block_end = compose.index("\nnetworks:")
+    section_ends = [heading.start() for heading in headings[1:]] + [service_block_end]
+    return {
+        heading.group("name"): compose[heading.start() : section_end]
+        for heading, section_end in zip(headings, section_ends, strict=True)
+    }
+
+
+def assert_compose_has_one_git_build_owner(compose: str) -> dict[str, str]:
+    """Assert that only migration owns the Git build while all services share its tag."""
+    sections = compose_service_sections(compose)
+
+    for section in sections.values():
+        assert re.findall(r"^    image: (.+)$", section, re.MULTILINE) == [
+            LOCAL_ASSISTANT_IMAGE
+        ]
+
+    migration = sections["assistant-migrate"]
+    assert migration.count(ASSISTANT_BUILD_BLOCK) == 1
+    assert migration.count("pull_policy: build") == 1
+    for service in ("assistant-core", "assistant-worker"):
+        assert "build:" not in sections[service]
+        assert "pull_policy:" not in sections[service]
+
+    return sections
 
 
 def test_dockerfile_installs_locked_package_after_copying_source() -> None:
@@ -95,16 +135,7 @@ def test_compose_builds_one_private_local_image_without_host_ports() -> None:
     """Git Compose builds one hardened local image for migration, API, and worker."""
     compose = read_required(REPOSITORY_ROOT / "deploy" / "compose.assistant.yml")
 
-    assert re.findall(
-        r"^  (assistant-migrate|assistant-core|assistant-worker):$", compose, re.MULTILINE
-    ) == [
-        "assistant-migrate",
-        "assistant-core",
-        "assistant-worker",
-    ]
-    assert compose.count("image: ${ASSISTANT_IMAGE:-assistant-core:local}") == 3
-    assert "build:\n      context: ../assistant-core\n      dockerfile: Dockerfile" in compose
-    assert "pull_policy: build" in compose
+    sections = assert_compose_has_one_git_build_owner(compose)
     assert "env_file:" not in compose
     for variable in (
         "ASSISTANT_ENVIRONMENT",
@@ -115,7 +146,7 @@ def test_compose_builds_one_private_local_image_without_host_ports() -> None:
         "ASSISTANT_LOG_LEVEL",
         "ASSISTANT_OTLP_ENDPOINT",
     ):
-        assert compose.count(f"{variable}: ${{{variable}") == 3
+        assert all(f"{variable}: ${{{variable}" in section for section in sections.values())
     assert "ports:" not in compose
     assert 'expose:\n      - "8080"' in compose
     assert compose.count("condition: service_completed_successfully") == 2
@@ -130,6 +161,19 @@ def test_compose_builds_one_private_local_image_without_host_ports() -> None:
     assert compose.count("no-new-privileges:true") == 3
     assert compose.count("cap_drop:") == 3
     assert compose.count("tmpfs:") == 3
+
+
+def test_compose_build_contract_rejects_a_second_build_owner() -> None:
+    """The one-build-owner contract fails if an API consumer starts building source."""
+    compose = read_required(REPOSITORY_ROOT / "deploy" / "compose.assistant.yml")
+    mutated_compose = compose.replace(
+        "  assistant-core:\n",
+        f"  assistant-core:\n    {ASSISTANT_BUILD_BLOCK}\n",
+        1,
+    )
+
+    with pytest.raises(AssertionError):
+        assert_compose_has_one_git_build_owner(mutated_compose)
 
 
 def test_postgres_bootstrap_is_guarded_idempotent_and_least_privilege() -> None:
