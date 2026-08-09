@@ -16,6 +16,25 @@ COMPLETED_TURN_TOO_LARGE_ERROR = "turn_completed_request_too_large"
 INVALID_OVERSIZED_TURN_ERROR = "invalid_turn_oversized_payload"
 
 
+def _looks_like_oversized_turn(document: dict[object, object]) -> bool:
+    """Recognize an oversized marker even when its event type is malformed."""
+    event_type = document.get("event_type")
+    if event_type == "turn.oversized.v1":
+        return True
+    if isinstance(event_type, str) and event_type.startswith("turn.oversized"):
+        return True
+
+    payload = document.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("source") == "openwebui_outlet_filter":
+        for key in ("user_message", "assistant_message"):
+            message = payload.get(key)
+            if isinstance(message, dict) and "content_bytes" in message:
+                return True
+    return False
+
+
 async def require_turn_event_contract(request: Request) -> None:
     """Reject unsafe turn bodies after HMAC but before FastAPI body validation."""
     raw_body = await request.body()
@@ -34,18 +53,28 @@ async def require_turn_event_contract(request: Request) -> None:
                 detail=COMPLETED_TURN_TOO_LARGE_ERROR,
             )
         return
-    if event_type != "turn.oversized.v1":
+    if not _looks_like_oversized_turn(document):
         return
 
     try:
-        payload = OversizedTurnPayload.model_validate(document.get("payload"))
-        native_chat_id = document.get("native_chat_id")
-        native_message_id = document.get("native_message_id")
-        if type(native_chat_id) is not str or not native_chat_id.strip():
+        envelope = EventEnvelope.model_validate(document)
+        if type(document.get("schema_version")) is not int:
             raise ValueError
-        if type(native_message_id) is not str or not native_message_id.strip():
+        if envelope.event_type != "turn.oversized.v1":
             raise ValueError
-        if payload.assistant_message.id != native_message_id:
+        for field in (
+            "event_id",
+            "event_type",
+            "native_user_id",
+            "native_chat_id",
+            "native_message_id",
+            "occurred_at",
+        ):
+            raw_value = document.get(field)
+            if type(raw_value) is not str or not raw_value.strip():
+                raise ValueError
+        payload = OversizedTurnPayload.model_validate(envelope.payload)
+        if payload.assistant_message.id != envelope.native_message_id:
             raise ValueError
     except (TypeError, ValueError, ValidationError):
         raise HTTPException(

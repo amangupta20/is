@@ -126,6 +126,20 @@ def oversized_turn_payload() -> dict[str, object]:
     }
 
 
+def oversized_turn_event() -> dict[str, object]:
+    """Return one complete canonical oversized-turn envelope."""
+    return {
+        "schema_version": 1,
+        "event_id": "turn:v1:oversized-envelope",
+        "event_type": "turn.oversized.v1",
+        "native_user_id": "user-1",
+        "native_chat_id": "chat-1",
+        "native_message_id": "assistant-message-1",
+        "occurred_at": "2026-08-10T12:00:00Z",
+        "payload": oversized_turn_payload(),
+    }
+
+
 async def send_event(app: FastAPI, body: bytes, *, signed: bool = True) -> httpx.Response:
     """Send an event with an optional valid adapter signature."""
     headers = {"Content-Type": "application/json"}
@@ -378,6 +392,69 @@ def test_invalid_oversized_turn_payload_is_rejected_with_one_safe_error(
     assert "private-content-marker" not in response.text
     assert HMAC_SECRET not in response.text
     assert "private-content-marker" not in caplog.text
+    assert HMAC_SECRET not in caplog.text
+    assert calls == []
+    assert fake_session.transaction_entries == 0
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda envelope: envelope.update(
+            {"unexpected": "PRIVATE_TOP_LEVEL_CONTENT"}
+        ),
+        lambda envelope: envelope.pop("schema_version"),
+        lambda envelope: envelope.update({"schema_version": "1"}),
+        lambda envelope: envelope.update({"schema_version": True}),
+        lambda envelope: envelope.pop("event_id"),
+        lambda envelope: envelope.update({"event_id": "x" * 201}),
+        lambda envelope: envelope.update({"event_id": 123}),
+        lambda envelope: envelope.pop("event_type"),
+        lambda envelope: envelope.update({"event_type": "turn.oversized.v2"}),
+        lambda envelope: envelope.update({"event_type": 1}),
+        lambda envelope: envelope.pop("native_user_id"),
+        lambda envelope: envelope.update({"native_user_id": "x" * 201}),
+        lambda envelope: envelope.update({"native_user_id": 123}),
+        lambda envelope: envelope.pop("native_chat_id"),
+        lambda envelope: envelope.update({"native_chat_id": ""}),
+        lambda envelope: envelope.update({"native_chat_id": "x" * 201}),
+        lambda envelope: envelope.pop("native_message_id"),
+        lambda envelope: envelope.update({"native_message_id": "x" * 201}),
+        lambda envelope: envelope.pop("occurred_at"),
+        lambda envelope: envelope.update(
+            {"occurred_at": "2026-08-10T12:00:00"}
+        ),
+        lambda envelope: envelope.update(
+            {"occurred_at": "PRIVATE_TOP_LEVEL_CONTENT"}
+        ),
+        lambda envelope: envelope.update({"occurred_at": 1_800_000_000}),
+    ],
+)
+def test_invalid_oversized_turn_envelope_always_uses_safe_prevalidation_error(
+    monkeypatch: Any,
+    mutation: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every oversized-envelope failure is sanitized before FastAPI validation."""
+    app = create_app(Settings(hmac_secret=HMAC_SECRET))
+    fake_session = FakeSession()
+    app.state.session_factory = session_factory(fake_session)
+    calls: list[object] = []
+    envelope = oversized_turn_event()
+    mutation(envelope)
+
+    async def fake_ingest(_session: FakeSession, event: EventEnvelope) -> bool:
+        calls.append(event)
+        return False
+
+    monkeypatch.setattr("assistant_core.api.routes.events.ingest_event", fake_ingest)
+    response = anyio.run(send_event, app, canonical_event_body(envelope))
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid_turn_oversized_payload"}
+    assert "PRIVATE_TOP_LEVEL_CONTENT" not in response.text
+    assert HMAC_SECRET not in response.text
+    assert "PRIVATE_TOP_LEVEL_CONTENT" not in caplog.text
     assert HMAC_SECRET not in caplog.text
     assert calls == []
     assert fake_session.transaction_entries == 0
