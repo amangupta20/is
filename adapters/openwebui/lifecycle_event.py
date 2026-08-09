@@ -52,7 +52,22 @@ class Event:
         if not isinstance(value, Mapping):
             return None
         identifier = value.get("id")
-        return None if identifier is None else str(identifier)
+        return Event._scalar_id(identifier)
+
+    @staticmethod
+    def _scalar_id(value: object) -> str | None:
+        if type(value) is str:
+            return value
+        if type(value) is int:
+            return str(value)
+        return None
+
+    @classmethod
+    def _data_id(cls, event: Mapping[object, object], key: str) -> str | None:
+        data = event.get("data")
+        if not isinstance(data, Mapping):
+            return None
+        return cls._scalar_id(data.get(key))
 
     def _diagnose_failure(self, event_name: str, event_id: str) -> None:
         diagnostic = {
@@ -80,12 +95,37 @@ class Event:
                 return
 
             actor_id = self._id_from(event.get("actor"))
-            native_user_id = actor_id or self._id_from(event.get("user"))
+            legacy_user_id = self._id_from(event.get("user"))
+            subject_id = self._id_from(event.get("subject"))
+            legacy_chat_id = self._id_from(event.get("chat"))
+            legacy_message_id = self._id_from(event.get("message"))
+            legacy_file_id = self._id_from(event.get("file"))
+
+            if __event_name__ == "user.deleted":
+                native_user_id = subject_id or legacy_user_id
+            elif __event_name__ == "chat.deleted":
+                native_user_id = self._data_id(event, "owner_id") or actor_id or legacy_user_id
+            elif __event_name__ == "chat.finished":
+                native_user_id = actor_id or legacy_user_id or self._data_id(event, "user_id")
+            else:
+                native_user_id = actor_id or legacy_user_id
             if not native_user_id:
                 return
 
             payload = {"source": "openwebui_event"}
-            file_id = self._id_from(event.get("file"))
+            chat_id = legacy_chat_id
+            message_id = legacy_message_id
+            file_id = legacy_file_id
+            if __event_name__ == "message.created":
+                chat_id = self._data_id(event, "chat_id") or legacy_chat_id
+                message_id = subject_id or legacy_message_id
+            elif __event_name__ == "chat.finished":
+                chat_id = subject_id or legacy_chat_id
+                message_id = self._data_id(event, "message_id") or legacy_message_id
+            elif __event_name__ in {"chat.deleted", "chat.compacted"}:
+                chat_id = subject_id or legacy_chat_id
+            elif __event_name__ in {"file.uploaded", "file.deleted"}:
+                file_id = subject_id or legacy_file_id
             if file_id is not None:
                 payload["file_id"] = file_id
 
@@ -95,8 +135,8 @@ class Event:
                 "event_type": __event_name__,
                 "occurred_at": datetime.now(UTC).isoformat(),
                 "native_user_id": native_user_id,
-                "native_chat_id": self._id_from(event.get("chat")),
-                "native_message_id": self._id_from(event.get("message")),
+                "native_chat_id": chat_id,
+                "native_message_id": message_id,
                 "payload": payload,
             }
 

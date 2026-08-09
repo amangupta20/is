@@ -59,6 +59,183 @@ class _RaisingString:
         raise RuntimeError("unsafe identifier conversion")
 
 
+def _forward_current_event(
+    monkeypatch: pytest.MonkeyPatch,
+    event: dict[str, object],
+    event_name: str,
+) -> dict[str, Any]:
+    module = _module()
+    capture: dict[str, Any] = {}
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda *, timeout: _RecordingClient(capture, timeout),
+    )
+
+    asyncio.run(
+        module.Event().event(
+            event,
+            __event_id__="current-envelope-event",
+            __event_name__=event_name,
+        )
+    )
+
+    return json.loads(capture["content"])
+
+
+@pytest.mark.parametrize(
+    ("event_name", "event", "expected"),
+    [
+        (
+            "message.created",
+            {
+                "actor": {"id": "actor-user"},
+                "subject": {"id": "message-current"},
+                "data": {"chat_id": "chat-current", "content": "PRIVATE"},
+            },
+            ("actor-user", "chat-current", "message-current", None),
+        ),
+        (
+            "chat.finished",
+            {
+                "actor": {"id": "actor-user"},
+                "subject": {"id": "chat-current"},
+                "data": {"message_id": "message-current", "user_id": "data-user"},
+            },
+            ("actor-user", "chat-current", "message-current", None),
+        ),
+        (
+            "chat.deleted",
+            {
+                "actor": {"id": "actor-user"},
+                "subject": {"id": "chat-current"},
+                "data": {"owner_id": "owner-current"},
+            },
+            ("owner-current", "chat-current", None, None),
+        ),
+        (
+            "chat.compacted",
+            {"actor": {"id": "actor-user"}, "subject": {"id": "chat-current"}},
+            ("actor-user", "chat-current", None, None),
+        ),
+        (
+            "file.uploaded",
+            {"actor": {"id": "actor-user"}, "subject": {"id": "file-current"}},
+            ("actor-user", None, None, "file-current"),
+        ),
+        (
+            "file.deleted",
+            {"actor": {"id": "actor-user"}, "subject": {"id": "file-current"}},
+            ("actor-user", None, None, "file-current"),
+        ),
+        (
+            "user.deleted",
+            {"actor": {"id": "deleting-admin"}, "subject": {"id": "deleted-user"}},
+            ("deleted-user", None, None, None),
+        ),
+    ],
+)
+def test_current_envelope_extracts_only_allowlisted_identifier_fields(
+    event_name: str,
+    event: dict[str, object],
+    expected: tuple[str, str | None, str | None, str | None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    envelope = _forward_current_event(monkeypatch, event, event_name)
+
+    user_id, chat_id, message_id, file_id = expected
+    assert envelope["native_user_id"] == user_id
+    assert envelope["native_chat_id"] == chat_id
+    assert envelope["native_message_id"] == message_id
+    assert envelope["payload"] == {
+        "source": "openwebui_event",
+        **({"file_id": file_id} if file_id is not None else {}),
+    }
+    assert "PRIVATE" not in json.dumps(envelope)
+
+
+def test_actorless_user_deleted_uses_subject_as_the_deleted_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    envelope = _forward_current_event(
+        monkeypatch,
+        {"subject": {"id": "deleted-user"}},
+        "user.deleted",
+    )
+
+    assert envelope["native_user_id"] == "deleted-user"
+
+
+@pytest.mark.parametrize(
+    "event_name",
+    [
+        "chat.finished",
+        "chat.deleted",
+        "chat.compacted",
+        "message.created",
+        "file.uploaded",
+        "file.deleted",
+        "user.deleted",
+    ],
+)
+def test_legacy_nested_identifiers_remain_supported(
+    event_name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    envelope = _forward_current_event(
+        monkeypatch,
+        {
+            "user": {"id": "legacy-user"},
+            "chat": {"id": "legacy-chat"},
+            "message": {"id": "legacy-message"},
+            "file": {"id": "legacy-file"},
+        },
+        event_name,
+    )
+
+    assert envelope["native_user_id"] == "legacy-user"
+    assert envelope["native_chat_id"] == "legacy-chat"
+    assert envelope["native_message_id"] == "legacy-message"
+    assert envelope["payload"] == {"file_id": "legacy-file", "source": "openwebui_event"}
+
+
+def test_chat_finished_uses_data_user_id_when_actor_and_legacy_user_are_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    envelope = _forward_current_event(
+        monkeypatch,
+        {
+            "subject": {"id": "chat-current"},
+            "data": {"message_id": "message-current", "user_id": "data-user"},
+        },
+        "chat.finished",
+    )
+
+    assert envelope["native_user_id"] == "data-user"
+
+
+@pytest.mark.parametrize(
+    "malformed_identifier",
+    [{"nested": "not-an-id"}, ["not-an-id"], _RaisingString()],
+)
+def test_malformed_scalar_identifiers_are_ignored_without_delivery(
+    malformed_identifier: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _module()
+
+    def unexpected_client(**_kwargs: object) -> None:
+        pytest.fail("malformed identifier attempted delivery")
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", unexpected_client)
+
+    asyncio.run(
+        module.Event().event(
+            {"actor": {"id": malformed_identifier}, "subject": {"id": "chat"}},
+            __event_id__="event",
+            __event_name__="chat.finished",
+        )
+    )
+
+
 def test_allowlisted_event_forwards_normalized_metadata_and_exact_signature(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
