@@ -81,6 +81,14 @@ def _restore_httpx_methods(methods: tuple[object, object]) -> None:
         type.__setattr__(httpx.AsyncHTTPTransport, "handle_async_request", methods[1])
 
 
+def _reset_httpx_instrumentor_flag(instrumentor: HTTPXClientInstrumentor) -> None:
+    """Reset pinned BaseInstrumentor state after an exceptional public teardown."""
+    # BaseInstrumentor 0.65b0 clears this flag only after _uninstrument returns.
+    # If the real hook raises, exact callable restoration alone leaves future public
+    # instrument() calls as wrapper-free no-ops, so this compatibility reset is needed.
+    instrumentor._is_instrumented_by_opentelemetry = False
+
+
 class HTTPXInstrumentationManager:
     """Own the process-global HTTPX wrapper for one active provider at a time."""
 
@@ -120,8 +128,25 @@ class HTTPXInstrumentationManager:
                     try:
                         _restore_httpx_methods(original_methods)
                     finally:
+                        _reset_httpx_instrumentor_flag(instrumentor)
                         self._clear()
                 raise RuntimeError("HTTPX tracing instrumentation failed") from None
+            instrumented_methods = _snapshot_httpx_methods()
+            if (
+                instrumented_methods[0] is original_methods[0]
+                or instrumented_methods[1] is original_methods[1]
+            ):
+                try:
+                    instrumentor.uninstrument()
+                except Exception:  # noqa: BLE001, S110 - exact rollback follows
+                    pass
+                finally:
+                    try:
+                        _restore_httpx_methods(original_methods)
+                    finally:
+                        _reset_httpx_instrumentor_flag(instrumentor)
+                        self._clear()
+                raise RuntimeError("HTTPX tracing instrumentation failed")
             self._instrumentor = instrumentor
             self._provider = provider
             self._references = 1
@@ -152,6 +177,7 @@ class HTTPXInstrumentationManager:
                 try:
                     _restore_httpx_methods(original_methods)
                 finally:
+                    _reset_httpx_instrumentor_flag(self._instrumentor)
                     self._clear()
 
             if uninstrumentation_failed:
@@ -381,6 +407,7 @@ class TracingRuntime:
         """Remove instrumentation before shutting down the provider."""
         if self._shutdown:
             return
+        self._shutdown = True
         final_provider_owner = not self._httpx_active
         release_error: RuntimeError | None = None
         try:
@@ -398,7 +425,6 @@ class TracingRuntime:
             finally:
                 if final_provider_owner:
                     self.provider.shutdown()
-                self._shutdown = True
         if release_error is not None:
             raise release_error
 

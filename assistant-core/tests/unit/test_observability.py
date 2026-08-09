@@ -413,6 +413,8 @@ def test_otlp_endpoint_configures_provider_and_instrumentation(
     """Enabled tracing is fully configurable without sending network traffic."""
     calls: dict[str, object] = {}
     shutdown_order: list[str] = []
+    original_sync = httpx.HTTPTransport.handle_request
+    original_async = httpx.AsyncHTTPTransport.handle_async_request
 
     class FakeResource:
         @staticmethod
@@ -454,9 +456,22 @@ def test_otlp_endpoint_configures_provider_and_instrumentation(
         def instrument(self, *, tracer_provider: object) -> None:
             calls["httpx_instrumentation"] = tracer_provider
 
+            def wrapped_sync(*args: object, **kwargs: object) -> object:
+                del args, kwargs
+                raise AssertionError("mock wrapper must not run")
+
+            async def wrapped_async(*args: object, **kwargs: object) -> object:
+                del args, kwargs
+                raise AssertionError("mock wrapper must not run")
+
+            type.__setattr__(httpx.HTTPTransport, "handle_request", wrapped_sync)
+            type.__setattr__(httpx.AsyncHTTPTransport, "handle_async_request", wrapped_async)
+
         def uninstrument(self) -> None:
             calls["httpx_uninstrumentation"] = True
             shutdown_order.append("httpx")
+            type.__setattr__(httpx.HTTPTransport, "handle_request", original_sync)
+            type.__setattr__(httpx.AsyncHTTPTransport, "handle_async_request", original_async)
 
     monkeypatch.setattr(observability, "Resource", FakeResource, raising=False)
     monkeypatch.setattr(observability, "TracerProvider", FakeProvider, raising=False)
@@ -754,6 +769,175 @@ def test_partial_httpx_uninstrument_failure_restores_before_provider_shutdown(
     fresh_runtime.shutdown()
     assert httpx.HTTPTransport.handle_request is original_sync
     assert httpx.AsyncHTTPTransport.handle_async_request is original_async
+
+
+def test_real_httpx_uninstrument_failure_resets_flag_and_allows_fresh_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pinned real instrumentor cannot retain a stale success flag after rollback."""
+    original_sync = httpx.HTTPTransport.handle_request
+    original_async = httpx.AsyncHTTPTransport.handle_async_request
+    instrumentor = observability.HTTPXClientInstrumentor()
+    original_uninstrument = instrumentor._uninstrument
+    manager = observability.HTTPXInstrumentationManager()
+    provider = TracerProvider()
+    flag_after_failure = True
+    methods_after_failure = (False, False)
+    fresh_methods_changed = (False, False)
+    fresh_release_restored = (False, False)
+
+    def fail_after_real_uninstrument(**kwargs: object) -> None:
+        original_uninstrument(**kwargs)
+        raise ValueError("private real uninstrument failure")
+
+    try:
+        manager.acquire(provider)
+        assert instrumentor.is_instrumented_by_opentelemetry is True
+        assert httpx.HTTPTransport.handle_request is not original_sync
+        assert httpx.AsyncHTTPTransport.handle_async_request is not original_async
+        monkeypatch.setattr(instrumentor, "_uninstrument", fail_after_real_uninstrument)
+
+        with pytest.raises(RuntimeError, match="HTTPX tracing uninstrumentation failed"):
+            manager.release(provider)
+
+        flag_after_failure = instrumentor.is_instrumented_by_opentelemetry
+        methods_after_failure = (
+            httpx.HTTPTransport.handle_request is original_sync,
+            httpx.AsyncHTTPTransport.handle_async_request is original_async,
+        )
+        monkeypatch.setattr(instrumentor, "_uninstrument", original_uninstrument)
+
+        if flag_after_failure is False:
+            manager.acquire(provider)
+            fresh_methods_changed = (
+                httpx.HTTPTransport.handle_request is not original_sync,
+                httpx.AsyncHTTPTransport.handle_async_request is not original_async,
+            )
+            assert manager.release(provider) is True
+            fresh_release_restored = (
+                httpx.HTTPTransport.handle_request is original_sync,
+                httpx.AsyncHTTPTransport.handle_async_request is original_async,
+            )
+    finally:
+        type.__setattr__(httpx.HTTPTransport, "handle_request", original_sync)
+        type.__setattr__(httpx.AsyncHTTPTransport, "handle_async_request", original_async)
+        instrumentor._is_instrumented_by_opentelemetry = False
+
+    assert flag_after_failure is False
+    assert methods_after_failure == (True, True)
+    assert fresh_methods_changed == (True, True)
+    assert fresh_release_restored == (True, True)
+
+
+def test_httpx_acquire_rejects_flagged_false_success_without_wrappers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale already-instrumented flag cannot create a wrapper-free false lease."""
+    original_sync = httpx.HTTPTransport.handle_request
+    original_async = httpx.AsyncHTTPTransport.handle_async_request
+    instrumentor = observability.HTTPXClientInstrumentor()
+    monkeypatch.setattr(instrumentor, "_is_instrumented_by_opentelemetry", True)
+    manager = observability.HTTPXInstrumentationManager()
+
+    with pytest.raises(RuntimeError, match="HTTPX tracing instrumentation failed"):
+        manager.acquire(TracerProvider())
+
+    assert instrumentor.is_instrumented_by_opentelemetry is False
+    assert httpx.HTTPTransport.handle_request is original_sync
+    assert httpx.AsyncHTTPTransport.handle_async_request is original_async
+    assert manager._provider is None
+    assert manager._instrumentor is None
+    assert manager._references == 0
+
+
+def test_shared_provider_shutdown_failure_is_terminal_for_both_runtimes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing final provider teardown cannot reactivate either completed lease."""
+    original_sync = httpx.HTTPTransport.handle_request
+    original_async = httpx.AsyncHTTPTransport.handle_async_request
+    manager = observability.HTTPXInstrumentationManager()
+    monkeypatch.setattr(observability, "HTTPX_INSTRUMENTATION_MANAGER", manager)
+    provider = TracerProvider()
+    provider_calls = 0
+
+    def failing_provider_shutdown() -> None:
+        nonlocal provider_calls
+        provider_calls += 1
+        raise RuntimeError("private provider shutdown failure")
+
+    monkeypatch.setattr(provider, "shutdown", failing_provider_shutdown)
+    apps = [FastAPI(), FastAPI()]
+    uninstrumented_apps: list[FastAPI] = []
+    monkeypatch.setattr(
+        observability.FastAPIInstrumentor,
+        "uninstrument_app",
+        lambda app: uninstrumented_apps.append(app),
+    )
+    runtimes = [observability.TracingRuntime(app, provider) for app in apps]
+    for runtime in runtimes:
+        runtime.start()
+
+    runtimes[0].shutdown()
+    with pytest.raises(RuntimeError, match="private provider shutdown failure"):
+        runtimes[1].shutdown()
+    runtimes[0].shutdown()
+    runtimes[1].shutdown()
+
+    assert provider_calls == 1
+    assert uninstrumented_apps == apps
+    assert httpx.HTTPTransport.handle_request is original_sync
+    assert httpx.AsyncHTTPTransport.handle_async_request is original_async
+    for runtime in runtimes:
+        with pytest.raises(RuntimeError, match="already shut down"):
+            runtime.start()
+
+
+def test_provider_shutdown_failure_still_disposes_engine_and_is_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The app lifespan always disposes its engine after terminal tracing failure."""
+    app = create_app(Settings(hmac_secret="a" * 32))
+    provider = TracerProvider()
+    provider_calls = 0
+
+    def failing_provider_shutdown() -> None:
+        nonlocal provider_calls
+        provider_calls += 1
+        raise RuntimeError("private provider shutdown failure")
+
+    class RecordingEngine:
+        def __init__(self) -> None:
+            self.disposed = False
+
+        async def dispose(self) -> None:
+            self.disposed = True
+
+    monkeypatch.setattr(provider, "shutdown", failing_provider_shutdown)
+    monkeypatch.setattr(
+        observability.FastAPIInstrumentor,
+        "uninstrument_app",
+        lambda app: None,
+    )
+    runtime = observability.TracingRuntime(app, provider)
+    engine = RecordingEngine()
+    app.state.tracing_runtime = runtime
+    app.state.tracer_provider = provider
+    app.state.engine = engine
+
+    async def run_lifespan() -> None:
+        with pytest.raises(RuntimeError, match="private provider shutdown failure"):
+            async with app.router.lifespan_context(app):
+                pass
+
+    anyio.run(run_lifespan)
+
+    assert engine.disposed is True
+    assert provider_calls == 1
+    runtime.shutdown()
+    assert provider_calls == 1
+    with pytest.raises(RuntimeError, match="already shut down"):
+        runtime.start()
 
 
 def test_exported_server_and_client_spans_contain_no_url_or_payload_values(
