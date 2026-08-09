@@ -9,10 +9,12 @@ from datetime import UTC, datetime, timedelta
 
 import anyio
 import pytest
-from sqlalchemy import Select, and_, delete, func, or_, select
+from sqlalchemy import Select, and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from assistant_core.db.session import create_database
+from assistant_core.events.models import EventInbox
+from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
 
 TEST_DATABASE_URL_ENV = "ASSISTANT_TEST_DATABASE_URL"
@@ -70,6 +72,41 @@ async def insert_job(
         return job.id
 
 
+async def insert_process_event_fixture(
+    session_factory: async_sessionmaker[AsyncSession],
+    identity_key: str,
+    event_id: str,
+    native_user_id: str,
+) -> uuid.UUID:
+    """Insert one exact lifecycle inbox event and its valid worker job."""
+    async with session_factory() as session, session.begin():
+        identity = UserIdentity(native_user_id=native_user_id)
+        session.add(identity)
+        await session.flush()
+        session.add(
+            EventInbox(
+                event_id=event_id,
+                event_type="chat.created",
+                user_id=identity.id,
+                native_chat_id=f"chat-{event_id}",
+                native_message_id=f"message-{event_id}",
+                occurred_at=datetime.now(UTC),
+                payload={"source": "worker-integration"},
+            )
+        )
+        job = Job(
+            identity_key=identity_key,
+            kind="process_event",
+            status="queued",
+            payload={"event_id": event_id},
+            attempts=0,
+            available_at=datetime.now(UTC) - timedelta(seconds=1),
+        )
+        session.add(job)
+        await session.flush()
+        return job.id
+
+
 async def read_job(
     session_factory: async_sessionmaker[AsyncSession], identity_key: str
 ) -> Job:
@@ -94,6 +131,43 @@ async def cleanup_exact_jobs(
             .where(Job.identity_key.in_(identity_keys))
         )
     assert int(remaining or 0) == 0
+
+
+async def cleanup_process_event_fixture(
+    session_factory: async_sessionmaker[AsyncSession],
+    identity_key: str,
+    event_id: str,
+    native_user_id: str,
+) -> None:
+    """Delete only one worker fixture in reverse dependency order."""
+    async with session_factory() as session, session.begin():
+        await session.execute(delete(Job).where(Job.identity_key == identity_key))
+        await session.execute(delete(EventInbox).where(EventInbox.event_id == event_id))
+        await session.execute(
+            delete(UserIdentity).where(UserIdentity.native_user_id == native_user_id)
+        )
+
+    async with session_factory() as session:
+        job_count = await session.scalar(
+            select(func.count())
+            .select_from(Job)
+            .where(Job.identity_key == identity_key)
+        )
+        event_count = await session.scalar(
+            select(func.count())
+            .select_from(EventInbox)
+            .where(EventInbox.event_id == event_id)
+        )
+        identity_count = await session.scalar(
+            select(func.count())
+            .select_from(UserIdentity)
+            .where(UserIdentity.native_user_id == native_user_id)
+        )
+    assert (int(job_count or 0), int(event_count or 0), int(identity_count or 0)) == (
+        0,
+        0,
+        0,
+    )
 
 
 async def refuse_if_other_eligible_job_exists(
@@ -236,7 +310,8 @@ async def exercise_completion() -> None:
                         select(Job).where(Job.identity_key == identity_key)
                     )
                 ).scalar_one()
-                await complete_job(session, job)
+                assert job.claimed_at is not None
+                assert await complete_job(session, job, job.claimed_at)
 
             completed = await read_job(session_factory, identity_key)
             assert completed.status == "completed"
@@ -276,7 +351,8 @@ async def exercise_requeue_after_failure() -> None:
                         select(Job).where(Job.identity_key == identity_key)
                     )
                 ).scalar_one()
-                await fail_job(session, job, error_code)
+                assert job.claimed_at is not None
+                assert await fail_job(session, job, job.claimed_at, error_code)
 
             failed = await read_job(session_factory, identity_key)
             assert failed.status == "queued"
@@ -315,7 +391,10 @@ async def exercise_eighth_failure() -> None:
                         select(Job).where(Job.identity_key == identity_key)
                     )
                 ).scalar_one()
-                await fail_job(session, job, "handler_failed")
+                assert job.claimed_at is not None
+                assert await fail_job(
+                    session, job, job.claimed_at, "handler_failed"
+                )
 
             failed = await read_job(session_factory, identity_key)
             assert failed.status == "dead"
@@ -368,6 +447,52 @@ def test_stale_running_job_can_be_reclaimed(
     anyio.run(exercise_stale_claim_recovery, monkeypatch)
 
 
+async def exercise_older_worker_cannot_complete_replaced_claim() -> None:
+    """Replace one claim and prove the older owner cannot finalize it."""
+    from assistant_core.jobs.repository import complete_job
+
+    identity_key = unique_identity()
+    original_lease = datetime.now(UTC) - timedelta(minutes=1)
+    replacement_lease = datetime.now(UTC)
+    async with database_context() as session_factory:
+        try:
+            await insert_job(
+                session_factory,
+                identity_key,
+                status="running",
+                claimed_at=original_lease,
+            )
+
+            async with session_factory() as older_session:
+                older_job = (
+                    await older_session.execute(
+                        select(Job).where(Job.identity_key == identity_key)
+                    )
+                ).scalar_one()
+                async with session_factory() as newer_session, newer_session.begin():
+                    await newer_session.execute(
+                        update(Job)
+                        .where(Job.identity_key == identity_key)
+                        .values(status="running", claimed_at=replacement_lease)
+                    )
+
+                assert await complete_job(
+                    older_session, older_job, original_lease
+                ) is False
+
+            current = await read_job(session_factory, identity_key)
+            assert current.status == "running"
+            assert current.claimed_at == replacement_lease
+            assert current.completed_at is None
+        finally:
+            await cleanup_exact_jobs(session_factory, {identity_key})
+
+
+def test_older_worker_cannot_complete_a_replaced_claim() -> None:
+    """Lease replacement makes older successful finalization a safe no-op."""
+    anyio.run(exercise_older_worker_cannot_complete_replaced_claim)
+
+
 async def exercise_ineligible_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify future queued and fresh running rows stay untouched."""
     from assistant_core.jobs.repository import claim_next_job
@@ -417,13 +542,16 @@ async def exercise_worker_success(monkeypatch: pytest.MonkeyPatch) -> None:
     from assistant_core.jobs.worker import process_one
 
     identity_key = unique_identity()
+    event_id = f"{identity_key}-event"
+    native_user_id = f"{identity_key}-user"
     scope_claims_to_identities(monkeypatch, {identity_key})
     async with database_context() as session_factory:
         try:
-            await insert_job(
+            await insert_process_event_fixture(
                 session_factory,
                 identity_key,
-                available_at=datetime.now(UTC) - timedelta(seconds=1),
+                event_id,
+                native_user_id,
             )
             await refuse_if_other_eligible_job_exists(session_factory, {identity_key})
 
@@ -436,7 +564,9 @@ async def exercise_worker_success(monkeypatch: pytest.MonkeyPatch) -> None:
             assert completed.completed_at is not None
             assert completed.last_error_code is None
         finally:
-            await cleanup_exact_jobs(session_factory, {identity_key})
+            await cleanup_process_event_fixture(
+                session_factory, identity_key, event_id, native_user_id
+            )
 
 
 def test_worker_processes_foundation_job_to_completion(

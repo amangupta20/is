@@ -145,6 +145,85 @@ def test_claim_statement_orders_oldest_first_and_limits_one() -> None:
     assert "LIMIT" in compiled
 
 
+def test_completion_and_failure_updates_require_exact_active_claim() -> None:
+    """Lifecycle SQL guards ownership by ID, running state, and lease timestamp."""
+    from assistant_core.jobs.repository import _complete_statement, _failure_statement
+
+    job_id = uuid.uuid4()
+    lease = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+    now = datetime(2026, 8, 10, 12, 1, tzinfo=UTC)
+    complete = _complete_statement(job_id, lease, now)
+    failure = _failure_statement(job_id, lease, 7, now, "handler_failed")
+
+    for statement in (complete, failure):
+        compiled = statement.compile(dialect=postgresql.dialect())
+        sql = str(compiled)
+        assert "assistant_core.job.id =" in sql
+        assert "assistant_core.job.status =" in sql
+        assert "assistant_core.job.claimed_at =" in sql
+        assert job_id in compiled.params.values()
+        assert lease in compiled.params.values()
+        assert "running" in compiled.params.values()
+
+    assert complete.compile().params["status"] == "completed"
+    failure_params = failure.compile().params
+    assert failure_params["attempts"] == 8
+    assert failure_params["status"] == "dead"
+    assert failure_params["last_error_code"] == "handler_failed"
+
+
+def test_lost_claim_rolls_back_without_completion_or_failure_overwrite() -> None:
+    """A zero-row lease guard is a safe no-op for both lifecycle outcomes."""
+    from assistant_core.jobs.repository import complete_job, fail_job
+
+    lease = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+    job = Job(
+        id=uuid.uuid4(),
+        identity_key="unit-lost-lease",
+        kind="process_event",
+        status="running",
+        payload={"event_id": "event-1"},
+        attempts=7,
+        claimed_at=datetime(2026, 8, 10, 12, 6, tzinfo=UTC),
+    )
+
+    class Session:
+        rollback_count = 0
+        commit_count = 0
+
+        async def execute(self, _statement: object) -> object:
+            class Result:
+                rowcount = 0
+
+            return Result()
+
+        async def rollback(self) -> None:
+            self.rollback_count += 1
+
+        async def commit(self) -> None:
+            self.commit_count += 1
+
+    async def exercise() -> tuple[bool, bool, Session, Session]:
+        completion_session = Session()
+        failure_session = Session()
+        completed = await complete_job(  # type: ignore[arg-type]
+            completion_session, job, lease
+        )
+        failed = await fail_job(  # type: ignore[arg-type]
+            failure_session, job, lease, "handler_failed"
+        )
+        return completed, failed, completion_session, failure_session
+
+    completed, failed, completion_session, failure_session = anyio.run(exercise)
+
+    assert completed is False
+    assert failed is False
+    assert completion_session.rollback_count == 1
+    assert failure_session.rollback_count == 1
+    assert completion_session.commit_count == 0
+    assert failure_session.commit_count == 0
+
+
 @pytest.mark.parametrize(("attempts", "expected"), [(1, 2), (7, 128), (8, 256), (20, 256)])
 def test_retry_delay_is_exponential_and_capped(attempts: int, expected: int) -> None:
     """Retry delay follows the bounded formula for persisted attempt counts."""
@@ -194,6 +273,7 @@ def test_invalid_completed_turn_uses_fixed_safe_failure_code(
         identity_key="unit-invalid",
         kind="process_event",
         payload={"event_id": "e"},
+        claimed_at=datetime(2026, 8, 10, tzinfo=UTC),
     )
     failures: list[str] = []
 
@@ -214,8 +294,11 @@ def test_invalid_completed_turn_uses_fixed_safe_failure_code(
     async def reject(*_args: object) -> None:
         raise InvalidTurnPayloadError("invalid_turn_payload")
 
-    async def fail(_session: object, _job: Job, code: str) -> None:
+    async def fail(
+        _session: object, _job: Job, _lease: datetime, code: str
+    ) -> bool:
         failures.append(code)
+        return True
 
     async def unexpected(*_args: object) -> None:
         pytest.fail("invalid turn was completed")
@@ -227,6 +310,106 @@ def test_invalid_completed_turn_uses_fixed_safe_failure_code(
 
     anyio.run(worker.process_one, session)  # type: ignore[arg-type]
     assert failures == ["invalid_turn_payload"]
+
+
+def test_process_one_captures_claim_before_successful_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A handler cannot replace the lease used by successful finalization."""
+    from assistant_core.jobs import worker
+
+    original_lease = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+    replacement_lease = datetime(2026, 8, 10, 12, 6, tzinfo=UTC)
+    job = Job(
+        id=uuid.uuid4(),
+        identity_key="unit-success-lease",
+        kind="process_event",
+        status="running",
+        payload={"event_id": "event-1"},
+        attempts=0,
+        claimed_at=original_lease,
+    )
+    finalized_leases: list[datetime] = []
+
+    async def claim(_session: object) -> Job:
+        return job
+
+    async def handle(_session: object, _kind: str, _payload: object) -> None:
+        job.claimed_at = replacement_lease
+
+    async def complete(
+        _session: object, _job: Job, lease: datetime
+    ) -> bool:
+        finalized_leases.append(lease)
+        return False
+
+    monkeypatch.setattr(worker, "claim_next_job", claim)
+    monkeypatch.setattr(worker, "handle", handle)
+    monkeypatch.setattr(worker, "complete_job", complete)
+
+    processed = anyio.run(worker.process_one, object())  # type: ignore[arg-type]
+
+    assert processed is True
+    assert finalized_leases == [original_lease]
+
+
+def test_failure_recovery_keeps_original_claim_after_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reclaimed job cannot be failed by the older worker after rollback."""
+    from assistant_core.jobs import worker
+
+    original_lease = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+    replacement_lease = datetime(2026, 8, 10, 12, 6, tzinfo=UTC)
+    claimed_job = Job(
+        id=uuid.uuid4(),
+        identity_key="unit-failure-lease",
+        kind="process_event",
+        status="running",
+        payload={"event_id": "event-1"},
+        attempts=0,
+        claimed_at=original_lease,
+    )
+    reloaded_job = Job(
+        id=claimed_job.id,
+        identity_key=claimed_job.identity_key,
+        kind=claimed_job.kind,
+        status="running",
+        payload=claimed_job.payload,
+        attempts=0,
+        claimed_at=replacement_lease,
+    )
+    failed_leases: list[datetime] = []
+
+    class Session:
+        async def rollback(self) -> None:
+            pass
+
+        async def get(self, model: object, key: object) -> Job:
+            assert model is Job
+            assert key == claimed_job.id
+            return reloaded_job
+
+    async def claim(_session: object) -> Job:
+        return claimed_job
+
+    async def reject(*_args: object) -> None:
+        raise ValueError("bounded-handler-failure")
+
+    async def fail(
+        _session: object, _job: Job, lease: datetime, _code: str
+    ) -> bool:
+        failed_leases.append(lease)
+        return False
+
+    monkeypatch.setattr(worker, "claim_next_job", claim)
+    monkeypatch.setattr(worker, "handle", reject)
+    monkeypatch.setattr(worker, "fail_job", fail)
+
+    processed = anyio.run(worker.process_one, Session())  # type: ignore[arg-type]
+
+    assert processed is True
+    assert failed_leases == [original_lease]
 
 
 @pytest.mark.parametrize(
@@ -259,6 +442,7 @@ def test_dml_failure_rolls_back_reloads_and_commits_safe_failure_state(
         rollback_count = 0
         successful_commit_count = 0
         reloaded_job = False
+        execute_count = 0
 
         async def get(self, model: object, key: object) -> object:
             if model is EventInbox:
@@ -270,15 +454,27 @@ def test_dml_failure_rolls_back_reloads_and_commits_safe_failure_state(
                 return job
             pytest.fail("worker loaded an unexpected model")
 
-        async def execute(self, _statement: object) -> object:
-            self.poisoned = True
-            raise DBAPIError.instance(
-                "INSERT INTO assistant_core.completed_turn (...) VALUES (...) ",
-                {"assistant_content": content_marker},
-                Exception("database rejected completed turn"),
-                Exception,
-                hide_parameters=False,
-            )
+        async def execute(self, statement: object) -> object:
+            self.execute_count += 1
+            if self.execute_count == 1:
+                self.poisoned = True
+                raise DBAPIError.instance(
+                    "INSERT INTO assistant_core.completed_turn (...) VALUES (...) ",
+                    {"assistant_content": content_marker},
+                    Exception("database rejected completed turn"),
+                    Exception,
+                    hide_parameters=False,
+                )
+            assert self.poisoned is False
+            params = statement.compile().params  # type: ignore[attr-defined]
+            job.attempts = params["attempts"]
+            job.status = params["status"]
+            job.last_error_code = params["last_error_code"]
+
+            class Result:
+                rowcount = 1
+
+            return Result()
 
         async def rollback(self) -> None:
             self.poisoned = False

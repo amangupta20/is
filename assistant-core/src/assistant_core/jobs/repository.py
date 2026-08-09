@@ -1,9 +1,13 @@
 """PostgreSQL claim and lifecycle operations for durable jobs."""
 
+import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
-from sqlalchemy import Select, and_, or_, select
+from sqlalchemy import Select, and_, or_, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.dml import Update
 
 from assistant_core.jobs.models import Job
 
@@ -34,6 +38,58 @@ def _claim_statement(now: datetime) -> Select[tuple[Job]]:
     )
 
 
+def _complete_statement(
+    job_id: uuid.UUID, expected_claimed_at: datetime, now: datetime
+) -> Update:
+    """Build a completion update owned by one exact active claim."""
+    return (
+        update(Job)
+        .where(
+            Job.id == job_id,
+            Job.status == "running",
+            Job.claimed_at == expected_claimed_at,
+        )
+        .values(status="completed", completed_at=now, last_error_code=None)
+        .execution_options(synchronize_session=False)
+    )
+
+
+def _failure_statement(
+    job_id: uuid.UUID,
+    expected_claimed_at: datetime,
+    attempts: int,
+    now: datetime,
+    error_code: str,
+) -> Update:
+    """Build a retry/dead update owned by one exact active claim."""
+    next_attempts = attempts + 1
+    return (
+        update(Job)
+        .where(
+            Job.id == job_id,
+            Job.status == "running",
+            Job.claimed_at == expected_claimed_at,
+        )
+        .values(
+            attempts=next_attempts,
+            status="queued" if next_attempts < 8 else "dead",
+            available_at=now + timedelta(seconds=_retry_delay_seconds(next_attempts)),
+            last_error_code=error_code[:120],
+        )
+        .execution_options(synchronize_session=False)
+    )
+
+
+async def _commit_owned_update(session: AsyncSession, statement: Update) -> bool:
+    """Commit one lease-owned update or roll back all work after claim loss."""
+    result = cast(CursorResult[Any], await session.execute(statement))
+    if result.rowcount != 1:
+        await session.rollback()
+        return False
+    await session.commit()
+    return True
+
+
 async def claim_next_job(session: AsyncSession) -> Job | None:
     """Durably claim the oldest eligible job, skipping rows locked by peers."""
     now = datetime.now(UTC)
@@ -47,20 +103,30 @@ async def claim_next_job(session: AsyncSession) -> Job | None:
     return job
 
 
-async def complete_job(session: AsyncSession, job: Job) -> None:
-    """Persist successful completion and clear any prior error code."""
-    job.status = "completed"
-    job.completed_at = datetime.now(UTC)
-    job.last_error_code = None
-    await session.commit()
-
-
-async def fail_job(session: AsyncSession, job: Job, error_code: str) -> None:
-    """Persist one retryable failure with a bounded delay and error code."""
-    job.attempts += 1
-    job.status = "queued" if job.attempts < 8 else "dead"
-    job.available_at = datetime.now(UTC) + timedelta(
-        seconds=_retry_delay_seconds(job.attempts)
+async def complete_job(
+    session: AsyncSession, job: Job, expected_claimed_at: datetime
+) -> bool:
+    """Complete a job only while its exact claim remains active."""
+    return await _commit_owned_update(
+        session,
+        _complete_statement(job.id, expected_claimed_at, datetime.now(UTC)),
     )
-    job.last_error_code = error_code[:120]
-    await session.commit()
+
+
+async def fail_job(
+    session: AsyncSession,
+    job: Job,
+    expected_claimed_at: datetime,
+    error_code: str,
+) -> bool:
+    """Persist failure state only while the exact claim remains active."""
+    return await _commit_owned_update(
+        session,
+        _failure_statement(
+            job.id,
+            expected_claimed_at,
+            job.attempts,
+            datetime.now(UTC),
+            error_code,
+        ),
+    )

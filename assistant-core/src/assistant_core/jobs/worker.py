@@ -3,6 +3,7 @@
 import asyncio
 import signal
 import uuid
+from datetime import datetime
 
 from pydantic import JsonValue
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +21,7 @@ from assistant_core.turns.repository import (
 
 UNSUPPORTED_KIND_ERROR = "unsupported_job_kind"
 CLAIMED_JOB_MISSING_ERROR = "claimed_job_missing"
+INVALID_JOB_CLAIM_ERROR = "invalid_job_claim"
 IDLE_POLL_SECONDS = 1.0
 
 
@@ -29,6 +31,10 @@ class UnsupportedJobKindError(ValueError):
 
 class ClaimedJobMissingError(RuntimeError):
     """Raised safely when a claimed job disappears before failure persistence."""
+
+
+class InvalidJobClaimError(RuntimeError):
+    """Raised safely when a claimed job has no usable lease value."""
 
 
 async def handle(
@@ -55,14 +61,17 @@ async def handle(
 
 
 async def _record_handler_failure(
-    session: AsyncSession, job_id: uuid.UUID, error_code: str
+    session: AsyncSession,
+    job_id: uuid.UUID,
+    expected_claimed_at: datetime,
+    error_code: str,
 ) -> None:
     """Recover a failed transaction and persist safe lifecycle state."""
     await session.rollback()
     job = await session.get(Job, job_id)
     if job is None:
         raise ClaimedJobMissingError(CLAIMED_JOB_MISSING_ERROR) from None
-    await fail_job(session, job, error_code)
+    await fail_job(session, job, expected_claimed_at, error_code)
 
 
 async def process_one(session: AsyncSession) -> bool:
@@ -72,6 +81,7 @@ async def process_one(session: AsyncSession) -> bool:
         return False
 
     job_id = job.id
+    expected_claimed_at = job.claimed_at
     error_code: str
     try:
         await handle(session, job.kind, job.payload)
@@ -80,10 +90,16 @@ async def process_one(session: AsyncSession) -> bool:
     except Exception:  # noqa: BLE001 - all ordinary handler failures share one safe code
         error_code = "handler_failed"
     else:
-        await complete_job(session, job)
+        if expected_claimed_at is None:
+            raise InvalidJobClaimError(INVALID_JOB_CLAIM_ERROR) from None
+        await complete_job(session, job, expected_claimed_at)
         return True
 
-    await _record_handler_failure(session, job_id, error_code)
+    if expected_claimed_at is None:
+        raise InvalidJobClaimError(INVALID_JOB_CLAIM_ERROR) from None
+    await _record_handler_failure(
+        session, job_id, expected_claimed_at, error_code
+    )
     return True
 
 

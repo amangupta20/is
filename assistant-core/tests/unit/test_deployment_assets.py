@@ -364,3 +364,15 @@ def test_completed_turn_migration_has_stable_schema_qualified_operations(
         ),
         ("drop_table", ("completed_turn",), {"schema": "assistant_core"}),
     ]
+
+
+def test_live_process_event_fixture_creates_and_cleans_exact_inbox_provenance() -> None:
+    """The live worker success path must provide the event ID its job routes."""
+    worker_integration = read_required(
+        ASSISTANT_CORE / "tests" / "integration" / "test_worker.py"
+    )
+
+    assert "insert_process_event_fixture(" in worker_integration
+    assert 'payload={"event_id": event_id}' in worker_integration
+    assert "delete(EventInbox).where(EventInbox.event_id == event_id)" in worker_integration
+    assert "delete(UserIdentity).where(" in worker_integration

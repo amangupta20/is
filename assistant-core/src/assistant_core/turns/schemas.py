@@ -61,3 +61,31 @@ class CompletedTurnPayload(BaseModel):
     source: Literal["openwebui_outlet_filter"]
     user_message: CompletedTurnUserMessage
     assistant_message: CompletedTurnAssistantMessage
+
+
+class OversizedTurnMessage(BaseModel):
+    """Content-free metadata for one message in an oversized turn."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    id: str = Field(min_length=1, max_length=200)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    content_bytes: int = Field(ge=0)
+
+    @field_validator("id")
+    @classmethod
+    def require_nonblank_id(cls, value: str) -> str:
+        """Reject IDs that contain no visible characters."""
+        if not value.strip():
+            raise ValueError("message id must not be blank")
+        return value
+
+
+class OversizedTurnPayload(BaseModel):
+    """Exact metadata-only payload for a completed turn above the byte limit."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    source: Literal["openwebui_outlet_filter"]
+    user_message: OversizedTurnMessage
+    assistant_message: OversizedTurnMessage
