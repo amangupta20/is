@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 import anyio
 import pytest
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import Select, and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from assistant_core.db.session import create_database
@@ -99,7 +99,7 @@ async def cleanup_exact_jobs(
 async def refuse_if_other_eligible_job_exists(
     session_factory: async_sessionmaker[AsyncSession], allowed_identity_keys: Collection[str]
 ) -> None:
-    """Skip before a global claim could mutate a non-test or foreign test row."""
+    """Skip on existing foreign work as defense in depth before a scoped claim."""
     now = datetime.now(UTC)
     eligible = or_(
         and_(Job.status == "queued", Job.available_at <= now),
@@ -115,11 +115,29 @@ async def refuse_if_other_eligible_job_exists(
         pytest.skip("eligible jobs outside this test's exact identities exist")
 
 
-async def exercise_concurrent_claim() -> None:
+def scope_claims_to_identities(
+    monkeypatch: pytest.MonkeyPatch, identity_keys: Collection[str]
+) -> None:
+    """Constrain the real production claim statement to exact test-owned rows."""
+    from assistant_core.jobs import repository
+
+    real_claim_statement = repository._claim_statement
+    exact_identity_keys = tuple(identity_keys)
+
+    def scoped_claim_statement(now: datetime) -> Select[tuple[Job]]:
+        return real_claim_statement(now).where(
+            Job.identity_key.in_(exact_identity_keys)
+        )
+
+    monkeypatch.setattr(repository, "_claim_statement", scoped_claim_statement)
+
+
+async def exercise_concurrent_claim(monkeypatch: pytest.MonkeyPatch) -> None:
     """Prove SKIP LOCKED prevents two workers from claiming one row."""
     from assistant_core.jobs.repository import claim_next_job
 
     identity_key = unique_identity()
+    scope_claims_to_identities(monkeypatch, {identity_key})
     async with database_context() as session_factory:
         try:
             await insert_job(
@@ -145,9 +163,54 @@ async def exercise_concurrent_claim() -> None:
             await cleanup_exact_jobs(session_factory, {identity_key})
 
 
-def test_two_sessions_cannot_claim_one_eligible_job() -> None:
+def test_two_sessions_cannot_claim_one_eligible_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Only one concurrent session receives the sole eligible job."""
-    anyio.run(exercise_concurrent_claim)
+    anyio.run(exercise_concurrent_claim, monkeypatch)
+
+
+async def exercise_claim_scope_excludes_earlier_foreign_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep an earlier eligible row outside one test claim's exact scope."""
+    from assistant_core.jobs.repository import claim_next_job
+
+    target_identity = unique_identity()
+    foreign_identity = unique_identity()
+    identities = {target_identity, foreign_identity}
+    scope_claims_to_identities(monkeypatch, {target_identity})
+    async with database_context() as session_factory:
+        try:
+            await insert_job(
+                session_factory,
+                target_identity,
+                available_at=datetime.now(UTC) - timedelta(seconds=1),
+            )
+            await insert_job(
+                session_factory,
+                foreign_identity,
+                available_at=datetime.now(UTC) - timedelta(minutes=10),
+            )
+            await refuse_if_other_eligible_job_exists(session_factory, identities)
+
+            async with session_factory() as session:
+                claimed = await claim_next_job(session)
+
+            assert claimed is not None
+            assert claimed.identity_key == target_identity
+            foreign = await read_job(session_factory, foreign_identity)
+            assert foreign.status == "queued"
+            assert foreign.claimed_at is None
+        finally:
+            await cleanup_exact_jobs(session_factory, identities)
+
+
+def test_claim_scope_excludes_earlier_eligible_foreign_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The executed claim SQL cannot select outside the test's exact identity."""
+    anyio.run(exercise_claim_scope_excludes_earlier_foreign_job, monkeypatch)
 
 
 async def exercise_completion() -> None:
@@ -267,12 +330,13 @@ def test_eighth_attempt_becomes_dead() -> None:
     anyio.run(exercise_eighth_failure)
 
 
-async def exercise_stale_claim_recovery() -> None:
+async def exercise_stale_claim_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
     """Claim a running row whose lease is older than five minutes."""
     from assistant_core.jobs.repository import claim_next_job
 
     identity_key = unique_identity()
     stale_claimed_at = datetime.now(UTC) - timedelta(minutes=6)
+    scope_claims_to_identities(monkeypatch, {identity_key})
     async with database_context() as session_factory:
         try:
             await insert_job(
@@ -297,18 +361,21 @@ async def exercise_stale_claim_recovery() -> None:
             await cleanup_exact_jobs(session_factory, {identity_key})
 
 
-def test_stale_running_job_can_be_reclaimed() -> None:
+def test_stale_running_job_can_be_reclaimed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A running job claimed over five minutes ago is eligible again."""
-    anyio.run(exercise_stale_claim_recovery)
+    anyio.run(exercise_stale_claim_recovery, monkeypatch)
 
 
-async def exercise_ineligible_jobs() -> None:
+async def exercise_ineligible_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify future queued and fresh running rows stay untouched."""
     from assistant_core.jobs.repository import claim_next_job
 
     future_identity = unique_identity()
     fresh_identity = unique_identity()
     identities = {future_identity, fresh_identity}
+    scope_claims_to_identities(monkeypatch, identities)
     async with database_context() as session_factory:
         try:
             await insert_job(
@@ -338,16 +405,19 @@ async def exercise_ineligible_jobs() -> None:
             await cleanup_exact_jobs(session_factory, identities)
 
 
-def test_future_queued_and_fresh_running_jobs_are_not_eligible() -> None:
+def test_future_queued_and_fresh_running_jobs_are_not_eligible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Jobs outside both eligibility windows are not claimed."""
-    anyio.run(exercise_ineligible_jobs)
+    anyio.run(exercise_ineligible_jobs, monkeypatch)
 
 
-async def exercise_worker_success() -> None:
+async def exercise_worker_success(monkeypatch: pytest.MonkeyPatch) -> None:
     """Process one foundation job through claim, handle, and completion."""
     from assistant_core.jobs.worker import process_one
 
     identity_key = unique_identity()
+    scope_claims_to_identities(monkeypatch, {identity_key})
     async with database_context() as session_factory:
         try:
             await insert_job(
@@ -369,16 +439,19 @@ async def exercise_worker_success() -> None:
             await cleanup_exact_jobs(session_factory, {identity_key})
 
 
-def test_worker_processes_foundation_job_to_completion() -> None:
+def test_worker_processes_foundation_job_to_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The worker completes one no-op process_event job."""
-    anyio.run(exercise_worker_success)
+    anyio.run(exercise_worker_success, monkeypatch)
 
 
-async def exercise_worker_failure() -> None:
+async def exercise_worker_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """Process one unsupported job through the bounded failure path."""
     from assistant_core.jobs.worker import process_one
 
     identity_key = unique_identity()
+    scope_claims_to_identities(monkeypatch, {identity_key})
     async with database_context() as session_factory:
         try:
             await insert_job(
@@ -401,6 +474,8 @@ async def exercise_worker_failure() -> None:
             await cleanup_exact_jobs(session_factory, {identity_key})
 
 
-def test_worker_converts_ordinary_handler_failure_to_bounded_retry() -> None:
+def test_worker_converts_ordinary_handler_failure_to_bounded_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An ordinary handler error is persisted only as handler_failed."""
-    anyio.run(exercise_worker_failure)
+    anyio.run(exercise_worker_failure, monkeypatch)
