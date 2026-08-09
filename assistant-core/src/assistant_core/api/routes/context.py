@@ -17,7 +17,7 @@ class ContextRequest(BaseModel):
     native_chat_id: str | None = Field(default=None, max_length=200)
     native_message_id: str | None = Field(default=None, max_length=200)
     request_text: str = Field(default="", max_length=16_000)
-    max_tokens: int = Field(default=4_000, ge=0, le=16_000)
+    max_tokens: int = Field(default=300_000, ge=0, le=500_000)
 
 
 class ContextSource(BaseModel):

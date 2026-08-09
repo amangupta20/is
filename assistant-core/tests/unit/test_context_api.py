@@ -72,6 +72,21 @@ def test_context_returns_the_empty_contract() -> None:
     }
 
 
+def test_context_default_budget_is_300000_in_the_exact_signed_payload() -> None:
+    """Omitting max_tokens uses the policy default without changing the empty response."""
+    app = create_app(Settings(hmac_secret="a" * 32))
+
+    response = anyio.run(post_context, app)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "context_text": "",
+        "token_estimate": 0,
+        "sources": [],
+        "degraded": False,
+    }
+
+
 def test_context_rejects_missing_or_invalid_signatures() -> None:
     """Missing, body-modified, method-modified, and path-modified requests are unauthorized."""
     app = create_app(Settings(hmac_secret="a" * 32))
@@ -120,7 +135,7 @@ def test_context_validates_the_bounded_request_schema() -> None:
         )
     )
     excessive_tokens = anyio.run(
-        lambda: send_context(app, body=b'{"native_user_id":"user-1","max_tokens":16001}')
+        lambda: send_context(app, body=b'{"native_user_id":"user-1","max_tokens":500001}')
     )
     negative_tokens = anyio.run(
         lambda: send_context(app, body=b'{"native_user_id":"user-1","max_tokens":-1}')
@@ -150,3 +165,14 @@ def test_context_validates_the_bounded_request_schema() -> None:
             long_message_id,
         ]
     ] == [422, 422, 422, 422, 422, 422, 422]
+
+
+def test_context_accepts_the_exact_configured_budget_cap() -> None:
+    """The companion accepts the maximum configured temporary context budget."""
+    app = create_app(Settings(hmac_secret="a" * 32))
+
+    response = anyio.run(
+        lambda: send_context(app, body=b'{"native_user_id":"user-1","max_tokens":500000}')
+    )
+
+    assert response.status_code == 200

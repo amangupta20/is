@@ -30,16 +30,46 @@ def test_filter_valves_are_json_persistable_and_mark_the_secret_as_password() ->
     assert schema["properties"]["hmac_secret"]["input"] == {"type": "password"}
 
 
-def test_filter_valves_default_to_and_accept_the_open_webui_maximum() -> None:
-    """The Valve budget matches the largest value accepted by Open WebUI's UI."""
-    assert Filter.Valves().max_context_tokens == 9_999
-    assert Filter.Valves(max_context_tokens=9_999).max_context_tokens == 9_999
+def test_filter_valves_expose_a_string_budget_above_the_numeric_widget_cap() -> None:
+    """The persisted budget is text so Open WebUI does not cap it at 9,999."""
+    schema = Filter.Valves.model_json_schema()
+
+    assert Filter.Valves().max_context_tokens == "300000"
+    assert schema["properties"]["max_context_tokens"]["type"] == "string"
+    assert Filter.Valves(max_context_tokens="500000").max_context_tokens == "500000"
 
 
-def test_filter_valves_reject_a_budget_above_the_open_webui_maximum() -> None:
-    """Open WebUI must not persist a budget its numeric UI rejects."""
+def test_filter_valves_normalize_legacy_integer_budgets() -> None:
+    """Previously persisted integer Valve values remain compatible."""
+    assert Filter.Valves(max_context_tokens=0).max_context_tokens == "0"
+    assert Filter.Valves(max_context_tokens=500_000).max_context_tokens == "500000"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        True,
+        False,
+        1.0,
+        -1,
+        500_001,
+        "",
+        " ",
+        " 1",
+        "1 ",
+        "+1",
+        "-1",
+        "01",
+        "000000",
+        "1.0",
+        "1,000",
+        "500001",
+    ],
+)
+def test_filter_valves_reject_noncanonical_or_out_of_range_budgets(value: object) -> None:
+    """Only canonical decimal strings and legacy plain integers are accepted."""
     with pytest.raises(ValidationError):
-        Filter.Valves(max_context_tokens=10_000)
+        Filter.Valves(max_context_tokens=value)
 
 
 def test_empty_context_leaves_the_native_body_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -101,7 +131,7 @@ def test_filter_signs_exact_compact_sorted_bytes_sent_to_companion(
         "native_chat_id": "chat-1",
         "native_message_id": "message-1",
         "request_text": "x" * 16_000,
-        "max_tokens": 9_999,
+        "max_tokens": 300_000,
     }
 
     async def companion(request: httpx.Request) -> httpx.Response:

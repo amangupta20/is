@@ -10,7 +10,7 @@ import json
 import time
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Filter:
@@ -25,8 +25,34 @@ class Filter:
             json_schema_extra={"input": {"type": "password"}},
         )
         timeout_seconds: float = Field(default=1.5, ge=0.1, le=5.0)
-        max_context_tokens: int = Field(default=9_999, ge=0, le=9_999)
+        max_context_tokens: str = Field(default="300000")
         priority: int = Field(default=-100)
+
+        @field_validator("max_context_tokens", mode="before")
+        @classmethod
+        def normalize_max_context_tokens(cls, value: object) -> str:
+            """Accept canonical text budgets and normalize legacy integer values."""
+            if type(value) is int:
+                normalized = str(value)
+            elif type(value) is str:
+                normalized = value
+            else:
+                raise ValueError("max_context_tokens must be a decimal string or plain integer")
+
+            if not (
+                normalized == "0"
+                or (
+                    normalized.isascii()
+                    and normalized.isdigit()
+                    and not normalized.startswith("0")
+                )
+            ):
+                raise ValueError("max_context_tokens must be a canonical decimal string")
+
+            if int(normalized) > 500_000:
+                raise ValueError("max_context_tokens must not exceed 500000")
+
+            return normalized
 
     def __init__(self) -> None:
         """Initialise the Filter with its administrator-configured valves."""
@@ -81,7 +107,7 @@ class Filter:
                     "native_chat_id": metadata.get("chat_id"),
                     "native_message_id": metadata.get("message_id"),
                     "request_text": request_text,
-                    "max_tokens": self.valves.max_context_tokens,
+                    "max_tokens": int(self.valves.max_context_tokens),
                 }
             )
             context_text = response.get("context_text") if isinstance(response, dict) else None
