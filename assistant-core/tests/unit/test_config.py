@@ -16,6 +16,7 @@ def test_settings_have_development_defaults() -> None:
     assert settings.request_clock_skew_seconds == 60
     assert settings.context_timeout_seconds == 1.5
     assert settings.log_level == "INFO"
+    assert settings.otlp_endpoint is None
 
 
 def test_settings_ignore_unrelated_environment_variables(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -46,3 +47,10 @@ def test_get_settings_builds_current_environment_settings(
     monkeypatch.setenv("ASSISTANT_LOG_LEVEL", "DEBUG")
 
     assert get_settings().log_level == "DEBUG"
+
+
+def test_settings_read_optional_otlp_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tracing is enabled only through the explicit assistant setting."""
+    monkeypatch.setenv("ASSISTANT_OTLP_ENDPOINT", "http://collector.internal:4318/v1/traces")
+
+    assert Settings().otlp_endpoint == "http://collector.internal:4318/v1/traces"

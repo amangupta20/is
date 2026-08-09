@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     request_clock_skew_seconds: int = 60
     context_timeout_seconds: float = 1.5
     log_level: str = "INFO"
+    otlp_endpoint: str | None = None
 
     @model_validator(mode="after")
     def validate_production_hmac_secret(self) -> Self:
