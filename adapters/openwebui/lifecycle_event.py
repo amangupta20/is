@@ -1,0 +1,123 @@
+"""
+title: Assistant Core Lifecycle
+version: 0.1.0
+requirements: httpx
+"""
+
+import hashlib
+import hmac
+import json
+import sys
+import time
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from typing import Any
+
+import httpx
+from pydantic import BaseModel, Field
+
+
+class Event:
+    """Fail-open forwarding for selected stable Open WebUI lifecycle events."""
+
+    _EVENT_NAMES = frozenset(
+        {
+            "chat.finished",
+            "chat.deleted",
+            "chat.compacted",
+            "message.created",
+            "file.uploaded",
+            "file.deleted",
+            "user.deleted",
+        }
+    )
+    _DIAGNOSTIC_LIMIT = 80
+
+    class Valves(BaseModel):
+        """Administrator-managed companion connection settings."""
+
+        assistant_core_url: str = Field(default="http://assistant-core:8080")
+        hmac_secret: str = Field(
+            default="development-hmac-secret-change-me",
+            json_schema_extra={"input": {"type": "password"}},
+        )
+        timeout_seconds: float = Field(default=2.0, ge=0.1, le=10.0)
+
+    def __init__(self) -> None:
+        """Initialise the Event Function with administrator-configured valves."""
+        self.valves = self.Valves()
+
+    @staticmethod
+    def _id_from(value: object) -> str | None:
+        if not isinstance(value, Mapping):
+            return None
+        identifier = value.get("id")
+        return None if identifier is None else str(identifier)
+
+    def _diagnose_failure(self, event_name: str, event_id: str) -> None:
+        diagnostic = {
+            "failure": "assistant_core_event_delivery_failed",
+            "event_name": event_name[: self._DIAGNOSTIC_LIMIT],
+            "event_id": event_id[: self._DIAGNOSTIC_LIMIT],
+        }
+        print(json.dumps(diagnostic, separators=(",", ":"), sort_keys=True), file=sys.stderr)
+
+    async def event(
+        self,
+        event: object,
+        __event_id__: str | None = None,
+        __event_name__: str | None = None,
+        **_kwargs: Any,
+    ) -> None:
+        """Forward an allowlisted stable event without blocking Open WebUI."""
+        if (
+            __event_name__ not in self._EVENT_NAMES
+            or not isinstance(__event_id__, str)
+            or not __event_id__
+            or not isinstance(event, Mapping)
+        ):
+            return
+
+        actor_id = self._id_from(event.get("actor"))
+        native_user_id = actor_id or self._id_from(event.get("user"))
+        if not native_user_id:
+            return
+
+        payload = {"source": "openwebui_event"}
+        file_id = self._id_from(event.get("file"))
+        if file_id is not None:
+            payload["file_id"] = file_id
+
+        envelope = {
+            "schema_version": 1,
+            "event_id": __event_id__,
+            "event_type": __event_name__,
+            "occurred_at": datetime.now(UTC).isoformat(),
+            "native_user_id": native_user_id,
+            "native_chat_id": self._id_from(event.get("chat")),
+            "native_message_id": self._id_from(event.get("message")),
+            "payload": payload,
+        }
+
+        try:
+            path = "/v1/events"
+            request_body = json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode()
+            timestamp = str(int(time.time()))
+            digest = hashlib.sha256(request_body).hexdigest()
+            canonical = f"POST\n{path}\n{timestamp}\n{digest}".encode()
+            signature = hmac.new(
+                self.valves.hmac_secret.encode(), canonical, hashlib.sha256
+            ).hexdigest()
+            async with httpx.AsyncClient(timeout=self.valves.timeout_seconds) as client:
+                response = await client.post(
+                    f"{self.valves.assistant_core_url.rstrip('/')}{path}",
+                    content=request_body,
+                    headers={
+                        "content-type": "application/json",
+                        "x-assistant-timestamp": timestamp,
+                        "x-assistant-signature": signature,
+                    },
+                )
+            response.raise_for_status()
+        except Exception:  # noqa: BLE001 - lifecycle delivery must fail open.
+            self._diagnose_failure(__event_name__, __event_id__)
