@@ -4,6 +4,7 @@ import anyio
 import pytest
 from sqlalchemy import Column, Integer, MetaData, Table
 from sqlalchemy.engine.default import DefaultDialect
+from sqlalchemy.exc import DBAPIError
 
 from assistant_core.db import migration_filter
 from assistant_core.db.base import NAMING_CONVENTION, Base
@@ -27,7 +28,17 @@ def test_database_factory_uses_asyncpg_pre_ping_and_non_expiring_sessions() -> N
     try:
         assert engine.url.drivername == "postgresql+asyncpg"
         assert engine.pool._pre_ping is True
+        assert engine.sync_engine.hide_parameters is True
         assert session_factory.kw["expire_on_commit"] is False
+        content_marker = "bounded-private-parameter-marker"
+        error = DBAPIError.instance(
+            "INSERT INTO assistant_core.completed_turn VALUES (...) ",
+            {"assistant_content": content_marker},
+            Exception("database rejected completed turn"),
+            Exception,
+            hide_parameters=engine.sync_engine.hide_parameters,
+        )
+        assert content_marker not in str(error)
     finally:
         anyio.run(engine.dispose)
 

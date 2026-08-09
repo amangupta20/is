@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import sqlalchemy as sa
 
 ASSISTANT_CORE = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = ASSISTANT_CORE.parent
@@ -289,6 +290,59 @@ def test_completed_turn_migration_has_stable_schema_qualified_operations(
     assert create_table[1][0] == "completed_turn"
     assert create_table[2]["schema"] == "assistant_core"
     table_objects = create_table[1][1:]
+    columns = {
+        item.name: item
+        for item in table_objects
+        if isinstance(item, sa.Column)
+    }
+    assert list(columns) == [
+        "id",
+        "event_id",
+        "user_id",
+        "native_chat_id",
+        "native_user_message_id",
+        "native_assistant_message_id",
+        "user_content",
+        "assistant_content",
+        "user_content_sha256",
+        "assistant_content_sha256",
+        "occurred_at",
+        "captured_at",
+        "tombstoned_at",
+    ]
+    assert isinstance(columns["id"].type, sa.Uuid) and not columns["id"].nullable
+    assert isinstance(columns["user_id"].type, sa.Uuid) and not columns["user_id"].nullable
+    for name in (
+        "event_id",
+        "native_chat_id",
+        "native_user_message_id",
+        "native_assistant_message_id",
+    ):
+        assert isinstance(columns[name].type, sa.String)
+        assert columns[name].type.length == 200
+        assert not columns[name].nullable
+    for name in ("user_content", "assistant_content"):
+        assert isinstance(columns[name].type, sa.Text)
+        assert not columns[name].nullable
+    for name in ("user_content_sha256", "assistant_content_sha256"):
+        assert isinstance(columns[name].type, sa.String)
+        assert columns[name].type.length == 64
+        assert not columns[name].nullable
+    for name in ("occurred_at", "captured_at", "tombstoned_at"):
+        assert isinstance(columns[name].type, sa.DateTime)
+        assert columns[name].type.timezone is True
+    assert not columns["occurred_at"].nullable
+    assert not columns["captured_at"].nullable
+    assert columns["captured_at"].server_default is not None
+    assert columns["tombstoned_at"].nullable
+    unique_constraints = [
+        item
+        for item in table_objects
+        if isinstance(item, sa.UniqueConstraint)
+    ]
+    assert len(unique_constraints) == 1
+    assert unique_constraints[0].name == "uq_completed_turn_event_id"
+    assert unique_constraints[0]._pending_colargs == ["event_id"]
     foreign_keys = [
         item for item in table_objects if item.__class__.__name__ == "ForeignKeyConstraint"
     ]

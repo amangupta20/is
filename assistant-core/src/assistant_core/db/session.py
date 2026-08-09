@@ -24,6 +24,7 @@ def create_database(
     engine = create_async_engine(
         make_async_database_url(database_url),
         pool_pre_ping=True,
+        hide_parameters=True,
     )
     session_factory = async_sessionmaker(
         engine,

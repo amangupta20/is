@@ -3,10 +3,12 @@
 import asyncio
 import uuid
 from datetime import UTC, datetime
+from hashlib import sha256
 
 import anyio
 import pytest
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import DBAPIError, PendingRollbackError
 
 from assistant_core.events.models import EventInbox
 from assistant_core.jobs.models import Job
@@ -22,6 +24,34 @@ def inbox_event(event_type: str = "chat.created") -> EventInbox:
         native_message_id="assistant-1",
         occurred_at=datetime(2026, 8, 10, tzinfo=UTC),
         payload={"source": "metadata-only"},
+    )
+
+
+def completed_inbox_event(content: str) -> EventInbox:
+    """Build one strictly valid completed-turn event containing exact content."""
+    user_content = "worker failure user content"
+    return EventInbox(
+        event_id="exact-completed-event",
+        event_type="turn.completed.v1",
+        user_id=uuid.uuid4(),
+        native_chat_id="exact-completed-chat",
+        native_message_id="exact-assistant-message",
+        occurred_at=datetime(2026, 8, 10, tzinfo=UTC),
+        payload={
+            "source": "openwebui_outlet_filter",
+            "user_message": {
+                "id": "exact-user-message",
+                "role": "user",
+                "content": user_content,
+                "sha256": sha256(user_content.encode()).hexdigest(),
+            },
+            "assistant_message": {
+                "id": "exact-assistant-message",
+                "role": "assistant",
+                "content": content,
+                "sha256": sha256(content.encode()).hexdigest(),
+            },
+        },
     )
 
 
@@ -159,8 +189,24 @@ def test_invalid_completed_turn_uses_fixed_safe_failure_code(
     from assistant_core.jobs import worker
     from assistant_core.turns.repository import InvalidTurnPayloadError
 
-    job = Job(identity_key="unit-invalid", kind="process_event", payload={"event_id": "e"})
+    job = Job(
+        id=uuid.uuid4(),
+        identity_key="unit-invalid",
+        kind="process_event",
+        payload={"event_id": "e"},
+    )
     failures: list[str] = []
+
+    class Session:
+        async def rollback(self) -> None:
+            pass
+
+        async def get(self, model: object, key: object) -> Job:
+            assert model is Job
+            assert key == job.id
+            return job
+
+    session = Session()
 
     async def claim(_session: object) -> Job:
         return job
@@ -179,8 +225,92 @@ def test_invalid_completed_turn_uses_fixed_safe_failure_code(
     monkeypatch.setattr(worker, "fail_job", fail)
     monkeypatch.setattr(worker, "complete_job", unexpected)
 
-    anyio.run(worker.process_one, object())  # type: ignore[arg-type]
+    anyio.run(worker.process_one, session)  # type: ignore[arg-type]
     assert failures == ["invalid_turn_payload"]
+
+
+@pytest.mark.parametrize(
+    ("attempts", "expected_attempts", "expected_status"),
+    [(0, 1, "queued"), (7, 8, "dead")],
+)
+def test_dml_failure_rolls_back_reloads_and_commits_safe_failure_state(
+    monkeypatch: pytest.MonkeyPatch,
+    attempts: int,
+    expected_attempts: int,
+    expected_status: str,
+) -> None:
+    """A poisoned materialization transaction cannot strand a running job."""
+    from assistant_core.jobs import worker
+
+    content_marker = "bounded-private-content-marker"
+    event = completed_inbox_event(content_marker)
+    job = Job(
+        id=uuid.uuid4(),
+        identity_key="unit-poisoned-dml",
+        kind="process_event",
+        status="running",
+        payload={"event_id": event.event_id},
+        attempts=attempts,
+        claimed_at=datetime(2026, 8, 10, tzinfo=UTC),
+    )
+
+    class PoisonedSession:
+        poisoned = False
+        rollback_count = 0
+        successful_commit_count = 0
+        reloaded_job = False
+
+        async def get(self, model: object, key: object) -> object:
+            if model is EventInbox:
+                assert key == event.event_id
+                return event
+            if model is Job:
+                assert key == job.id
+                self.reloaded_job = True
+                return job
+            pytest.fail("worker loaded an unexpected model")
+
+        async def execute(self, _statement: object) -> object:
+            self.poisoned = True
+            raise DBAPIError.instance(
+                "INSERT INTO assistant_core.completed_turn (...) VALUES (...) ",
+                {"assistant_content": content_marker},
+                Exception("database rejected completed turn"),
+                Exception,
+                hide_parameters=False,
+            )
+
+        async def rollback(self) -> None:
+            self.poisoned = False
+            self.rollback_count += 1
+
+        async def commit(self) -> None:
+            if self.poisoned:
+                raise PendingRollbackError("transaction is aborted")
+            self.successful_commit_count += 1
+
+    session = PoisonedSession()
+
+    async def claim(_session: object) -> Job:
+        return job
+
+    monkeypatch.setattr(worker, "claim_next_job", claim)
+
+    async def exercise() -> bool:
+        try:
+            return await worker.process_one(session)  # type: ignore[arg-type]
+        except Exception:  # noqa: BLE001 - RED captures whether failure escaped
+            return False
+
+    processed = anyio.run(exercise)
+
+    assert processed is True
+    assert session.rollback_count == 1
+    assert session.reloaded_job is True
+    assert session.successful_commit_count == 1
+    assert job.attempts == expected_attempts
+    assert job.status == expected_status
+    assert job.last_error_code == "handler_failed"
 
 
 def test_worker_builds_database_from_settings_and_always_disposes(
