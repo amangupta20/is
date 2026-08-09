@@ -3,8 +3,10 @@
 import asyncio
 import json
 import logging
+import re
+import sys
 from collections.abc import AsyncIterator
-from typing import Self
+from typing import Self, cast
 from uuid import UUID
 
 import anyio
@@ -13,9 +15,12 @@ import httpx
 import pytest
 import structlog
 from fastapi import FastAPI
+from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from prometheus_client import Counter
 from starlette.responses import StreamingResponse
+from starlette.types import Message, Receive, Scope, Send
+from uvicorn.logging import DefaultFormatter
 
 from assistant_core import main as main_module
 from assistant_core import observability
@@ -210,6 +215,124 @@ def test_uvicorn_error_records_are_generic_and_traceback_free(
     assert uvicorn_records[0].exc_text is None
     assert "private exception secret" not in caplog.text
     assert "private uvicorn message" not in caplog.text
+
+
+def test_uvicorn_error_filter_removes_formatter_alternates_and_extra_content() -> None:
+    """Uvicorn's colored formatter cannot recover any pre-redaction message field."""
+    try:
+        raise RuntimeError("private traceback value")
+    except RuntimeError:
+        exception_info = cast(tuple[type[BaseException], BaseException, object], sys.exc_info())
+
+    record = logging.LogRecord(
+        "uvicorn.error",
+        logging.ERROR,
+        "private/path.py",
+        17,
+        "private message %s",
+        ("private argument",),
+        exception_info,  # type: ignore[arg-type]
+    )
+    record.color_message = "private colored message %s"
+    record.message = "private precomputed message"
+    record.private_payload = "private extra content"
+
+    assert observability.UvicornErrorRedactionFilter().filter(record)
+
+    formatter = DefaultFormatter("%(levelprefix)s %(message)s", use_colors=True)
+    rendered = formatter.format(record)
+    plain_rendered = re.sub(r"\x1b\[[0-9;]*m", "", rendered)
+
+    assert plain_rendered == "ERROR:    unhandled server error"
+    assert record.getMessage() == "unhandled server error"
+    assert record.name == "uvicorn.error"
+    assert record.levelno == logging.ERROR
+    assert record.args == ()
+    assert record.exc_info is None
+    assert record.exc_text is None
+    assert record.stack_info is None
+    assert "color_message" not in record.__dict__
+    assert "private_payload" not in record.__dict__
+    assert not any(
+        private_value in rendered or private_value in str(record.__dict__)
+        for private_value in (
+            "private traceback value",
+            "private message",
+            "private argument",
+            "private colored message",
+            "private precomputed message",
+            "private extra content",
+            "private/path.py",
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "expected"),
+    [
+        ("GET", "GET"),
+        ("BREW", "_OTHER"),
+        ("X" * 4096, "_OTHER"),
+        ("GET\nprivate-method-payload", "_OTHER"),
+        (None, "_OTHER"),
+    ],
+)
+def test_completion_log_normalizes_custom_http_methods(
+    caplog: pytest.LogCaptureFixture,
+    method: object,
+    expected: str,
+) -> None:
+    """Only fixed standard method names may enter request completion logs."""
+    observability.configure_logging("INFO")
+
+    async def endpoint(scope: Scope, receive: Receive, send: Send) -> None:
+        del scope, receive
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    middleware = observability.CorrelationIdMiddleware(endpoint)
+
+    async def invoke() -> None:
+        messages: list[Message] = []
+
+        async def receive() -> Message:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message: Message) -> None:
+            messages.append(message)
+
+        scope = cast(
+            Scope,
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": method,
+                "scheme": "http",
+                "path": "/method",
+                "raw_path": b"/method",
+                "query_string": b"",
+                "headers": [],
+                "client": None,
+                "server": ("testserver", 80),
+                "root_path": "",
+            },
+        )
+        await middleware(scope, receive, send)
+        assert messages[-1]["type"] == "http.response.body"
+
+    caplog.set_level(logging.INFO, logger="assistant_core.http")
+    anyio.run(invoke)
+    records = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "assistant_core.http"
+    ]
+
+    assert len(records) == 1
+    assert records[0]["http_method"] == expected
+    if expected == "_OTHER":
+        assert str(method) not in json.dumps(records[0])
 
 
 def test_started_streaming_error_is_finished_without_leaking_or_reraising(
@@ -453,6 +576,184 @@ def test_httpx_instrumentation_has_sequential_lifespan_ownership(
     anyio.run(run_lifespans)
 
     assert shutdown_saw_unwrapped == [True, True]
+
+
+@pytest.mark.parametrize("shutdown_order", [(0, 1), (1, 0)])
+def test_same_provider_runtimes_share_one_lifetime_until_final_owner(
+    monkeypatch: pytest.MonkeyPatch,
+    shutdown_order: tuple[int, int],
+) -> None:
+    """One shared provider and wrapper survive until the final active lease ends."""
+    original_sync = httpx.HTTPTransport.handle_request
+    original_async = httpx.AsyncHTTPTransport.handle_async_request
+    manager = observability.HTTPXInstrumentationManager()
+    monkeypatch.setattr(observability, "HTTPX_INSTRUMENTATION_MANAGER", manager)
+    provider = TracerProvider()
+    provider_shutdown_wrapper_state: list[tuple[bool, bool]] = []
+    monkeypatch.setattr(
+        provider,
+        "shutdown",
+        lambda: provider_shutdown_wrapper_state.append(
+            (
+                httpx.HTTPTransport.handle_request is original_sync,
+                httpx.AsyncHTTPTransport.handle_async_request is original_async,
+            )
+        ),
+    )
+    apps = [FastAPI(), FastAPI()]
+    uninstrumented_apps: list[FastAPI] = []
+    monkeypatch.setattr(
+        observability.FastAPIInstrumentor,
+        "uninstrument_app",
+        lambda app: uninstrumented_apps.append(app),
+    )
+    runtimes = [observability.TracingRuntime(app, provider) for app in apps]
+
+    for runtime in runtimes:
+        runtime.start()
+    assert httpx.HTTPTransport.handle_request is not original_sync
+    assert httpx.AsyncHTTPTransport.handle_async_request is not original_async
+
+    runtimes[shutdown_order[0]].shutdown()
+    after_first_shutdown = (
+        httpx.HTTPTransport.handle_request is original_sync,
+        httpx.AsyncHTTPTransport.handle_async_request is original_async,
+        list(provider_shutdown_wrapper_state),
+    )
+    runtimes[shutdown_order[1]].shutdown()
+
+    assert after_first_shutdown == (False, False, [])
+    assert httpx.HTTPTransport.handle_request is original_sync
+    assert httpx.AsyncHTTPTransport.handle_async_request is original_async
+    assert provider_shutdown_wrapper_state == [(True, True)]
+    assert uninstrumented_apps == [apps[index] for index in shutdown_order]
+
+
+def test_partial_httpx_instrument_failure_rolls_back_and_manager_is_reusable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A wrapper installed before instrument() fails cannot escape the manager."""
+    original_instrumentor = observability.HTTPXClientInstrumentor
+    original_sync = httpx.HTTPTransport.handle_request
+    original_async = httpx.AsyncHTTPTransport.handle_async_request
+
+    class PartiallyFailingInstrumentor:
+        def instrument(self, *, tracer_provider: object) -> None:
+            del tracer_provider
+
+            async def partial_wrapper(*args: object, **kwargs: object) -> object:
+                del args, kwargs
+                raise AssertionError("stale partial wrapper ran")
+
+            monkeypatch.setattr(
+                httpx.AsyncHTTPTransport,
+                "handle_async_request",
+                partial_wrapper,
+            )
+            raise ValueError("private instrumentation failure")
+
+        def uninstrument(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        observability,
+        "HTTPXClientInstrumentor",
+        PartiallyFailingInstrumentor,
+    )
+    manager = observability.HTTPXInstrumentationManager()
+    provider = TracerProvider()
+
+    with pytest.raises(RuntimeError, match="HTTPX tracing instrumentation failed"):
+        manager.acquire(provider)
+
+    assert httpx.HTTPTransport.handle_request is original_sync
+    assert httpx.AsyncHTTPTransport.handle_async_request is original_async
+    assert manager._provider is None
+    assert manager._instrumentor is None
+    assert manager._references == 0
+
+    monkeypatch.setattr(observability, "HTTPXClientInstrumentor", original_instrumentor)
+    manager.acquire(provider)
+    assert httpx.AsyncHTTPTransport.handle_async_request is not original_async
+    assert manager.release(provider) is True
+    assert httpx.HTTPTransport.handle_request is original_sync
+    assert httpx.AsyncHTTPTransport.handle_async_request is original_async
+
+
+def test_partial_httpx_uninstrument_failure_restores_before_provider_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed uninstrument cannot leave a wrapper bound to a shut-down provider."""
+    original_instrumentor = observability.HTTPXClientInstrumentor
+    original_sync = httpx.HTTPTransport.handle_request
+    original_async = httpx.AsyncHTTPTransport.handle_async_request
+
+    class PartiallyFailingUninstrumentor:
+        def __init__(self) -> None:
+            self.delegate = original_instrumentor()
+
+        def instrument(self, *, tracer_provider: object) -> None:
+            self.delegate.instrument(tracer_provider=tracer_provider)
+
+        def uninstrument(self) -> None:
+            self.delegate.uninstrument()
+
+            async def stale_wrapper(*args: object, **kwargs: object) -> object:
+                del args, kwargs
+                raise AssertionError("stale uninstrument wrapper ran")
+
+            monkeypatch.setattr(
+                httpx.AsyncHTTPTransport,
+                "handle_async_request",
+                stale_wrapper,
+            )
+            raise ValueError("private uninstrumentation failure")
+
+    monkeypatch.setattr(
+        observability,
+        "HTTPXClientInstrumentor",
+        PartiallyFailingUninstrumentor,
+    )
+    manager = observability.HTTPXInstrumentationManager()
+    monkeypatch.setattr(observability, "HTTPX_INSTRUMENTATION_MANAGER", manager)
+    provider = TracerProvider()
+    shutdown_wrapper_state: list[tuple[bool, bool]] = []
+    monkeypatch.setattr(
+        provider,
+        "shutdown",
+        lambda: shutdown_wrapper_state.append(
+            (
+                httpx.HTTPTransport.handle_request is original_sync,
+                httpx.AsyncHTTPTransport.handle_async_request is original_async,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        observability.FastAPIInstrumentor,
+        "uninstrument_app",
+        lambda app: None,
+    )
+    runtime = observability.TracingRuntime(FastAPI(), provider)
+    runtime.start()
+
+    with pytest.raises(RuntimeError, match="HTTPX tracing uninstrumentation failed"):
+        runtime.shutdown()
+
+    assert httpx.HTTPTransport.handle_request is original_sync
+    assert httpx.AsyncHTTPTransport.handle_async_request is original_async
+    assert shutdown_wrapper_state == [(True, True)]
+    assert manager._provider is None
+    assert manager._instrumentor is None
+    assert manager._references == 0
+
+    monkeypatch.setattr(observability, "HTTPXClientInstrumentor", original_instrumentor)
+    fresh_provider = TracerProvider()
+    fresh_runtime = observability.TracingRuntime(FastAPI(), fresh_provider)
+    fresh_runtime.start()
+    assert httpx.AsyncHTTPTransport.handle_async_request is not original_async
+    fresh_runtime.shutdown()
+    assert httpx.HTTPTransport.handle_request is original_sync
+    assert httpx.AsyncHTTPTransport.handle_async_request is original_async
 
 
 def test_exported_server_and_client_spans_contain_no_url_or_payload_values(

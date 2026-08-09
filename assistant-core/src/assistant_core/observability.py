@@ -7,6 +7,7 @@ from threading import Lock
 from time import perf_counter
 from uuid import uuid4
 
+import httpx
 import structlog
 from fastapi import FastAPI
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -17,6 +18,7 @@ from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 from opentelemetry.trace import SpanContext, SpanKind, Status, TraceState
+from opentelemetry.util.types import AttributeValue
 from prometheus_client import (
     CollectorRegistry,
     GCCollector,
@@ -33,6 +35,10 @@ CORRELATION_HEADER = "x-correlation-id"
 CORRELATION_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 MAX_DURATION_MS = 86_400_000.0
 INTERNAL_ERROR_BODY = b'{"detail":"internal server error"}'
+GENERIC_SERVER_ERROR = "unhandled server error"
+SAFE_HTTP_METHODS = frozenset(
+    {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "CONNECT"}
+)
 HTTP_LOGGER = structlog.get_logger("assistant_core.http")
 
 
@@ -41,12 +47,38 @@ class UvicornErrorRedactionFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.levelno >= logging.ERROR or record.exc_info is not None:
-            record.msg = "unhandled server error"
-            record.args = ()
-            record.exc_info = None
-            record.exc_text = None
-            record.stack_info = None
+            safe_record = logging.LogRecord(
+                name="uvicorn.error",
+                level=record.levelno,
+                pathname="",
+                lineno=0,
+                msg=GENERIC_SERVER_ERROR,
+                args=(),
+                exc_info=None,
+                func=None,
+                sinfo=None,
+            )
+            record.__dict__.clear()
+            record.__dict__.update(safe_record.__dict__)
         return True
+
+
+def _snapshot_httpx_methods() -> tuple[object, object]:
+    return (
+        httpx.HTTPTransport.handle_request,
+        httpx.AsyncHTTPTransport.handle_async_request,
+    )
+
+
+def _restore_httpx_methods(methods: tuple[object, object]) -> None:
+    """Restore exact class callables after a partial instrumentation mutation."""
+    # OpenTelemetry patches these two public transport methods via wrapt. Its public
+    # uninstrument API is attempted first; exact restoration is the last-resort
+    # rollback needed when that API raises after only partially undoing its wrappers.
+    try:
+        type.__setattr__(httpx.HTTPTransport, "handle_request", methods[0])
+    finally:
+        type.__setattr__(httpx.AsyncHTTPTransport, "handle_async_request", methods[1])
 
 
 class HTTPXInstrumentationManager:
@@ -57,6 +89,13 @@ class HTTPXInstrumentationManager:
         self._provider: TracerProvider | None = None
         self._instrumentor: HTTPXClientInstrumentor | None = None
         self._references = 0
+        self._original_methods: tuple[object, object] | None = None
+
+    def _clear(self) -> None:
+        self._instrumentor = None
+        self._provider = None
+        self._references = 0
+        self._original_methods = None
 
     def acquire(self, provider: TracerProvider) -> None:
         """Instrument HTTPX or share an existing binding to the same provider."""
@@ -67,23 +106,57 @@ class HTTPXInstrumentationManager:
                 self._references += 1
                 return
 
+            original_methods = _snapshot_httpx_methods()
             instrumentor = HTTPXClientInstrumentor()
-            instrumentor.instrument(tracer_provider=provider)
+            try:
+                instrumentor.instrument(tracer_provider=provider)
+            except Exception as instrumentation_error:  # noqa: BLE001
+                del instrumentation_error
+                try:
+                    instrumentor.uninstrument()
+                except Exception:  # noqa: BLE001, S110 - exact rollback follows
+                    pass
+                finally:
+                    try:
+                        _restore_httpx_methods(original_methods)
+                    finally:
+                        self._clear()
+                raise RuntimeError("HTTPX tracing instrumentation failed") from None
             self._instrumentor = instrumentor
             self._provider = provider
             self._references = 1
+            self._original_methods = original_methods
 
-    def release(self, provider: TracerProvider) -> None:
-        """Remove the global wrapper when its final owner exits."""
+    def release(self, provider: TracerProvider) -> bool:
+        """Release one lease and report whether the provider lost its final owner."""
         with self._lock:
             if self._provider is not provider or self._instrumentor is None:
                 raise RuntimeError("HTTPX tracing provider is not active")
 
             self._references -= 1
-            if self._references == 0:
+            if self._references > 0:
+                return False
+
+            original_methods = self._original_methods
+            if original_methods is None:
+                self._clear()
+                raise RuntimeError("HTTPX tracing manager has no rollback snapshot")
+
+            uninstrumentation_failed = False
+            try:
                 self._instrumentor.uninstrument()
-                self._instrumentor = None
-                self._provider = None
+            except Exception as uninstrumentation_error:  # noqa: BLE001
+                del uninstrumentation_error
+                uninstrumentation_failed = True
+            finally:
+                try:
+                    _restore_httpx_methods(original_methods)
+                finally:
+                    self._clear()
+
+            if uninstrumentation_failed:
+                raise RuntimeError("HTTPX tracing uninstrumentation failed") from None
+            return True
 
 
 HTTPX_INSTRUMENTATION_MANAGER = HTTPXInstrumentationManager()
@@ -117,6 +190,12 @@ def _safe_span_name(kind: SpanKind) -> str:
     return "assistant-core.internal"
 
 
+def _safe_http_method(candidate: object) -> str:
+    if isinstance(candidate, str) and candidate in SAFE_HTTP_METHODS:
+        return candidate
+    return "_OTHER"
+
+
 def _sanitized_context(context: SpanContext | None) -> SpanContext | None:
     if context is None:
         return None
@@ -131,11 +210,14 @@ def _sanitized_context(context: SpanContext | None) -> SpanContext | None:
 
 def _sanitized_span(span: ReadableSpan) -> ReadableSpan:
     """Clone a finished span using only bounded, content-free telemetry fields."""
-    attributes = {
-        key: value
-        for key, value in (span.attributes or {}).items()
-        if key in SAFE_SPAN_ATTRIBUTES
-    }
+    attributes: dict[str, AttributeValue] = {}
+    for key, value in (span.attributes or {}).items():
+        if key not in SAFE_SPAN_ATTRIBUTES:
+            continue
+        if key in {"http.method", "http.request.method"}:
+            attributes[key] = _safe_http_method(value)
+        else:
+            attributes[key] = value
     resource = Resource(
         {
             key: value
@@ -268,7 +350,7 @@ class CorrelationIdMiddleware:
             try:
                 HTTP_LOGGER.info(
                     "http_request_completed",
-                    http_method=scope["method"],
+                    http_method=_safe_http_method(scope.get("method")),
                     http_path=route_path,
                     status_code=status_code,
                     duration_ms=round(elapsed_ms, 3),
@@ -284,23 +366,41 @@ class TracingRuntime:
         self.app = app
         self.provider = provider
         self._httpx_active = False
+        self._shutdown = False
 
     def start(self) -> None:
         """Bind global client instrumentation to this active provider."""
+        if self._shutdown:
+            raise RuntimeError("tracing runtime is already shut down")
+        if self._httpx_active:
+            return
         HTTPX_INSTRUMENTATION_MANAGER.acquire(self.provider)
         self._httpx_active = True
 
     def shutdown(self) -> None:
         """Remove instrumentation before shutting down the provider."""
+        if self._shutdown:
+            return
+        final_provider_owner = not self._httpx_active
+        release_error: RuntimeError | None = None
         try:
             if self._httpx_active:
-                HTTPX_INSTRUMENTATION_MANAGER.release(self.provider)
-                self._httpx_active = False
+                try:
+                    final_provider_owner = HTTPX_INSTRUMENTATION_MANAGER.release(self.provider)
+                except RuntimeError as error:
+                    release_error = error
+                    final_provider_owner = True
+                finally:
+                    self._httpx_active = False
         finally:
             try:
                 FastAPIInstrumentor.uninstrument_app(self.app)
             finally:
-                self.provider.shutdown()
+                if final_provider_owner:
+                    self.provider.shutdown()
+                self._shutdown = True
+        if release_error is not None:
+            raise release_error
 
 
 def configure_tracing(app: FastAPI, settings: Settings) -> TracingRuntime | None:
