@@ -7,7 +7,11 @@ requirements: httpx
 import hashlib
 import hmac
 import json
+import sys
 import time
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field, field_validator
@@ -15,6 +19,11 @@ from pydantic import BaseModel, Field, field_validator
 
 class Filter:
     """Fail-open Open WebUI Filter for optional companion context."""
+
+    _EVENT_PATH = "/v1/events"
+    _EVENT_SOURCE = "openwebui_outlet_filter"
+    _MAX_EVENT_BYTES = 524_288
+    _UNSAVED_CHAT_PREFIXES = ("temporary:", "local:", "channel:")
 
     class Valves(BaseModel):
         """Administrator-managed companion connection settings."""
@@ -58,10 +67,23 @@ class Filter:
         """Initialise the Filter with its administrator-configured valves."""
         self.valves = self.Valves()
 
-    async def _post_context(self, payload: dict) -> dict:
-        """Send one exactly signed request to the companion service."""
-        path = "/v1/context"
-        request_body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    @staticmethod
+    def _event_bytes(payload: Mapping[str, object]) -> bytes:
+        """Return the canonical compact, sorted UTF-8 event representation."""
+        return json.dumps(
+            payload,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+
+    async def _post_signed(self, path: str, payload: dict[str, object]) -> dict:
+        """Send one exactly serialized and signed request to the companion service."""
+        if path == "/v1/context":
+            request_body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+        else:
+            request_body = self._event_bytes(payload)
         timestamp = str(int(time.time()))
         digest = hashlib.sha256(request_body).hexdigest()
         canonical = f"POST\n{path}\n{timestamp}\n{digest}".encode()
@@ -79,6 +101,75 @@ class Filter:
             )
         response.raise_for_status()
         return response.json()
+
+    async def _post_context(self, payload: dict) -> dict:
+        """Send one exactly signed request to the companion service."""
+        return await self._post_signed("/v1/context", payload)
+
+    @staticmethod
+    def _plain_id(value: object) -> str | None:
+        if type(value) is not str or not value.strip() or len(value) > 200:
+            return None
+        return value
+
+    @classmethod
+    def _captured_message(
+        cls,
+        message: Mapping[object, object],
+        expected_id: str,
+        expected_role: str,
+    ) -> dict[str, object] | None:
+        if cls._plain_id(message.get("id")) != expected_id:
+            return None
+        if message.get("role") != expected_role:
+            return None
+        content = message.get("content")
+        if type(content) is not str or (expected_role == "user" and not content.strip()):
+            return None
+
+        captured: dict[str, object] = {
+            "id": expected_id,
+            "role": expected_role,
+            "content": content,
+            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        }
+        if "timestamp" in message:
+            timestamp = message["timestamp"]
+            if type(timestamp) is not int or timestamp < 0:
+                return None
+            captured["timestamp"] = timestamp
+        return captured
+
+    @classmethod
+    def _turn_event_id(cls, user_id: str, chat_id: str, assistant_id: str) -> str:
+        identity = cls._event_bytes(
+            {
+                "native_chat_id": chat_id,
+                "native_message_id": assistant_id,
+                "native_user_id": user_id,
+                "source": cls._EVENT_SOURCE,
+            }
+        )
+        return f"turn:v1:{hashlib.sha256(identity).hexdigest()}"
+
+    @staticmethod
+    def _diagnose_turn_failure(
+        event_id: str,
+        event_type: str,
+        user_content_bytes: int,
+        assistant_content_bytes: int,
+    ) -> None:
+        diagnostic = {
+            "failure": "assistant_core_turn_delivery_failed",
+            "event_id": event_id,
+            "event_type": event_type,
+            "user_content_bytes": user_content_bytes,
+            "assistant_content_bytes": assistant_content_bytes,
+        }
+        print(
+            json.dumps(diagnostic, separators=(",", ":"), sort_keys=True),
+            file=sys.stderr,
+        )
 
     async def inlet(
         self,
@@ -124,4 +215,123 @@ class Filter:
                 "content": f"<assistant_context>\n{context_text}\n</assistant_context>",
             },
         )
+        return body
+
+    async def outlet(
+        self,
+        body: dict,
+        __user__: dict | None = None,
+        __metadata__: dict | None = None,
+        **_kwargs: Any,
+    ) -> dict:
+        """Capture one completed saved-chat turn without changing native output."""
+        diagnostic_event_id: str | None = None
+        diagnostic_event_type = "turn.completed.v1"
+        user_content_bytes = 0
+        assistant_content_bytes = 0
+        try:
+            if not isinstance(body, Mapping):
+                return body
+            if not isinstance(__user__, Mapping) or not isinstance(__metadata__, Mapping):
+                return body
+
+            user_id = self._plain_id(__user__.get("id"))
+            metadata_user_id = self._plain_id(__metadata__.get("user_id"))
+            chat_id = self._plain_id(body.get("chat_id"))
+            metadata_chat_id = self._plain_id(__metadata__.get("chat_id"))
+            assistant_id = self._plain_id(body.get("id"))
+            metadata_message_id = self._plain_id(__metadata__.get("message_id"))
+            user_message_id = self._plain_id(__metadata__.get("user_message_id"))
+            if (
+                user_id is None
+                or user_id != metadata_user_id
+                or chat_id is None
+                or chat_id != metadata_chat_id
+                or chat_id.startswith(self._UNSAVED_CHAT_PREFIXES)
+                or assistant_id is None
+                or assistant_id != metadata_message_id
+                or user_message_id is None
+                or user_message_id == assistant_id
+            ):
+                return body
+
+            messages = body.get("messages")
+            if not isinstance(messages, list):
+                return body
+            user_matches = [
+                message
+                for message in messages
+                if isinstance(message, Mapping) and message.get("id") == user_message_id
+            ]
+            assistant_matches = [
+                message
+                for message in messages
+                if isinstance(message, Mapping) and message.get("id") == assistant_id
+            ]
+            if len(user_matches) != 1 or len(assistant_matches) != 1:
+                return body
+
+            user_message = self._captured_message(user_matches[0], user_message_id, "user")
+            assistant_message = self._captured_message(
+                assistant_matches[0], assistant_id, "assistant"
+            )
+            if user_message is None or assistant_message is None:
+                return body
+
+            event_id = self._turn_event_id(user_id, chat_id, assistant_id)
+            diagnostic_event_id = event_id
+            user_content_bytes = len(user_message["content"].encode("utf-8"))
+            assistant_content_bytes = len(assistant_message["content"].encode("utf-8"))
+            occurred_at = datetime.now(UTC).isoformat(timespec="microseconds")
+            envelope: dict[str, object] = {
+                "schema_version": 1,
+                "event_id": event_id,
+                "event_type": "turn.completed.v1",
+                "occurred_at": occurred_at,
+                "native_user_id": user_id,
+                "native_chat_id": chat_id,
+                "native_message_id": assistant_id,
+                "payload": {
+                    "source": self._EVENT_SOURCE,
+                    "user_message": user_message,
+                    "assistant_message": assistant_message,
+                },
+            }
+            if len(self._event_bytes(envelope)) > self._MAX_EVENT_BYTES:
+                diagnostic_event_type = "turn.oversized.v1"
+                envelope = {
+                    "schema_version": 1,
+                    "event_id": event_id,
+                    "event_type": "turn.oversized.v1",
+                    "occurred_at": occurred_at,
+                    "native_user_id": user_id,
+                    "native_chat_id": chat_id,
+                    "native_message_id": assistant_id,
+                    "payload": {
+                        "source": self._EVENT_SOURCE,
+                        "user_message": {
+                            "id": user_message_id,
+                            "sha256": user_message["sha256"],
+                            "content_bytes": user_content_bytes,
+                        },
+                        "assistant_message": {
+                            "id": assistant_id,
+                            "sha256": assistant_message["sha256"],
+                            "content_bytes": assistant_content_bytes,
+                        },
+                    },
+                }
+            await self._post_signed(self._EVENT_PATH, envelope)
+        except Exception:  # noqa: BLE001 - turn capture must fail open.
+            if diagnostic_event_id is not None:
+                try:
+                    self._diagnose_turn_failure(
+                        diagnostic_event_id,
+                        diagnostic_event_type,
+                        user_content_bytes,
+                        assistant_content_bytes,
+                    )
+                except Exception:  # noqa: BLE001 - diagnostics are best-effort only.
+                    return body
+            return body
         return body
