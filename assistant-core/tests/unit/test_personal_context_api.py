@@ -8,9 +8,12 @@ from typing import Any, Self
 
 import anyio
 import httpx
+import pytest
 from fastapi import FastAPI
+from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 
+from assistant_core.api.routes.personal_context import PersonalContextSearchRequest
 from assistant_core.auth.hmac import sign_request
 from assistant_core.config import Settings
 from assistant_core.main import create_app
@@ -81,12 +84,14 @@ def test_search_previews_correct_user_memory_then_read_rejects_foreign_source() 
     foreign_user_id = uuid.UUID("00000000-0000-0000-0000-000000000002")
     source_id = uuid.UUID("00000000-0000-0000-0000-000000000011")
     foreign_source_id = uuid.UUID("00000000-0000-0000-0000-000000000012")
+    long_statement = "Use   direct   answers. " + ("Keep   details   available. " * 16)
+    normalized_long_statement = " ".join(long_statement.split())
     record = MemoryRecord(
         id=source_id,
         user_id=user_id,
         key="style.response",
         category="preference",
-        statement="Use direct answers.",
+        statement=long_statement,
     )
     foreign_record = MemoryRecord(
         id=foreign_source_id,
@@ -118,6 +123,15 @@ def test_search_previews_correct_user_memory_then_read_rejects_foreign_source() 
     session = _ContextSession([record, foreign_record], (record, evidence, turn))
     app = create_app(Settings(hmac_secret="a" * 32))
     app.state.session_factory = lambda: session
+
+    accepted_boundary = PersonalContextSearchRequest.model_validate(
+        {"native_user_id": "user-1", "query": f" {'x' * 1_000} "}
+    )
+    assert accepted_boundary.query == "x" * 1_000
+    with pytest.raises(ValidationError):
+        PersonalContextSearchRequest.model_validate(
+            {"native_user_id": "user-1", "query": f" {'x' * 1_001} "}
+        )
 
     search = anyio.run(
         lambda: _post(
@@ -154,14 +168,17 @@ def test_search_previews_correct_user_memory_then_read_rejects_foreign_source() 
             {
                 "memory_source_id": str(source_id),
                 "category": "preference",
-                "preview": "Use direct answers.",
+                "preview": normalized_long_statement[:239] + "…",
             }
         ],
     }
+    preview = search.json()["results"][0]["preview"]
+    assert len(preview) == 240
+    assert preview.endswith("…")
     assert read.status_code == 200
     assert read.json() == {
         "memory_source_id": str(source_id),
-        "statement": "Use direct answers.",
+        "statement": long_statement,
         "category": "preference",
         "evidence_quote": "I prefer direct answers.",
         "source_native_chat_id": "chat-1",

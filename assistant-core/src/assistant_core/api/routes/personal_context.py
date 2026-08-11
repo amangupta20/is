@@ -12,6 +12,12 @@ from assistant_core.memory.repository import read_explicit_memory, search_explic
 router = APIRouter(prefix="/v1/personal-context", tags=["personal-context"])
 
 
+def _compact_preview(statement: str) -> str:
+    """Normalize a statement and cap its preview at 240 characters."""
+    normalized = " ".join(statement.split())
+    return normalized if len(normalized) <= 240 else normalized[:239] + "…"
+
+
 class PersonalContextSearchRequest(BaseModel):
     """Bounded native identity and lexical search request."""
 
@@ -20,16 +26,20 @@ class PersonalContextSearchRequest(BaseModel):
     native_user_id: str = Field(min_length=1, max_length=200)
     native_chat_id: str | None = Field(default=None, min_length=1, max_length=200)
     native_message_id: str | None = Field(default=None, min_length=1, max_length=200)
-    query: str = Field(min_length=1, max_length=1_000)
+    query: str
     limit: int = Field(default=5, ge=1, le=10)
 
-    @field_validator("query")
+    @field_validator("query", mode="before")
     @classmethod
-    def strip_query(cls, value: str) -> str:
-        """Require a nonblank query after stripping surrounding whitespace."""
+    def strip_query(cls, value: object) -> object:
+        """Strip surrounding whitespace before enforcing query bounds."""
+        if not isinstance(value, str):
+            return value
         stripped = value.strip()
         if not stripped:
             raise ValueError("query must not be blank")
+        if len(stripped) > 1_000:
+            raise ValueError("query must not exceed 1000 characters")
         return stripped
 
 
@@ -98,7 +108,7 @@ async def search_personal_context(
             PersonalContextPreview(
                 memory_source_id=record.id,
                 category=record.category,
-                preview=" ".join(record.statement.split()),
+                preview=_compact_preview(record.statement),
             )
             for record in records
         ],
