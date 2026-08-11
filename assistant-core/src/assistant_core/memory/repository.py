@@ -157,7 +157,6 @@ async def apply_explicit_candidates(
                 .values(
                     state="superseded",
                     superseded_at=func.now(),
-                    superseded_by_id=replacement_id,
                 )
             )
 
@@ -178,6 +177,12 @@ async def apply_explicit_candidates(
         record = (await session.execute(statement)).scalar_one_or_none()
         if not isinstance(record, MemoryRecord):
             raise TypeError("memory record insertion did not return a record")
+        if active is not None:
+            await session.execute(
+                update(MemoryRecord)
+                .where(MemoryRecord.id == active.id)
+                .values(superseded_by_id=replacement_id)
+            )
         await _insert_evidence(session, record, turn, candidate.evidence_quote)
         applied.append(record)
     return applied

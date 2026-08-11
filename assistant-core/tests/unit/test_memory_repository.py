@@ -86,7 +86,18 @@ def test_apply_explicit_candidates_inserts_replays_and_supersedes_with_evidence(
         statement=corrected_candidate.statement,
     )
     session = RecordingSession(
-        [None, original, None, original, original.id, original, None, replacement, None]
+        [
+            None,
+            original,
+            None,
+            original,
+            original.id,
+            original,
+            None,
+            replacement,
+            None,
+            None,
+        ]
     )
 
     async def exercise() -> tuple[list[object], list[object], list[object]]:
@@ -102,11 +113,13 @@ def test_apply_explicit_candidates_inserts_replays_and_supersedes_with_evidence(
     assert inserted == [original]
     assert replayed == []
     assert corrected == [replacement]
+    assert len(session.statements) == 10
     first_record_insert = session.statements[1].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
     first_evidence_insert = session.statements[2].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
     supersession_update = session.statements[6].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
     replacement_insert = session.statements[7].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
-    replacement_evidence_insert = session.statements[8].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+    supersession_link = session.statements[8].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+    replacement_evidence_insert = session.statements[9].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
 
     assert "INSERT INTO assistant_core.memory_record" in str(first_record_insert)
     assert first_record_insert.params == {
@@ -129,7 +142,7 @@ def test_apply_explicit_candidates_inserts_replays_and_supersedes_with_evidence(
     }
     assert "UPDATE assistant_core.memory_record" in str(supersession_update)
     assert supersession_update.params["state"] == "superseded"
-    assert supersession_update.params["superseded_by_id"] == replacement_insert.params["id"]
+    assert "superseded_by_id" not in supersession_update.params
     assert "superseded_at=now()" in str(supersession_update)
     assert replacement_insert.params == {
         "id": replacement_insert.params["id"],
@@ -141,6 +154,8 @@ def test_apply_explicit_candidates_inserts_replays_and_supersedes_with_evidence(
         "confidence": 1,
         "state": "active",
     }
+    assert "UPDATE assistant_core.memory_record" in str(supersession_link)
+    assert supersession_link.params["superseded_by_id"] == replacement_insert.params["id"]
     assert replacement_evidence_insert.params == {
         "id": None,
         "memory_record_id": replacement.id,
