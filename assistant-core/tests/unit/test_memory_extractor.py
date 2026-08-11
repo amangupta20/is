@@ -35,6 +35,9 @@ def test_extractor_parses_explicit_preference_and_empty_candidates() -> None:
         assert body["model"] == "cheap-extractor"
         assert body["temperature"] == 0
         assert body["response_format"] == {"type": "json_object"}
+        rubric = " ".join(body["messages"][0]["content"].split())
+        assert "lowercase dotted identifier" in rubric
+        assert 'exactly one of "fact", "preference", "instruction", "project", or "decision"' in rubric
         return httpx.Response(
             200,
             json={"choices": [{"message": {"content": json.dumps(next(responses))}}]},

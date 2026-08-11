@@ -11,10 +11,14 @@ from assistant_core.memory.schemas import ExplicitMemoryCandidate
 
 MEMORY_EXTRACTION_FAILED_ERROR = "memory_extraction_failed"
 EXTRACTION_RUBRIC = """Extract only directly stated durable facts, preferences,
-instructions, projects, or decisions from the captured user text. Each candidate
-must include an exact source quote from that user text. Produce no candidate for
-transient requests, pasted logs, quoted third-party text, assistant claims,
-secrets, or uncertainty. Return a JSON object with a candidates array only."""
+instructions, projects, or decisions from the captured user text. Return a JSON
+object with a candidates array only. Every candidate must contain exactly the
+fields key, category, statement, and evidence_quote. The key must be a lowercase
+dotted identifier such as profile.response_style. The category must be exactly
+one of "fact", "preference", "instruction", "project", or "decision". The
+evidence_quote must be an exact source quote from the captured user text. Produce
+no candidate for transient requests, pasted logs, quoted third-party text,
+assistant claims, secrets, or uncertainty."""
 
 
 class MemoryExtractionError(ValueError):
