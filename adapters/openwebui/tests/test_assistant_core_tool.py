@@ -6,7 +6,7 @@ import hmac
 import importlib.util
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import pytest
 from pydantic import ValidationError
@@ -175,6 +175,92 @@ def test_network_failure_returns_exact_unavailable_without_leaking(
     )
 
     assert asyncio.run(module.Tools().assistant_status()) == UNAVAILABLE
+
+
+def test_personal_context_tools_show_profile_search_read_and_fail_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module()
+    source_id = "00000000-0000-0000-0000-000000000011"
+    responses = {
+        "/v1/context": {
+            "context_text": "<user_profile>\n- Use direct answers.\n</user_profile>",
+            "token_estimate": 13,
+            "sources": [
+                {"source_type": "memory", "source_id": source_id, "label": "profile"}
+            ],
+            "degraded": False,
+        },
+        "/v1/personal-context/search": {
+            "mode": "lexical",
+            "results": [
+                {
+                    "memory_source_id": source_id,
+                    "category": "preference",
+                    "preview": "Use direct answers.",
+                }
+            ],
+        },
+        "/v1/personal-context/read": {
+            "memory_source_id": source_id,
+            "statement": "Use direct answers.",
+            "category": "preference",
+            "evidence_quote": "I prefer direct answers.",
+            "source_native_chat_id": "chat-1",
+            "source_native_message_id": "message-1",
+            "neighboring_available": False,
+            "full_source_available": False,
+        },
+    }
+
+    class _RoutingClient:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, url: str, **_kwargs: Any) -> _Response:
+            return _Response(responses["/" + url.split("/", 3)[3]])
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda *, timeout: _RoutingClient())
+    tool = module.Tools()
+    tool.valves.hmac_secret = "tool-test-secret"
+    user = {"id": "user-1"}
+    metadata = {"chat_id": "chat-1", "message_id": "message-1"}
+
+    assert asyncio.run(tool.show_loaded_profile(__user__=user, __metadata__=metadata)) == (
+        "<user_profile>\n- Use direct answers.\n</user_profile>\n"
+        f"Profile source IDs: {source_id}."
+    )
+    assert asyncio.run(
+        tool.search_personal_context("direct", __user__=user, __metadata__=metadata)
+    ) == f"Personal memory search (lexical):\n- {source_id}: Use direct answers. (preference)"
+    assert asyncio.run(
+        tool.read_personal_context(source_id, __user__=user)
+    ) == (
+        f"Personal memory source {source_id}:\n"
+        "Statement: Use direct answers.\n"
+        "Category: preference\n"
+        'Evidence: "I prefer direct answers."\n'
+        "Source chat: chat-1\n"
+        "Source message: message-1\n"
+        "Neighboring expansion available: no\n"
+        "Full-source expansion available: no"
+    )
+
+    class _FailingClient:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, _url: str, **_kwargs: Any) -> _Response:
+            raise TimeoutError("private response must not escape")
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda *, timeout: _FailingClient())
+    assert asyncio.run(tool.read_personal_context(source_id, __user__=user)) == UNAVAILABLE
 
 
 def test_tool_valves_are_json_persistable_and_password_marked() -> None:

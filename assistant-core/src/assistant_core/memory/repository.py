@@ -1,14 +1,90 @@
-"""Idempotent application of source-linked explicit-memory candidates."""
+"""Application and inspection of source-linked explicit-memory candidates."""
 
+import re
 import uuid
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from assistant_core.identity.models import UserIdentity
 from assistant_core.memory.models import MemoryEvidence, MemoryRecord
 from assistant_core.memory.schemas import ExplicitMemoryCandidate
 from assistant_core.turns.models import CompletedTurn
+
+
+def _normalized_tokens(value: str) -> tuple[str, ...]:
+    """Normalize visible text into comparable lexical tokens."""
+    return tuple(re.findall(r"\w+", " ".join(value.split()).casefold()))
+
+
+async def search_explicit_memory(
+    session: AsyncSession,
+    *,
+    native_user_id: str,
+    query: str,
+    limit: int,
+) -> list[MemoryRecord]:
+    """Return active explicit records ranked by normalized exact/token overlap."""
+    normalized_query = " ".join(query.split()).casefold()
+    query_tokens = set(_normalized_tokens(normalized_query))
+    if not query_tokens:
+        return []
+
+    statement = (
+        select(MemoryRecord)
+        .join(UserIdentity, MemoryRecord.user_id == UserIdentity.id)
+        .where(
+            UserIdentity.native_user_id == native_user_id,
+            MemoryRecord.kind == "explicit",
+            MemoryRecord.state == "active",
+        )
+    )
+    records = (await session.execute(statement)).scalars().all()
+    ranked: list[tuple[int, int, str, MemoryRecord]] = []
+    for record in records:
+        normalized_statement = " ".join(record.statement.split()).casefold()
+        overlap = len(query_tokens.intersection(_normalized_tokens(normalized_statement)))
+        if overlap == 0:
+            continue
+        ranked.append(
+            (
+                int(normalized_statement == normalized_query),
+                overlap,
+                str(record.id),
+                record,
+            )
+        )
+    ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    return [record for *_score, record in ranked[:limit]]
+
+
+async def read_explicit_memory(
+    session: AsyncSession,
+    *,
+    native_user_id: str,
+    memory_source_id: uuid.UUID,
+) -> tuple[MemoryRecord, MemoryEvidence, CompletedTurn] | None:
+    """Read one active source only when its record belongs to the native user."""
+    statement = (
+        select(MemoryRecord, MemoryEvidence, CompletedTurn)
+        .join(MemoryEvidence, MemoryEvidence.memory_record_id == MemoryRecord.id)
+        .join(CompletedTurn, CompletedTurn.id == MemoryEvidence.completed_turn_id)
+        .join(UserIdentity, MemoryRecord.user_id == UserIdentity.id)
+        .where(
+            UserIdentity.native_user_id == native_user_id,
+            MemoryRecord.id == memory_source_id,
+            MemoryRecord.kind == "explicit",
+            MemoryRecord.state == "active",
+            CompletedTurn.user_id == MemoryRecord.user_id,
+        )
+        .order_by(MemoryEvidence.created_at.asc(), MemoryEvidence.id.asc())
+        .limit(1)
+    )
+    result = (await session.execute(statement)).one_or_none()
+    if result is None:
+        return None
+    return result[0], result[1], result[2]
 
 
 async def _active_record(
