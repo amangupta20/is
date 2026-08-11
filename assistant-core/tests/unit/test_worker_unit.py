@@ -362,7 +362,7 @@ def test_lost_claim_rolls_back_without_completion_or_failure_overwrite() -> None
         completion_session = Session()
         failure_session = Session()
         completed = await complete_job(  # type: ignore[arg-type]
-            completion_session, job, lease
+            completion_session, job.id, lease
         )
         failed = await fail_job(  # type: ignore[arg-type]
             failure_session, job, lease, "handler_failed"
@@ -470,13 +470,14 @@ def test_invalid_completed_turn_uses_fixed_safe_failure_code(
 def test_process_one_captures_claim_before_successful_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A handler cannot replace the lease used by successful finalization."""
+    """A handler cannot invalidate the ID or lease used by successful finalization."""
     from assistant_core.jobs import worker
 
     original_lease = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
     replacement_lease = datetime(2026, 8, 10, 12, 6, tzinfo=UTC)
+    original_job_id = uuid.uuid4()
     job = Job(
-        id=uuid.uuid4(),
+        id=original_job_id,
         identity_key="unit-success-lease",
         kind="process_event",
         status="running",
@@ -484,7 +485,7 @@ def test_process_one_captures_claim_before_successful_handler(
         attempts=0,
         claimed_at=original_lease,
     )
-    finalized_leases: list[datetime] = []
+    finalized_claims: list[tuple[uuid.UUID, datetime]] = []
 
     async def claim(_session: object) -> Job:
         return job
@@ -493,9 +494,9 @@ def test_process_one_captures_claim_before_successful_handler(
         job.claimed_at = replacement_lease
 
     async def complete(
-        _session: object, _job: Job, lease: datetime
+        _session: object, job_id: uuid.UUID, lease: datetime
     ) -> bool:
-        finalized_leases.append(lease)
+        finalized_claims.append((job_id, lease))
         return False
 
     monkeypatch.setattr(worker, "claim_next_job", claim)
@@ -505,7 +506,7 @@ def test_process_one_captures_claim_before_successful_handler(
     processed = anyio.run(worker.process_one, object())  # type: ignore[arg-type]
 
     assert processed is True
-    assert finalized_leases == [original_lease]
+    assert finalized_claims == [(original_job_id, original_lease)]
 
 
 def test_failure_recovery_keeps_original_claim_after_reload(

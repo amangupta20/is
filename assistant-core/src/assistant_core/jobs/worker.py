@@ -185,7 +185,7 @@ async def process_one(session: AsyncSession) -> bool:
     else:
         if expected_claimed_at is None:
             raise InvalidJobClaimError(INVALID_JOB_CLAIM_ERROR) from None
-        await complete_job(session, job, expected_claimed_at)
+        await complete_job(session, job_id, expected_claimed_at)
         return True
 
     if expected_claimed_at is None:

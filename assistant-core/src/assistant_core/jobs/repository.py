@@ -104,12 +104,12 @@ async def claim_next_job(session: AsyncSession) -> Job | None:
 
 
 async def complete_job(
-    session: AsyncSession, job: Job, expected_claimed_at: datetime
+    session: AsyncSession, job_id: uuid.UUID, expected_claimed_at: datetime
 ) -> bool:
     """Complete a job only while its exact claim remains active."""
     return await _commit_owned_update(
         session,
-        _complete_statement(job.id, expected_claimed_at, datetime.now(UTC)),
+        _complete_statement(job_id, expected_claimed_at, datetime.now(UTC)),
     )
 
 

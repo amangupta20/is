@@ -311,7 +311,7 @@ async def exercise_completion() -> None:
                     )
                 ).scalar_one()
                 assert job.claimed_at is not None
-                assert await complete_job(session, job, job.claimed_at)
+                assert await complete_job(session, job.id, job.claimed_at)
 
             completed = await read_job(session_factory, identity_key)
             assert completed.status == "completed"
@@ -477,7 +477,7 @@ async def exercise_older_worker_cannot_complete_replaced_claim() -> None:
                     )
 
                 assert await complete_job(
-                    older_session, older_job, original_lease
+                    older_session, older_job.id, original_lease
                 ) is False
 
             current = await read_job(session_factory, identity_key)
