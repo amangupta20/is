@@ -2191,29 +2191,38 @@ Completion check:
 
 Goal: replace reliance on useless stock Memory with the first genuinely useful continuity layer.
 
-- Implement confirmed/inferred ledger records, paths/topics, evidence, confidence, supersession, correction, decay state, and user visibility/search/delete APIs.
-- Run cheap-model extraction after every completed turn with deterministic validation and deduplication.
-- Implement relevant memory retrieval and compact context injection.
+- Implement confirmed/inferred ledger records, evidence spans, source chat/message IDs, confidence, supersession, correction, and user-visible search/review/delete operations.
+- Run a narrow cheap-model extraction after every completed turn. Supply the completed turn, a fixed extraction rubric, and only a few potentially overlapping active memories; require source evidence and allow `no memory` as the common result.
+- Accept explicit facts/preferences/corrections immediately when directly evidenced. Keep inferred personalization labeled and accumulate evidence across turns before promoting its confidence.
+- Generate one small personalization card when a new chat first uses assistant-core. Freeze its exact content for that chat and insert it at a fixed early prompt position so the system prompt, tool definitions, profile, and conversation remain a cacheable prefix.
+- Do not regenerate relevant context before every user message. Detailed or changing context is retrieved through stable agent-callable `search_personal_context` and `read_personal_context` operations whose results append to chat history.
+- Make the loaded personalization card and its source record IDs inspectable through the existing Assistant Core Tool/status surface.
 - Apply current-instruction-over-memory precedence.
-- Add optional native Memory mirroring only after the external ledger works; skip/disable it if it creates ambiguity.
+- Starting a new chat is the context reset. Do not build drop-all controls, context epochs, or prompt-history surgery.
+- Defer optional native Memory mirroring until the external ledger works; skip it entirely if it creates ambiguity or cache churn.
 
 Completion check:
 
-- State a preference in one chat, retrieve it naturally in another, correct it, and see only the corrected value used. An inferred style preference is labeled/evidenced, and deleting its sole source removes it from retrieval while explicit confirmed memory follows its retention rule.
+- State a preference in one chat, inspect the frozen card in a new chat, and see the preference affect the answer. Retrieve one detailed source through search then read, correct the preference, and see only the corrected value in another new chat. Confirm ordinary follow-up turns reuse the provider prefix cache.
 
-### Phase 3 — semantic conversation continuity and compaction recovery
+### Phase 3 — source-linked conversation continuity and global personal retrieval
 
-Goal: recover relevant past discussion without loading huge chats or depending on compaction summaries alone.
+Goal: let the agent aggressively discover memories, earlier discussions, and every uploaded user file without loading huge sources or requiring manual reattachment.
 
 - Index bounded message segments with exact-content reuse and independent chat/fork references.
 - Add incremental topic episodes, neighbor links, hybrid retrieval/reranking, progressive scope, and source message links.
-- Integrate proactive recall signals and an explicit recall tool.
+- Keep Open WebUI as the canonical full transcript. A memory or episode stores exact chat/message evidence references; `read_personal_context` expands from the evidence to neighboring messages, a paginated section, and only then the complete chat when appropriate.
+- Catalog every uploaded file for its owning user so it can be searched from every future chat. Record native file identity, filename/type/hash, extracted text boundaries, search chunks, and original availability without requiring the file to be attached again.
+- Leave Open WebUI's `Paste Large Text as File` UI setting enabled if preferred. Current main converts plain-text pastes above 1,000 characters into `Pasted_Text_<timestamp>.txt` with full context for that upload turn, but does not re-inject every old pasted file on every later turn. Catalog these generated files as transient/log sources: searchable after an explicit request or strong match, but excluded from the frozen profile, default retrieval, and memory extraction unless deliberately promoted.
+- Search memories, chat passages, and global files through the same stable search operation. Return a few reranked previews first; let the agent expand a chosen chat range, file section/pages, or complete reasonably sized source through the read operation.
+- Keep native query/grep/view tools for current-chat attachments. Assistant-core fills the missing global cross-chat discovery/read layer.
+- Make the static tool policy aggressive: search before claiming the user's preferences, history, files, projects, or earlier decisions, and when compaction may have removed needed detail. Do not search for ordinary general knowledge or information already visible in the recent chat.
 - Implement message/chat deletion handlers, tombstones, fork-safe reference counting, 24-hour physical GC, and reconciliation.
 - Add the compact native status/control card for context/recall observability if the deployed UI still needs it.
 
 Completion check:
 
-- Recover a known compacted/old-chat detail through a bounded cited passage. Fork a test chat, delete the parent, verify parent-only retrieval disappears immediately while the fork still recalls shared history; verify final orphan purge after the grace path in an accelerated test.
+- Recover a known compacted/old-chat detail through a bounded cited passage and neighboring messages. Find a previously uploaded but unattached file from a new chat, inspect a relevant section, and open more only when needed. Verify deletion removes exclusive chat evidence while a surviving fork remains usable.
 
 ### Phase 4 — semantic capability gateway
 
@@ -2230,7 +2239,7 @@ Completion check:
 
 ### Phase 5 — canonical content library and global deduplication
 
-Goal: make durable files/media independent of chat history and stop repeated processing/storage.
+Goal: add durable retention, versioning, and processing reuse beneath the global file discovery delivered in Phase 3.
 
 - Create the `assistant-content` Garage bucket/key and content/reference/derivative schemas.
 - Implement Add to Library pre-hash flow, durable inbox, classification metadata, native file references, and processing cache keys.
@@ -2279,9 +2288,15 @@ Completion check:
 - No Open WebUI source modification unless a later proven blocker has no supported extension path and the user separately approves a fork.
 - Verify native support again immediately before implementing each capability because the user tracks a fast-moving upstream branch.
 - Keep schema/data migrations reversible and canonical data backed up before lifecycle changes.
-- Use lightweight maintenance checks, not formal release machinery.
+- Treat this as an experimental personal assistant for one primary user, with at most a separately configured trusted family member later. Do not implement hostile multi-tenancy, enterprise release gates, or speculative scale machinery.
+- Keep automated tests deliberately small. For a slice, normally add one representative happy-path test and at most one ordinary failure/fail-open test; add a deletion/data-loss test only when the slice can delete or overwrite data. Do not add combinatorial malformed-input matrices or repeated semantic trials unless an observed bug justifies a regression.
+- Use manual Open WebUI smoke checks for subjective personalization, aggressive tool use, source expansion, and provider cache-hit behavior.
 - Do not implement a later phase merely because it appears in this design; stop when the current system is already sufficiently useful.
 
-Next after approval: consolidate the approved sections into the formal architecture specification, self-review it for contradictions/overbuilding, and then prepare an implementation plan one phase at a time.
+Current Open WebUI source references for pasted-text behavior:
 
-Still do not implement until the phased design is presented and approved.
+- https://github.com/open-webui/open-webui/blob/main/src/lib/components/chat/Settings/Interface.svelte#L1384-L1400
+- https://github.com/open-webui/open-webui/blob/main/src/lib/components/chat/MessageInput.svelte#L1871-L1896
+- https://github.com/open-webui/open-webui/blob/main/backend/open_webui/utils/middleware.py#L1827-L1912
+
+The cache-first Phase 2 design is approved. Keep this checkpoint updated as the source of architectural decisions, write one small implementation plan per working slice, and commit each independently usable slice before continuing.
