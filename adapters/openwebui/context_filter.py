@@ -177,13 +177,27 @@ class Filter:
         __user__: dict | None = None,
         __metadata__: dict | None = None,
     ) -> dict:
-        """Insert optional context immediately before the latest native user message."""
+        """Insert optional context at the cache-stable system-prefix boundary."""
         messages = body.get("messages")
         if not isinstance(messages, list) or not __user__ or "id" not in __user__:
             return body
 
+        if any(
+            isinstance(message, Mapping)
+            and message.get("role") == "system"
+            and isinstance(message.get("content"), str)
+            and message["content"].startswith("<assistant_context>\n")
+            for message in messages
+        ):
+            return body
+
         latest_user_index = next(
-            (index for index in range(len(messages) - 1, -1, -1) if messages[index].get("role") == "user"),
+            (
+                index
+                for index in range(len(messages) - 1, -1, -1)
+                if isinstance(messages[index], Mapping)
+                and messages[index].get("role") == "user"
+            ),
             None,
         )
         if latest_user_index is None:
@@ -208,8 +222,16 @@ class Filter:
         if not isinstance(context_text, str) or not context_text.strip():
             return body
 
+        prefix_end = 0
+        while (
+            prefix_end < len(messages)
+            and isinstance(messages[prefix_end], Mapping)
+            and messages[prefix_end].get("role") == "system"
+        ):
+            prefix_end += 1
+
         messages.insert(
-            latest_user_index,
+            prefix_end,
             {
                 "role": "system",
                 "content": f"<assistant_context>\n{context_text}\n</assistant_context>",

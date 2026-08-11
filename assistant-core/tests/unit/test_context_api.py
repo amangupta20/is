@@ -1,15 +1,65 @@
 """Tests for the signed, no-op context endpoint."""
 
 import time
+import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from typing import Self
 
 import anyio
 import httpx
 from fastapi import FastAPI
+from sqlalchemy.dialects import postgresql
 
 from assistant_core.api.routes.context import ContextRequest
 from assistant_core.auth.hmac import sign_request
 from assistant_core.config import Settings
 from assistant_core.main import create_app
+from assistant_core.memory.models import ChatProfileSnapshot, MemoryRecord
+
+
+class _ProfileResult:
+    """Return one prearranged scalar or scalar collection."""
+
+    def __init__(self, value: object = None, values: list[object] | None = None) -> None:
+        self.value = value
+        self.values = values or []
+
+    def scalar_one(self) -> object:
+        assert self.value is not None
+        return self.value
+
+    def scalar_one_or_none(self) -> object | None:
+        return self.value
+
+    def scalars(self) -> "_ProfileResult":
+        return self
+
+    def all(self) -> list[object]:
+        return self.values
+
+
+class _ProfileSession:
+    """Provide deterministic results for three profile requests."""
+
+    def __init__(self, results: list[_ProfileResult]) -> None:
+        self.results = results
+        self.statements: list[object] = []
+
+    async def execute(self, statement: object) -> _ProfileResult:
+        self.statements.append(statement)
+        return self.results.pop(0)
+
+    @asynccontextmanager
+    async def begin(self) -> AsyncIterator[None]:
+        yield
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
 
 
 async def post_context(app: FastAPI) -> httpx.Response:
@@ -71,6 +121,100 @@ def test_context_returns_the_empty_contract() -> None:
         "sources": [],
         "degraded": False,
     }
+
+
+def test_context_freezes_one_profile_per_chat_and_new_chat_sees_later_memory() -> None:
+    """A chat reuses exact bytes while a new chat receives current eligible memory."""
+    user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    first_memory = MemoryRecord(
+        id=uuid.UUID("00000000-0000-0000-0000-000000000011"),
+        user_id=user_id,
+        key="style.response",
+        category="preference",
+        statement="Use direct answers.",
+    )
+    later_memory = MemoryRecord(
+        id=uuid.UUID("00000000-0000-0000-0000-000000000012"),
+        user_id=user_id,
+        key="style.explanations",
+        category="instruction",
+        statement="Explain technical decisions in detail.",
+    )
+    chat_one = ChatProfileSnapshot(
+        id=uuid.UUID("00000000-0000-0000-0000-000000000021"),
+        user_id=user_id,
+        native_chat_id="chat-1",
+        rendered_text="<user_profile>\n- Use direct answers.\n</user_profile>",
+        source_memory_ids=[first_memory.id],
+        created_at=datetime(2026, 8, 11, tzinfo=UTC),
+    )
+    chat_two = ChatProfileSnapshot(
+        id=uuid.UUID("00000000-0000-0000-0000-000000000022"),
+        user_id=user_id,
+        native_chat_id="chat-2",
+        rendered_text=(
+            "<user_profile>\n- Explain technical decisions in detail.\n"
+            "- Use direct answers.\n</user_profile>"
+        ),
+        source_memory_ids=[later_memory.id, first_memory.id],
+        created_at=datetime(2026, 8, 11, tzinfo=UTC),
+    )
+    session = _ProfileSession(
+        [
+            _ProfileResult(user_id),
+            _ProfileResult(None),
+            _ProfileResult(values=[first_memory]),
+            _ProfileResult(chat_one),
+            _ProfileResult(user_id),
+            _ProfileResult(chat_one),
+            _ProfileResult(user_id),
+            _ProfileResult(None),
+            _ProfileResult(values=[later_memory, first_memory]),
+            _ProfileResult(chat_two),
+        ]
+    )
+    app = create_app(Settings(hmac_secret="a" * 32))
+    app.state.session_factory = lambda: session
+
+    first = anyio.run(
+        lambda: send_context(
+            app,
+            body=b'{"native_user_id":"user-1","native_chat_id":"chat-1"}',
+        )
+    )
+    repeated = anyio.run(
+        lambda: send_context(
+            app,
+            body=b'{"native_user_id":"user-1","native_chat_id":"chat-1"}',
+        )
+    )
+    second_chat = anyio.run(
+        lambda: send_context(
+            app,
+            body=b'{"native_user_id":"user-1","native_chat_id":"chat-2"}',
+        )
+    )
+
+    assert first.json() == repeated.json()
+    assert first.json()["context_text"] == chat_one.rendered_text
+    assert first.json()["sources"] == [
+        {"source_type": "memory", "source_id": str(first_memory.id), "label": "profile"}
+    ]
+    assert second_chat.json()["context_text"] == chat_two.rendered_text
+    assert [source["source_id"] for source in second_chat.json()["sources"]] == [
+        str(later_memory.id),
+        str(first_memory.id),
+    ]
+    first_snapshot_insert = session.statements[3].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+    second_snapshot_insert = session.statements[9].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+    assert first_snapshot_insert.params["rendered_text"] == chat_one.rendered_text
+    assert first_snapshot_insert.params["source_memory_ids"] == [first_memory.id]
+    assert second_snapshot_insert.params["rendered_text"] == chat_two.rendered_text
+    assert second_snapshot_insert.params["source_memory_ids"] == [
+        later_memory.id,
+        first_memory.id,
+    ]
+    assert session.results == []
 
 
 def test_context_request_defaults_to_the_configured_300000_budget() -> None:

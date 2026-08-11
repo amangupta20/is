@@ -172,13 +172,15 @@ def test_filter_signs_exact_compact_sorted_bytes_sent_to_companion(
     )
 
 
-def test_nonempty_context_is_inserted_before_the_latest_user_request(
+def test_nonempty_context_is_inserted_at_the_fixed_system_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Future context sits directly before the latest user request, once."""
+    """Frozen context follows leading system policy and precedes conversation history."""
     filter_ = Filter()
     body = {
         "messages": [
+            {"role": "system", "content": "Native policy"},
+            {"role": "system", "content": "Stable tool policy"},
             {"role": "assistant", "content": "Earlier answer"},
             {"role": "user", "content": "Latest request"},
             {"role": "assistant", "content": "Generated continuation"},
@@ -193,11 +195,13 @@ def test_nonempty_context_is_inserted_before_the_latest_user_request(
     result = anyio.run(lambda: filter_.inlet(body, __user__={"id": "u"}))
 
     assert result["messages"] == [
-        {"role": "assistant", "content": "Earlier answer"},
+        {"role": "system", "content": "Native policy"},
+        {"role": "system", "content": "Stable tool policy"},
         {
             "role": "system",
             "content": "<assistant_context>\nPreferred response style: direct.\n</assistant_context>",
         },
+        {"role": "assistant", "content": "Earlier answer"},
         {"role": "user", "content": "Latest request"},
         {"role": "assistant", "content": "Generated continuation"},
     ]

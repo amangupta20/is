@@ -1,9 +1,10 @@
 """The signed, bounded companion context endpoint."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from assistant_core.api.dependencies import require_adapter_signature
+from assistant_core.memory.profile import get_or_create_profile
 
 router = APIRouter(prefix="/v1", tags=["context"])
 
@@ -42,6 +43,36 @@ class ContextResponse(BaseModel):
     response_model=ContextResponse,
     dependencies=[Depends(require_adapter_signature)],
 )
-async def assemble_context(_: ContextRequest) -> ContextResponse:
-    """Return no context until the persistent memory layer is introduced."""
-    return ContextResponse(context_text="", token_estimate=0, sources=[], degraded=False)
+async def assemble_context(body: ContextRequest, request: Request) -> ContextResponse:
+    """Return one cache-stable profile snapshot for a saved native chat."""
+    chat_id = body.native_chat_id
+    if (
+        chat_id is None
+        or not chat_id.strip()
+        or chat_id.startswith(("temporary:", "local:", "channel:"))
+    ):
+        return ContextResponse(context_text="", token_estimate=0, sources=[], degraded=False)
+
+    try:
+        async with request.app.state.session_factory() as session, session.begin():
+            snapshot = await get_or_create_profile(
+                session,
+                native_user_id=body.native_user_id,
+                native_chat_id=chat_id,
+            )
+    except Exception:  # noqa: BLE001 - optional profile context must fail open.
+        return ContextResponse(context_text="", token_estimate=0, sources=[], degraded=True)
+
+    return ContextResponse(
+        context_text=snapshot.rendered_text,
+        token_estimate=(len(snapshot.rendered_text) + 3) // 4,
+        sources=[
+            ContextSource(
+                source_type="memory",
+                source_id=str(source_id),
+                label="profile",
+            )
+            for source_id in snapshot.source_memory_ids
+        ],
+        degraded=False,
+    )
