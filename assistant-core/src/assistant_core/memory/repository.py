@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -80,6 +80,7 @@ async def apply_explicit_candidates(
                 .where(MemoryRecord.id == active.id)
                 .values(
                     state="superseded",
+                    superseded_at=func.now(),
                     superseded_by_id=replacement_id,
                 )
             )

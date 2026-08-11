@@ -69,7 +69,7 @@ def test_apply_explicit_candidates_inserts_replays_and_supersedes_with_evidence(
         statement="The user lives in Bengaluru.",
         evidence_quote="I now live in Bengaluru.",
     )
-    from assistant_core.memory.models import MemoryRecord
+    from assistant_core.memory.models import MemoryEvidence, MemoryRecord
 
     original = MemoryRecord(
         id=uuid.uuid4(),
@@ -102,10 +102,61 @@ def test_apply_explicit_candidates_inserts_replays_and_supersedes_with_evidence(
     assert inserted == [original]
     assert replayed == []
     assert corrected == [replacement]
-    rendered_sql = [
-        str(statement.compile(dialect=postgresql.dialect()))  # type: ignore[attr-defined]
-        for statement in session.statements
-    ]
-    assert any("INSERT INTO assistant_core.memory_record" in sql for sql in rendered_sql)
-    assert any("INSERT INTO assistant_core.memory_evidence" in sql for sql in rendered_sql)
-    assert any("UPDATE assistant_core.memory_record" in sql for sql in rendered_sql)
+    first_record_insert = session.statements[1].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+    first_evidence_insert = session.statements[2].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+    supersession_update = session.statements[6].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+    replacement_insert = session.statements[7].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+    replacement_evidence_insert = session.statements[8].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+
+    assert "INSERT INTO assistant_core.memory_record" in str(first_record_insert)
+    assert first_record_insert.params == {
+        "id": first_record_insert.params["id"],
+        "user_id": first_turn.user_id,
+        "key": "profile.home_city",
+        "category": "fact",
+        "statement": "The user lives in Pune.",
+        "kind": "explicit",
+        "confidence": 1,
+        "state": "active",
+    }
+    assert "INSERT INTO assistant_core.memory_evidence" in str(first_evidence_insert)
+    assert first_evidence_insert.params == {
+        "id": None,
+        "memory_record_id": original.id,
+        "completed_turn_id": first_turn.id,
+        "native_user_message_id": "user-1",
+        "evidence_quote": "I live in Pune.",
+    }
+    assert "UPDATE assistant_core.memory_record" in str(supersession_update)
+    assert supersession_update.params["state"] == "superseded"
+    assert supersession_update.params["superseded_by_id"] == replacement_insert.params["id"]
+    assert "superseded_at=now()" in str(supersession_update)
+    assert replacement_insert.params == {
+        "id": replacement_insert.params["id"],
+        "user_id": second_turn.user_id,
+        "key": "profile.home_city",
+        "category": "fact",
+        "statement": "The user lives in Bengaluru.",
+        "kind": "explicit",
+        "confidence": 1,
+        "state": "active",
+    }
+    assert replacement_evidence_insert.params == {
+        "id": None,
+        "memory_record_id": replacement.id,
+        "completed_turn_id": second_turn.id,
+        "native_user_message_id": "user-2",
+        "evidence_quote": "I now live in Bengaluru.",
+    }
+    record_constraints = {
+        str(constraint.sqltext)
+        for constraint in MemoryRecord.__table__.constraints
+        if constraint.__class__.__name__ == "CheckConstraint"
+    }
+    evidence_constraints = {
+        str(constraint.sqltext)
+        for constraint in MemoryEvidence.__table__.constraints
+        if constraint.__class__.__name__ == "CheckConstraint"
+    }
+    assert "char_length(statement) <= 2000" in record_constraints
+    assert "char_length(evidence_quote) <= 1000" in evidence_constraints

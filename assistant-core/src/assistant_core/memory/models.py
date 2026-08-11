@@ -32,6 +32,10 @@ class MemoryRecord(Base):
         CheckConstraint("kind = 'explicit'", name="memory_record_kind"),
         CheckConstraint("confidence = 1", name="memory_record_confidence"),
         CheckConstraint(
+            "char_length(statement) <= 2000",
+            name="memory_record_statement_length",
+        ),
+        CheckConstraint(
             "state IN ('active', 'superseded', 'archived')",
             name="memory_record_state",
         ),
@@ -69,6 +73,10 @@ class MemoryEvidence(Base):
 
     __tablename__ = "memory_evidence"
     __table_args__ = (
+        CheckConstraint(
+            "char_length(evidence_quote) <= 1000",
+            name="memory_evidence_evidence_quote_length",
+        ),
         Index(
             "uq_memory_evidence_record_turn_quote",
             "memory_record_id",
