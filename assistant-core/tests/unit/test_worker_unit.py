@@ -167,6 +167,10 @@ def test_completed_turn_enqueue_commits_before_later_extractor_failure(
     failures: list[str] = []
 
     class Session:
+        def __init__(self) -> None:
+            self.pending_extraction_job_inserts: list[dict[str, object]] = []
+            self.extraction_job_inserts: list[dict[str, object]] = []
+
         async def get(self, model: object, key: object) -> object:
             if model is EventInbox:
                 assert key == event.event_id
@@ -178,7 +182,17 @@ def test_completed_turn_enqueue_commits_before_later_extractor_failure(
                 return extract_job
             pytest.fail("unexpected model load")
 
-        async def execute(self, _statement: object) -> object:
+        async def execute(self, statement: object) -> object:
+            compiled = statement.compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+            if "INSERT INTO assistant_core.job" in str(compiled):
+                self.pending_extraction_job_inserts.append(
+                    {
+                        "identity_key": compiled.params["identity_key"],
+                        "kind": compiled.params["kind"],
+                        "payload": compiled.params["payload"],
+                    }
+                )
+
             class Result:
                 def scalar_one_or_none(self) -> object:
                     return turn
@@ -189,9 +203,11 @@ def test_completed_turn_enqueue_commits_before_later_extractor_failure(
 
         async def commit(self) -> None:
             commits.append("commit")
+            self.extraction_job_inserts.extend(self.pending_extraction_job_inserts)
+            self.pending_extraction_job_inserts.clear()
 
         async def rollback(self) -> None:
-            pass
+            self.pending_extraction_job_inserts.clear()
 
     session = Session()
     claimed = iter([process_job, extract_job])
@@ -229,6 +245,13 @@ def test_completed_turn_enqueue_commits_before_later_extractor_failure(
     monkeypatch.setattr(worker, "fail_job", fail)
 
     assert anyio.run(worker.process_one, session) is True  # type: ignore[arg-type]
+    assert session.extraction_job_inserts == [  # type: ignore[attr-defined]
+        {
+            "identity_key": f"memory:{turn.id}",
+            "kind": "extract_memory",
+            "payload": {"turn_id": str(turn.id)},
+        }
+    ]
     assert anyio.run(worker.process_one, session) is True  # type: ignore[arg-type]
     assert commits == ["commit"]
     assert failures == ["memory_extraction_failed"]
