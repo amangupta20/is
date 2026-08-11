@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Self
 
-from pydantic import model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEVELOPMENT_HMAC_SECRET = "development-hmac-secret-change-me"
@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     hmac_secret: str = DEVELOPMENT_HMAC_SECRET
     request_clock_skew_seconds: int = 60
     context_timeout_seconds: float = 1.5
+    task_model_base_url: str | None = Field(default=None, min_length=1, max_length=2_048)
+    task_model_api_key: SecretStr | None = None
+    task_model_model: str | None = Field(default=None, min_length=1, max_length=200)
+    task_model_timeout_seconds: float = Field(default=15, ge=1, le=120)
     log_level: str = "INFO"
     otlp_endpoint: str | None = None
 

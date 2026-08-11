@@ -82,8 +82,22 @@ def test_completed_event_loads_exact_inbox_row_and_materializes_once(
 ) -> None:
     """The process-event payload selects the exact inbox event for routing."""
     from assistant_core.jobs import worker
+    from assistant_core.turns.models import CompletedTurn
 
     event = inbox_event("turn.completed.v1")
+    turn = CompletedTurn(
+        id=uuid.uuid4(),
+        event_id=event.event_id,
+        user_id=event.user_id,
+        native_chat_id=event.native_chat_id,
+        native_user_message_id="user-1",
+        native_assistant_message_id="assistant-1",
+        user_content="content",
+        assistant_content="response",
+        user_content_sha256="a" * 64,
+        assistant_content_sha256="b" * 64,
+        occurred_at=event.occurred_at,
+    )
     calls: list[EventInbox] = []
 
     class Session:
@@ -92,14 +106,132 @@ def test_completed_event_loads_exact_inbox_row_and_materializes_once(
             assert key == "exact-event-id"
             return event
 
+        async def execute(self, _statement: object) -> object:
+            class Result:
+                rowcount = 1
+
+            return Result()
+
     async def materialize(session: object, selected: EventInbox) -> bool:
         assert isinstance(session, Session)
         calls.append(selected)
         return True
 
     monkeypatch.setattr(worker, "materialize_completed_turn", materialize)
+    async def get_turn(*_args: object) -> CompletedTurn:
+        return turn
+
+    monkeypatch.setattr(worker, "get_completed_turn_for_event", get_turn)
     anyio.run(worker.handle, Session(), "process_event", {"event_id": "exact-event-id"})  # type: ignore[arg-type]
     assert calls == [event]
+
+
+def test_completed_turn_enqueue_commits_before_later_extractor_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider failure cannot roll back the persisted turn or extraction job."""
+    from assistant_core.jobs import worker
+    from assistant_core.turns.models import CompletedTurn
+
+    event = completed_inbox_event("assistant content")
+    turn = CompletedTurn(
+        id=uuid.uuid4(),
+        event_id=event.event_id,
+        user_id=event.user_id,
+        native_chat_id=event.native_chat_id,
+        native_user_message_id="exact-user-message",
+        native_assistant_message_id="exact-assistant-message",
+        user_content="worker failure user content",
+        assistant_content="assistant content",
+        user_content_sha256="a" * 64,
+        assistant_content_sha256="b" * 64,
+        occurred_at=event.occurred_at,
+    )
+    process_job = Job(
+        id=uuid.uuid4(),
+        identity_key="event:exact-completed-event",
+        kind="process_event",
+        status="running",
+        payload={"event_id": event.event_id},
+        claimed_at=datetime(2026, 8, 10, tzinfo=UTC),
+    )
+    extract_job = Job(
+        id=uuid.uuid4(),
+        identity_key=f"memory:{turn.id}",
+        kind="extract_memory",
+        status="running",
+        payload={"turn_id": str(turn.id)},
+        claimed_at=datetime(2026, 8, 10, 0, 1, tzinfo=UTC),
+    )
+    commits: list[str] = []
+    failures: list[str] = []
+
+    class Session:
+        async def get(self, model: object, key: object) -> object:
+            if model is EventInbox:
+                assert key == event.event_id
+                return event
+            if model is CompletedTurn:
+                assert key == turn.id
+                return turn
+            if model is Job:
+                return extract_job
+            pytest.fail("unexpected model load")
+
+        async def execute(self, _statement: object) -> object:
+            class Result:
+                def scalar_one_or_none(self) -> object:
+                    return turn
+
+                rowcount = 1
+
+            return Result()
+
+        async def commit(self) -> None:
+            commits.append("commit")
+
+        async def rollback(self) -> None:
+            pass
+
+    session = Session()
+    claimed = iter([process_job, extract_job])
+
+    async def claim(_session: object) -> Job:
+        return next(claimed)
+
+    async def materialize(_session: object, selected: EventInbox) -> bool:
+        assert selected is event
+        return True
+
+    async def get_turn(_session: object, event_id: str) -> CompletedTurn:
+        assert event_id == event.event_id
+        return turn
+
+    class FailingExtractor:
+        def extract(self, _turn: object) -> list[object]:
+            from assistant_core.memory.extractor import (
+                MEMORY_EXTRACTION_FAILED_ERROR,
+                MemoryExtractionError,
+            )
+
+            raise MemoryExtractionError(MEMORY_EXTRACTION_FAILED_ERROR)
+
+    async def fail(
+        _session: object, _job: Job, _lease: datetime, code: str
+    ) -> bool:
+        failures.append(code)
+        return True
+
+    monkeypatch.setattr(worker, "claim_next_job", claim)
+    monkeypatch.setattr(worker, "materialize_completed_turn", materialize)
+    monkeypatch.setattr(worker, "get_completed_turn_for_event", get_turn)
+    monkeypatch.setattr(worker, "get_memory_extractor", lambda: FailingExtractor())
+    monkeypatch.setattr(worker, "fail_job", fail)
+
+    assert anyio.run(worker.process_one, session) is True  # type: ignore[arg-type]
+    assert anyio.run(worker.process_one, session) is True  # type: ignore[arg-type]
+    assert commits == ["commit"]
+    assert failures == ["memory_extraction_failed"]
 
 
 def test_unsupported_kind_raises_constant_payload_free_error() -> None:
@@ -531,7 +663,15 @@ def test_worker_builds_database_from_settings_and_always_disposes(
         created_urls.append(url)
         return engine, object()
 
-    monkeypatch.setattr(worker, "get_settings", lambda: Settings(database_url=database_url))
+    monkeypatch.setattr(
+        worker,
+        "get_settings",
+        lambda: Settings(
+            database_url=database_url,
+            task_model_base_url="https://task-model.example/v1",
+            task_model_model="cheap-extractor",
+        ),
+    )
     monkeypatch.setattr(worker, "create_database", create_database, raising=False)
 
     async def exercise() -> None:

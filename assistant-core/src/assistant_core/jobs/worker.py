@@ -4,24 +4,36 @@ import asyncio
 import signal
 import uuid
 from datetime import datetime
+from urllib.parse import urlparse
 
 from pydantic import JsonValue
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from assistant_core.config import get_settings
+from assistant_core.config import Settings, get_settings
 from assistant_core.db.session import create_database
 from assistant_core.events.models import EventInbox
 from assistant_core.jobs.models import Job
 from assistant_core.jobs.repository import claim_next_job, complete_job, fail_job
+from assistant_core.memory.extractor import (
+    MEMORY_EXTRACTION_FAILED_ERROR,
+    CompletedTurnData,
+    MemoryExtractionError,
+    TaskModelMemoryExtractor,
+)
+from assistant_core.memory.repository import apply_explicit_candidates
+from assistant_core.turns.models import CompletedTurn
 from assistant_core.turns.repository import (
     INVALID_TURN_PAYLOAD_ERROR,
     InvalidTurnPayloadError,
+    get_completed_turn_for_event,
     materialize_completed_turn,
 )
 
 UNSUPPORTED_KIND_ERROR = "unsupported_job_kind"
 CLAIMED_JOB_MISSING_ERROR = "claimed_job_missing"
 INVALID_JOB_CLAIM_ERROR = "invalid_job_claim"
+TASK_MODEL_CONFIGURATION_ERROR = "task_model_configuration_error"
 IDLE_POLL_SECONDS = 1.0
 
 
@@ -37,10 +49,48 @@ class InvalidJobClaimError(RuntimeError):
     """Raised safely when a claimed job has no usable lease value."""
 
 
+class TaskModelConfigurationError(ValueError):
+    """Raised with one content-free code for missing worker task-model config."""
+
+
+def _task_model_configuration(settings: Settings) -> tuple[str, str]:
+    """Return only a usable endpoint and model name for the extraction worker."""
+    base_url = settings.task_model_base_url
+    model = settings.task_model_model
+    parsed = urlparse(base_url) if base_url else None
+    if (
+        not base_url
+        or not model
+        or not base_url.strip()
+        or not model.strip()
+        or parsed is None
+        or parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+    ):
+        raise TaskModelConfigurationError(TASK_MODEL_CONFIGURATION_ERROR)
+    return base_url, model
+
+
+def get_memory_extractor(settings: Settings | None = None) -> TaskModelMemoryExtractor:
+    """Build the single cheap-model client after its worker settings are usable."""
+    resolved_settings = settings or get_settings()
+    base_url, model = _task_model_configuration(resolved_settings)
+    api_key = resolved_settings.task_model_api_key
+    return TaskModelMemoryExtractor(
+        base_url=base_url,
+        api_key=api_key.get_secret_value() if api_key is not None else None,
+        model=model,
+        timeout_seconds=resolved_settings.task_model_timeout_seconds,
+    )
+
+
 async def handle(
     session: AsyncSession, kind: str, payload: dict[str, JsonValue]
 ) -> None:
-    """Route one job, materializing only completed-turn inbox events."""
+    """Route one job without calling the provider for event materialization."""
+    if kind == "extract_memory":
+        await _handle_extract_memory(session, payload)
+        return
     if kind != "process_event":
         raise UnsupportedJobKindError(UNSUPPORTED_KIND_ERROR)
 
@@ -58,6 +108,47 @@ async def handle(
         raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
     if event.event_type == "turn.completed.v1":
         await materialize_completed_turn(session, event)
+        turn = await get_completed_turn_for_event(session, event.event_id)
+        await session.execute(
+            insert(Job)
+            .values(
+                id=uuid.uuid4(),
+                identity_key=f"memory:{turn.id}",
+                kind="extract_memory",
+                status="queued",
+                payload={"turn_id": str(turn.id)},
+                attempts=0,
+            )
+            .on_conflict_do_nothing(index_elements=[Job.identity_key])
+        )
+
+
+def _turn_id_from_payload(payload: dict[str, JsonValue]) -> uuid.UUID:
+    """Validate the one identifier allowed in an extraction job payload."""
+    turn_id = payload.get("turn_id")
+    if set(payload) != {"turn_id"} or not isinstance(turn_id, str):
+        raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
+    try:
+        return uuid.UUID(turn_id)
+    except ValueError:
+        raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR) from None
+
+
+async def _handle_extract_memory(
+    session: AsyncSession, payload: dict[str, JsonValue]
+) -> None:
+    """Extract after ending the DB read, then apply candidates in a fresh transaction."""
+    turn_id = _turn_id_from_payload(payload)
+    turn = await session.get(CompletedTurn, turn_id)
+    if turn is None:
+        raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
+    turn_data = CompletedTurnData(id=turn.id, user_content=turn.user_content)
+    await session.rollback()
+    candidates = await asyncio.to_thread(get_memory_extractor().extract, turn_data)
+    fresh_turn = await session.get(CompletedTurn, turn_id)
+    if fresh_turn is None:
+        raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
+    await apply_explicit_candidates(session, fresh_turn, candidates)
 
 
 async def _record_handler_failure(
@@ -87,6 +178,8 @@ async def process_one(session: AsyncSession) -> bool:
         await handle(session, job.kind, job.payload)
     except InvalidTurnPayloadError:
         error_code = INVALID_TURN_PAYLOAD_ERROR
+    except MemoryExtractionError:
+        error_code = MEMORY_EXTRACTION_FAILED_ERROR
     except Exception:  # noqa: BLE001 - all ordinary handler failures share one safe code
         error_code = "handler_failed"
     else:
@@ -106,6 +199,7 @@ async def process_one(session: AsyncSession) -> bool:
 async def run_worker(stop_event: asyncio.Event | None = None) -> None:
     """Run the single-job polling loop until a graceful stop is requested."""
     settings = get_settings()
+    _task_model_configuration(settings)
     engine, session_factory = create_database(settings.database_url)
     resolved_stop_event = stop_event or asyncio.Event()
     loop = asyncio.get_running_loop()

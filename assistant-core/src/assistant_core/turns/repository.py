@@ -1,6 +1,7 @@
 """Idempotent persistence for strictly validated completed turns."""
 
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,3 +57,14 @@ async def materialize_completed_turn(
     )
     inserted_id = (await session.execute(statement)).scalar_one_or_none()
     return inserted_id is not None
+
+
+async def get_completed_turn_for_event(
+    session: AsyncSession, event_id: str
+) -> CompletedTurn:
+    """Load the completed turn for one already-validated inbox event."""
+    statement = select(CompletedTurn).where(CompletedTurn.event_id == event_id)
+    turn = (await session.execute(statement)).scalar_one_or_none()
+    if not isinstance(turn, CompletedTurn):
+        raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
+    return turn
