@@ -123,11 +123,19 @@ def test_env_example_has_only_safe_documented_assistant_settings() -> None:
         "ASSISTANT_NETWORK",
         "ASSISTANT_OTLP_ENDPOINT",
         "ASSISTANT_REQUEST_CLOCK_SKEW_SECONDS",
+        "ASSISTANT_TASK_MODEL_BASE_URL",
+        "ASSISTANT_TASK_MODEL_API_KEY",
+        "ASSISTANT_TASK_MODEL_MODEL",
+        "ASSISTANT_TASK_MODEL_TIMEOUT_SECONDS",
     }
     assert assignments["ASSISTANT_ENVIRONMENT"] == "production"
     assert "REPLACE" in assignments["ASSISTANT_DATABASE_URL"]
     assert "REPLACE" in assignments["ASSISTANT_HMAC_SECRET"]
     assert "32" in assignments["ASSISTANT_HMAC_SECRET"]
+    assert "REPLACE" in assignments["ASSISTANT_TASK_MODEL_BASE_URL"]
+    assert "REPLACE" in assignments["ASSISTANT_TASK_MODEL_MODEL"]
+    assert not assignments["ASSISTANT_TASK_MODEL_API_KEY"]
+    assert int(assignments["ASSISTANT_TASK_MODEL_TIMEOUT_SECONDS"]) > 0
     assert assignments["ASSISTANT_IMAGE"] == "assistant-core:local"
     assert "ASSISTANT_ADAPTER_HMAC_SECRET" not in env_example
     assert "Supavisor" in env_example
