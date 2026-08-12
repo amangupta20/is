@@ -10,12 +10,11 @@ from sqlalchemy import select
 
 from assistant_core.api.dependencies import require_adapter_signature
 from assistant_core.conversation.repository import get_conversation_stats, get_recent_references
+from assistant_core.files.repository import get_file_stats
 from assistant_core.identity.models import UserIdentity
 
 router = APIRouter(prefix="/v1/inspection", tags=["inspection"])
 LOGGER = structlog.get_logger("assistant_core.inspection")
-
-
 class InspectionRecentRequest(BaseModel):
     """Owner-scoped request for the most recent references."""
 
@@ -70,6 +69,12 @@ class InspectionStatsResponse(BaseModel):
     total_references: int = Field(ge=0)
     active_references: int = Field(ge=0)
     tombstoned_references: int = Field(ge=0)
+    total_file_segments: int = Field(default=0, ge=0)
+    embedded_file_segments: int = Field(default=0, ge=0)
+    lexical_file_segments: int = Field(default=0, ge=0)
+    total_file_references: int = Field(default=0, ge=0)
+    active_file_references: int = Field(default=0, ge=0)
+    tombstoned_file_references: int = Field(default=0, ge=0)
     queued_jobs: int = Field(ge=0)
     dead_jobs: int = Field(ge=0)
     last_indexed_at: datetime | None
@@ -150,16 +155,32 @@ async def inspection_stats(
                 total_references=0,
                 active_references=0,
                 tombstoned_references=0,
+                total_file_segments=0,
+                embedded_file_segments=0,
+                lexical_file_segments=0,
+                total_file_references=0,
+                active_file_references=0,
+                tombstoned_file_references=0,
                 queued_jobs=queued,
                 dead_jobs=dead,
                 last_indexed_at=None,
             )
         stats = await get_conversation_stats(session, user_id)
+        file_stats = await get_file_stats(session, user_id)
         LOGGER.info(
             "inspection_stats_completed",
             user_found=True,
             total_segments=stats["total_segments"],
             embedded_segments=stats["embedded_segments"],
             total_references=stats["total_references"],
+            total_file_segments=file_stats["total_segments"],
         )
-        return InspectionStatsResponse(**stats)  # type: ignore[arg-type]
+        return InspectionStatsResponse(
+            **stats,  # type: ignore[arg-type]
+            total_file_segments=file_stats["total_segments"],  # type: ignore[arg-type]
+            embedded_file_segments=file_stats["embedded_segments"],  # type: ignore[arg-type]
+            lexical_file_segments=file_stats["lexical_segments"],  # type: ignore[arg-type]
+            total_file_references=file_stats["total_references"],  # type: ignore[arg-type]
+            active_file_references=file_stats["active_references"],  # type: ignore[arg-type]
+            tombstoned_file_references=file_stats["tombstoned_references"],  # type: ignore[arg-type]
+        )  # type: ignore[arg-type]

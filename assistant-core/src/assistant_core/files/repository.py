@@ -2,8 +2,9 @@
 
 import hashlib
 import uuid
+from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -100,12 +101,13 @@ async def materialize_file(
         )
         if (await session.execute(ref_insert)).scalar_one_or_none() is not None:
             new_references += 1
-
     return {
         "new_segments": new_segments,
         "reused_segments": reused_segments,
         "new_references": new_references,
     }
+
+
 
 
 async def get_file_stats(session: AsyncSession, user_id: uuid.UUID) -> dict[str, int]:
@@ -142,3 +144,88 @@ async def get_file_stats(session: AsyncSession, user_id: uuid.UUID) -> dict[str,
         "active_references": active_references,
         "tombstoned_references": total_references - active_references,
     }
+
+
+async def search_file_context(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    query: str,
+    query_embedding: list[float] | None,
+    limit: int,
+) -> list[dict[str, object]]:
+    """Hybrid file search returning bounded metadata + content for RRF.
+
+    Returns list of dicts with keys: source_id (FileReference id), content,
+    native_file_id, chunk_ordinal, score.
+    """
+    # Lexical candidates via FTS
+    tsquery = func.plainto_tsquery("simple", query)
+    lexical_stmt = (
+        select(FileReference.id, FileSegment.content, FileReference.native_file_id, FileReference.chunk_ordinal)
+        .join(FileSegment, FileSegment.id == FileReference.segment_id)
+        .where(
+            FileReference.user_id == user_id,
+            FileReference.tombstoned_at.is_(None),
+            FileSegment.user_id == user_id,
+            FileSegment.search_vector.op("@@")(tsquery),
+        )
+        .order_by(func.ts_rank_cd(FileSegment.search_vector, tsquery).desc())
+        .limit(40)
+    )
+    lexical_rows = (await session.execute(lexical_stmt)).all()
+
+    # Vector candidates if embedding available
+    vector_rows: Any = []
+    if query_embedding is not None:
+        try:
+            vector_stmt = (
+                select(
+                    FileReference.id,
+                    FileSegment.content,
+                    FileReference.native_file_id,
+                    FileReference.chunk_ordinal,
+                    FileSegment.embedding.cosine_distance(query_embedding).label("dist"),
+                )
+                .join(FileSegment, FileSegment.id == FileReference.segment_id)
+                .where(
+                    FileReference.user_id == user_id,
+                    FileReference.tombstoned_at.is_(None),
+                    FileSegment.user_id == user_id,
+                    FileSegment.embedding.is_not(None),
+                )
+                .order_by(text("dist"))
+                .limit(40)
+            )
+            vector_rows = (await session.execute(vector_stmt)).all()
+        except Exception:  # noqa: BLE001 - fail open to lexical
+            vector_rows = []
+
+    # RRF fusion (k=60) with deterministic tie-break on id
+    scores: dict[str, float] = {}
+    contents: dict[str, tuple[str, str, int]] = {}
+    for rank, row in enumerate(lexical_rows, start=1):
+        rid = str(row[0])
+        scores[rid] = scores.get(rid, 0) + 1.0 / (60 + rank)
+        contents[rid] = (row[1], row[2], row[3])
+    for rank, row in enumerate(vector_rows, start=1):
+        rid = str(row[0])
+        scores[rid] = scores.get(rid, 0) + 1.0 / (60 + rank)
+        # vector rows have content at index 1 as well
+        if rid not in contents:
+            contents[rid] = (row[1], row[2], row[3])
+
+    ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
+    hits: list[dict[str, object]] = []
+    for rid, score in ranked[:limit]:
+        content, file_id, ordinal = contents[rid]
+        hits.append(
+            {
+                "source_id": rid,
+                "content": content,
+                "native_file_id": file_id,
+                "chunk_ordinal": ordinal,
+                "score": score,
+            }
+        )
+    return hits

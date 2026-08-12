@@ -19,6 +19,8 @@ from assistant_core.conversation.repository import (
     read_conversation_context,
     search_conversation_context,
 )
+from assistant_core.files.repository import search_file_context
+from assistant_core.identity.models import UserIdentity
 from assistant_core.memory.repository import read_explicit_memory, search_explicit_memory
 
 router = APIRouter(prefix="/v1/personal-context", tags=["personal-context"])
@@ -63,7 +65,7 @@ class PersonalContextPreview(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_id: uuid.UUID
-    source_type: Literal["memory", "conversation"]
+    source_type: Literal["memory", "conversation", "file"]
     category: str
     role: Literal["user", "assistant"] | None
     preview: str
@@ -134,7 +136,7 @@ async def _embed_query(request: Request, query: str) -> list[float] | None:
 async def search_personal_context(
     body: PersonalContextSearchRequest, request: Request
 ) -> PersonalContextSearchResponse:
-    """Search active explicit memory and owner-scoped conversation evidence."""
+    """Search active explicit memory and owner-scoped conversation/file evidence."""
     started_at = perf_counter()
     query_embedding = await _embed_query(request, body.query)
     mode: Literal["lexical", "hybrid"] = (
@@ -154,6 +156,25 @@ async def search_personal_context(
             query_embedding=query_embedding,
             limit=body.limit,
         )
+        file_hits: list[dict[str, object]] = []
+        try:
+            from sqlalchemy import select
+
+            user_id = (
+                await session.execute(
+                    select(UserIdentity.id).where(UserIdentity.native_user_id == body.native_user_id)
+                )
+            ).scalar_one_or_none()
+            if user_id is not None:
+                file_hits = await search_file_context(
+                    session,
+                    user_id=user_id,
+                    query=body.query,
+                    query_embedding=query_embedding,
+                    limit=body.limit,
+                )
+        except Exception:  # noqa: BLE001 - file search must not break main search
+            file_hits = []
 
     ranked: list[tuple[float, int, str, PersonalContextPreview]] = []
     for rank, record in enumerate(memory_records, start=1):
@@ -178,6 +199,17 @@ async def search_personal_context(
             source_native_message_id=hit.native_message_id,
         )
         ranked.append((hit.score, 1, str(hit.source_id), preview))
+    for file_hit in file_hits:
+        preview = PersonalContextPreview(
+            source_id=file_hit["source_id"],  # type: ignore[arg-type]
+            source_type="file",
+            category="file_evidence",
+            role=None,
+            preview=_compact_preview(str(file_hit["content"])),
+            source_native_chat_id=str(file_hit["native_file_id"]),
+            source_native_message_id=str(file_hit["chunk_ordinal"]),
+        )
+        ranked.append((float(file_hit["score"]), 1, str(file_hit["source_id"]), preview))  # type: ignore[arg-type]
     ranked.sort(key=lambda item: (-item[0], item[1], item[2]))
     selected = ranked[: body.limit]
     LOGGER.info(
@@ -188,6 +220,7 @@ async def search_personal_context(
         mode=mode,
         memory_result_count=len(memory_records),
         conversation_result_count=len(conversation_hits),
+        file_result_count=len(file_hits),
         result_count=len(selected),
         top_score=round(selected[0][0], 6) if selected else None,
         duration_ms=round((perf_counter() - started_at) * 1000, 3),
