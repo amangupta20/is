@@ -475,3 +475,81 @@ async def materialize_turn_passages(
         new_references=new_references,
         missing_embedding_ids=tuple(missing_embedding_ids),
     )
+
+
+async def get_recent_references(
+    session: AsyncSession, user_id: uuid.UUID, limit: int
+) -> list[ConversationReference]:
+    """Return the most recent owner-scoped references without content."""
+    result = await session.execute(
+        select(ConversationReference)
+        .where(ConversationReference.user_id == user_id)
+        .order_by(ConversationReference.created_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def get_conversation_stats(
+    session: AsyncSession, user_id: uuid.UUID
+) -> dict[str, object]:
+    """Return metadata-only counts for the user's indexed graph."""
+    total_segments = (
+        await session.execute(
+            select(func.count())
+            .select_from(ConversationSegment)
+            .where(ConversationSegment.user_id == user_id)
+        )
+    ).scalar_one()
+    embedded_segments = (
+        await session.execute(
+            select(func.count())
+            .select_from(ConversationSegment)
+            .where(
+                ConversationSegment.user_id == user_id,
+                ConversationSegment.embedding.is_not(None),
+            )
+        )
+    ).scalar_one()
+    total_references = (
+        await session.execute(
+            select(func.count())
+            .select_from(ConversationReference)
+            .where(ConversationReference.user_id == user_id)
+        )
+    ).scalar_one()
+    active_references = (
+        await session.execute(
+            select(func.count())
+            .select_from(ConversationReference)
+            .where(
+                ConversationReference.user_id == user_id,
+                ConversationReference.tombstoned_at.is_(None),
+            )
+        )
+    ).scalar_one()
+    tombstoned_references = total_references - active_references
+    last_indexed_at = (
+        await session.execute(
+            select(func.max(ConversationReference.created_at)).where(
+                ConversationReference.user_id == user_id
+            )
+        )
+    ).scalar_one()
+    queued_jobs = (
+        await session.execute(select(func.count()).select_from(Job).where(Job.status == "queued"))
+    ).scalar_one()
+    dead_jobs = (
+        await session.execute(select(func.count()).select_from(Job).where(Job.status == "dead"))
+    ).scalar_one()
+    return {
+        "total_segments": total_segments,
+        "embedded_segments": embedded_segments,
+        "lexical_segments": total_segments - embedded_segments,
+        "total_references": total_references,
+        "active_references": active_references,
+        "tombstoned_references": tombstoned_references,
+        "queued_jobs": queued_jobs,
+        "dead_jobs": dead_jobs,
+        "last_indexed_at": last_indexed_at,
+    }

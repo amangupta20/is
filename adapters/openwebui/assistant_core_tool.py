@@ -331,3 +331,87 @@ class Tools:
             )
         except Exception:  # noqa: BLE001 - optional status must fail closed to unavailable.
             return self._UNAVAILABLE
+
+    async def show_recent_conversations(
+        self,
+        limit: int = 5,
+        __user__: dict | None = None,
+        __metadata__: dict | None = None,
+    ) -> str:
+        """Show the most recent conversation references without content."""
+        if not isinstance(limit, int) or limit < 1 or limit > 10:
+            limit = 5
+        native_user_id = self._optional_id(__user__, "id") or "unknown"
+        payload = {
+            "native_user_id": native_user_id,
+            "native_chat_id": self._optional_id(__metadata__, "chat_id"),
+            "native_message_id": self._optional_id(__metadata__, "message_id"),
+            "limit": limit,
+        }
+        try:
+            data = await self._signed_json_post("/v1/inspection/recent", payload)
+            if not isinstance(data, dict) or "results" not in data:
+                return self._UNAVAILABLE
+            results = data["results"]
+            if not isinstance(results, list):
+                return self._UNAVAILABLE
+            if not results:
+                return "No indexed conversation references for this user yet."
+            lines = [f"Recent {len(results)} indexed references:"]
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                ref_id = item.get("reference_id", "?")
+                chat_id = item.get("native_chat_id", "?")
+                msg_id = item.get("native_message_id", "?")
+                role = item.get("role", "?")
+                ordinal = item.get("chunk_ordinal", "?")
+                tomb = item.get("tombstoned_at")
+                status = "tombstoned" if tomb else "active"
+                lines.append(
+                    f"- {ref_id[:8]}… chat {str(chat_id)[:8]}… msg {str(msg_id)[:8]}… role {role} ord {ordinal} {status}"
+                )
+            return "\n".join(lines)
+        except Exception:  # noqa: BLE001
+            return self._UNAVAILABLE
+
+    async def show_index_stats(
+        self,
+        __user__: dict | None = None,
+        __metadata__: dict | None = None,
+    ) -> str:
+        """Show aggregate conversation index counters without content."""
+        native_user_id = self._optional_id(__user__, "id") or "unknown"
+        payload = {
+            "native_user_id": native_user_id,
+            "native_chat_id": self._optional_id(__metadata__, "chat_id"),
+            "native_message_id": self._optional_id(__metadata__, "message_id"),
+        }
+        try:
+            data = await self._signed_json_post("/v1/inspection/stats", payload)
+            if not isinstance(data, dict):
+                return self._UNAVAILABLE
+            required = {
+                "total_segments",
+                "embedded_segments",
+                "lexical_segments",
+                "total_references",
+                "active_references",
+                "tombstoned_references",
+                "queued_jobs",
+                "dead_jobs",
+            }
+            if not required.issubset(data.keys()):
+                return self._UNAVAILABLE
+            last = data.get("last_indexed_at")
+            last_str = str(last) if last else "never"
+            return (
+                f"Index stats: segments {data['total_segments']} "
+                f"(embedded {data['embedded_segments']}, lexical {data['lexical_segments']}), "
+                f"references {data['total_references']} "
+                f"(active {data['active_references']}, tombstoned {data['tombstoned_references']}), "
+                f"jobs queued {data['queued_jobs']} dead {data['dead_jobs']}, "
+                f"last indexed {last_str}."
+            )
+        except Exception:  # noqa: BLE001
+            return self._UNAVAILABLE
