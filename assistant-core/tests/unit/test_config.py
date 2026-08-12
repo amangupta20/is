@@ -15,6 +15,11 @@ def test_settings_have_development_defaults() -> None:
     assert settings.hmac_secret == "development-hmac-secret-change-me"
     assert settings.request_clock_skew_seconds == 60
     assert settings.context_timeout_seconds == 1.5
+    assert settings.embedding_base_url is None
+    assert settings.embedding_api_key is None
+    assert settings.embedding_model is None
+    assert settings.embedding_dimension == 1536
+    assert settings.embedding_timeout_seconds == 15
     assert settings.log_level == "INFO"
     assert settings.otlp_endpoint is None
 

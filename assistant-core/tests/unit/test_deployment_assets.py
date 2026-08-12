@@ -116,6 +116,11 @@ def test_env_example_has_only_safe_documented_assistant_settings() -> None:
     assert set(assignments) == {
         "ASSISTANT_CONTEXT_TIMEOUT_SECONDS",
         "ASSISTANT_DATABASE_URL",
+        "ASSISTANT_EMBEDDING_API_KEY",
+        "ASSISTANT_EMBEDDING_BASE_URL",
+        "ASSISTANT_EMBEDDING_DIMENSION",
+        "ASSISTANT_EMBEDDING_MODEL",
+        "ASSISTANT_EMBEDDING_TIMEOUT_SECONDS",
         "ASSISTANT_ENVIRONMENT",
         "ASSISTANT_HMAC_SECRET",
         "ASSISTANT_IMAGE",
@@ -136,6 +141,11 @@ def test_env_example_has_only_safe_documented_assistant_settings() -> None:
     assert "REPLACE" in assignments["ASSISTANT_TASK_MODEL_MODEL"]
     assert not assignments["ASSISTANT_TASK_MODEL_API_KEY"]
     assert int(assignments["ASSISTANT_TASK_MODEL_TIMEOUT_SECONDS"]) > 0
+    assert "REPLACE" in assignments["ASSISTANT_EMBEDDING_BASE_URL"]
+    assert "REPLACE" in assignments["ASSISTANT_EMBEDDING_MODEL"]
+    assert not assignments["ASSISTANT_EMBEDDING_API_KEY"]
+    assert assignments["ASSISTANT_EMBEDDING_DIMENSION"] == "1536"
+    assert int(assignments["ASSISTANT_EMBEDDING_TIMEOUT_SECONDS"]) > 0
     assert assignments["ASSISTANT_IMAGE"] == "assistant-core:local"
     assert "ASSISTANT_ADAPTER_HMAC_SECRET" not in env_example
     assert "Supavisor" in env_example
@@ -158,6 +168,15 @@ def test_compose_builds_one_private_local_image_without_host_ports() -> None:
         "ASSISTANT_OTLP_ENDPOINT",
     ):
         assert all(f"{variable}: ${{{variable}" in section for section in sections.values())
+    for service in ("assistant-core", "assistant-worker"):
+        for variable in (
+            "ASSISTANT_EMBEDDING_BASE_URL",
+            "ASSISTANT_EMBEDDING_API_KEY",
+            "ASSISTANT_EMBEDDING_MODEL",
+            "ASSISTANT_EMBEDDING_DIMENSION",
+            "ASSISTANT_EMBEDDING_TIMEOUT_SECONDS",
+        ):
+            assert f"{variable}: ${{{variable}" in sections[service]
     assert "ports:" not in compose
     assert 'expose:\n      - "8080"' in compose
     assert compose.count("condition: service_completed_successfully") == 2

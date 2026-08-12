@@ -129,7 +129,7 @@ def test_completed_event_loads_exact_inbox_row_and_materializes_once(
 def test_completed_turn_enqueue_commits_before_later_extractor_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A provider failure cannot roll back the persisted turn or extraction job."""
+    """Provider work cannot roll back the persisted turn or its independent jobs."""
     from assistant_core.jobs import worker
     from assistant_core.turns.models import CompletedTurn
 
@@ -168,8 +168,8 @@ def test_completed_turn_enqueue_commits_before_later_extractor_failure(
 
     class Session:
         def __init__(self) -> None:
-            self.pending_extraction_job_inserts: list[dict[str, object]] = []
-            self.extraction_job_inserts: list[dict[str, object]] = []
+            self.pending_job_inserts: list[dict[str, object]] = []
+            self.job_inserts: list[dict[str, object]] = []
 
         async def get(self, model: object, key: object) -> object:
             if model is EventInbox:
@@ -185,7 +185,7 @@ def test_completed_turn_enqueue_commits_before_later_extractor_failure(
         async def execute(self, statement: object) -> object:
             compiled = statement.compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
             if "INSERT INTO assistant_core.job" in str(compiled):
-                self.pending_extraction_job_inserts.append(
+                self.pending_job_inserts.append(
                     {
                         "identity_key": compiled.params["identity_key"],
                         "kind": compiled.params["kind"],
@@ -203,11 +203,11 @@ def test_completed_turn_enqueue_commits_before_later_extractor_failure(
 
         async def commit(self) -> None:
             commits.append("commit")
-            self.extraction_job_inserts.extend(self.pending_extraction_job_inserts)
-            self.pending_extraction_job_inserts.clear()
+            self.job_inserts.extend(self.pending_job_inserts)
+            self.pending_job_inserts.clear()
 
         async def rollback(self) -> None:
-            self.pending_extraction_job_inserts.clear()
+            self.pending_job_inserts.clear()
 
     session = Session()
     claimed = iter([process_job, extract_job])
@@ -245,16 +245,103 @@ def test_completed_turn_enqueue_commits_before_later_extractor_failure(
     monkeypatch.setattr(worker, "fail_job", fail)
 
     assert anyio.run(worker.process_one, session) is True  # type: ignore[arg-type]
-    assert session.extraction_job_inserts == [  # type: ignore[attr-defined]
+    assert session.job_inserts == [  # type: ignore[attr-defined]
         {
             "identity_key": f"memory:{turn.id}",
             "kind": "extract_memory",
             "payload": {"turn_id": str(turn.id)},
-        }
+        },
+        {
+            "identity_key": f"conversation:{turn.id}:conversation-v1",
+            "kind": "index_conversation",
+            "payload": {"turn_id": str(turn.id)},
+        },
     ]
     assert anyio.run(worker.process_one, session) is True  # type: ignore[arg-type]
     assert commits == ["commit"]
     assert failures == ["memory_extraction_failed"]
+
+
+def test_embedding_failure_preserves_committed_lexical_passages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Indexing commits lexical rows before any fallible provider request."""
+    from assistant_core.conversation.embedder import (
+        CONVERSATION_EMBEDDING_FAILED_ERROR,
+        ConversationEmbeddingError,
+    )
+    from assistant_core.conversation.schemas import PassageMaterialization
+    from assistant_core.jobs import worker
+    from assistant_core.turns.models import CompletedTurn
+
+    turn_id = uuid.uuid4()
+    segment_id = uuid.uuid4()
+    turn = CompletedTurn(
+        id=turn_id,
+        event_id="embedding-failure-event",
+        user_id=uuid.uuid4(),
+        native_chat_id="embedding-failure-chat",
+        native_user_message_id="embedding-failure-user",
+        native_assistant_message_id="embedding-failure-assistant",
+        user_content="private user passage",
+        assistant_content="private assistant passage",
+        user_content_sha256="c" * 64,
+        assistant_content_sha256="d" * 64,
+        occurred_at=datetime(2026, 8, 12, tzinfo=UTC),
+    )
+    commits: list[str] = []
+    updates: list[uuid.UUID] = []
+
+    class Session:
+        async def get(self, model: object, key: object) -> object:
+            assert model is CompletedTurn
+            assert key == turn_id
+            return turn
+
+        async def commit(self) -> None:
+            commits.append("commit")
+
+        async def rollback(self) -> None:
+            pass
+
+    async def materialize(_session: object, selected: CompletedTurn) -> PassageMaterialization:
+        assert selected is turn
+        return PassageMaterialization(
+            new_segments=2,
+            reused_segments=0,
+            new_references=2,
+            missing_embedding_ids=(segment_id,),
+        )
+
+    async def load_content(_session: object, selected_id: uuid.UUID) -> str:
+        assert selected_id == segment_id
+        return "private bounded passage"
+
+    async def store_embedding(*_args: object, **_kwargs: object) -> None:
+        updates.append(segment_id)
+
+    class FailingEmbedder:
+        model = "embedding-model"
+        dimension = 1536
+
+        def embed_one(self, _text: str) -> list[float]:
+            raise ConversationEmbeddingError(CONVERSATION_EMBEDDING_FAILED_ERROR)
+
+    monkeypatch.setattr(worker, "materialize_turn_passages", materialize, raising=False)
+    monkeypatch.setattr(worker, "get_segment_content", load_content, raising=False)
+    monkeypatch.setattr(worker, "store_segment_embedding", store_embedding, raising=False)
+    monkeypatch.setattr(worker, "get_conversation_embedder", lambda: FailingEmbedder(), raising=False)
+
+    with pytest.raises(ConversationEmbeddingError):
+        anyio.run(
+            worker.handle,
+            Session(),  # type: ignore[arg-type]
+            "index_conversation",
+            {"turn_id": str(turn_id)},
+        )
+
+    assert commits == ["commit"]
+    assert updates == []
 
 
 def test_unsupported_kind_raises_constant_payload_free_error() -> None:
@@ -683,9 +770,32 @@ def test_worker_builds_database_from_settings_and_always_disposes(
 
     engine = Engine()
 
-    def create_database(url: str) -> tuple[Engine, object]:
+    class Session:
+        committed = False
+
+        async def commit(self) -> None:
+            self.committed = True
+
+    session = Session()
+
+    class SessionContext:
+        async def __aenter__(self) -> Session:
+            return session
+
+        async def __aexit__(self, *_args: object) -> None:
+            pass
+
+    class SessionFactory:
+        def __call__(self) -> SessionContext:
+            return SessionContext()
+
+    def create_database(url: str) -> tuple[Engine, SessionFactory]:
         created_urls.append(url)
-        return engine, object()
+        return engine, SessionFactory()
+
+    async def enqueue(_session: object) -> int:
+        assert _session is session
+        return 2
 
     monkeypatch.setattr(
         worker,
@@ -694,9 +804,12 @@ def test_worker_builds_database_from_settings_and_always_disposes(
             database_url=database_url,
             task_model_base_url="https://task-model.example/v1",
             task_model_model="cheap-extractor",
+            embedding_base_url="https://embedding.example/v1",
+            embedding_model="embedding-model",
         ),
     )
     monkeypatch.setattr(worker, "create_database", create_database, raising=False)
+    monkeypatch.setattr(worker, "enqueue_missing_conversation_jobs", enqueue)
 
     async def exercise() -> None:
         stop_event = asyncio.Event()
@@ -706,6 +819,7 @@ def test_worker_builds_database_from_settings_and_always_disposes(
     anyio.run(exercise)
 
     assert created_urls == [database_url]
+    assert session.committed is True
     assert engine.disposed is True
 
 
