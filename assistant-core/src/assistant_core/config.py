@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Self
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEVELOPMENT_HMAC_SECRET = "development-hmac-secret-change-me"
@@ -32,6 +32,27 @@ class Settings(BaseSettings):
     embedding_timeout_seconds: float = Field(default=15, ge=1, le=120)
     log_level: str = "INFO"
     otlp_endpoint: str | None = None
+
+    @field_validator(
+        "task_model_base_url",
+        "task_model_model",
+        "embedding_base_url",
+        "embedding_model",
+        "otlp_endpoint",
+        mode="before",
+    )
+    @classmethod
+    def _empty_str_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
+    @field_validator("task_model_api_key", "embedding_api_key", mode="before")
+    @classmethod
+    def _empty_secret_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
     @model_validator(mode="after")
     def validate_production_hmac_secret(self) -> Self:
