@@ -221,10 +221,10 @@ def test_postgres_bootstrap_is_guarded_idempotent_and_least_privilege() -> None:
     assert "create schema if not exists assistant_core" in lowered
     assert "authorization assistant_core" not in lowered
     assert "set role" not in lowered
-    assert "revoke all on schema assistant_core from public" in lowered
     assert "grant connect on database postgres to assistant_core" in lowered
     assert "grant usage, create on schema assistant_core to assistant_core" in lowered
-    assert "set search_path to assistant_core, public" in lowered
+    assert "grant usage on schema extensions to assistant_core" in lowered
+    assert "set search_path to assistant_core, extensions, public" in lowered
     assert "drop " not in lowered
 
 

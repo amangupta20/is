@@ -21,5 +21,6 @@ CREATE SCHEMA IF NOT EXISTS assistant_core;
 REVOKE ALL ON SCHEMA assistant_core FROM public;
 GRANT CONNECT ON DATABASE postgres TO assistant_core;
 GRANT USAGE, CREATE ON SCHEMA assistant_core TO assistant_core;
+GRANT USAGE ON SCHEMA extensions TO assistant_core;
 ALTER ROLE assistant_core IN DATABASE postgres
-    SET search_path TO assistant_core, public;
+    SET search_path TO assistant_core, extensions, public;

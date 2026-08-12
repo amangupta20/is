@@ -15,6 +15,10 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     """Create per-user canonical passages and independent native references."""
+    # pgvector lives in `extensions` on Supabase; ensure this session can resolve `vector`
+    # even before the updated role search_path takes effect on next connect.
+    op.execute(sa.text("SET search_path TO assistant_core, extensions, public"))
+    op.execute(sa.text("CREATE EXTENSION IF NOT EXISTS vector SCHEMA extensions"))
     op.create_table(
         "conversation_segment",
         sa.Column("id", sa.UUID(), nullable=False),
