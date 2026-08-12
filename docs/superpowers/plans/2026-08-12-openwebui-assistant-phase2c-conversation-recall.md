@@ -72,11 +72,11 @@
 - `materialize_turn_passages(session, turn) -> PassageMaterialization` inserts/reuses lexical segments and creates independent references idempotently without calling a provider.
 - `PassageMaterialization` contains exact internal segment IDs still missing embeddings plus inserted/reused/reference counts for safe logging.
 
-- [ ] Write one failing repository test that materializes both roles, splits a long message, replays idempotently, and reuses an exact per-user segment through a second native reference.
-- [ ] Run `cd assistant-core; uv run pytest tests/unit/test_conversation_repository.py -q` and confirm failure because the conversation package does not exist.
-- [ ] Add `pgvector>=0.4,<1` to dependencies, lock it, implement the chunker/models/repository, register models, and add reversible migration `0005_conversation_recall` with FTS and cosine indexes.
-- [ ] Run `uv run pytest tests/unit/test_conversation_repository.py -q`, `uv run ruff check src tests/unit/test_conversation_repository.py`, `uv run mypy src`, and `uv lock --check`.
-- [ ] Commit only Task 1 files as `feat: add bounded conversation passage store`.
+- [x] Write one failing repository test that materializes both roles, splits a long message, replays idempotently, and reuses an exact per-user segment through a second native reference.
+- [x] Run `cd assistant-core; uv run pytest tests/unit/test_conversation_repository.py -q` and confirm failure because the conversation package does not exist.
+- [x] Add `pgvector>=0.4,<1` to dependencies, lock it, implement the chunker/models/repository, register models, and add reversible migration `0005_conversation_recall` with FTS and cosine indexes.
+- [x] Run `uv run pytest tests/unit/test_conversation_repository.py -q`, `uv run ruff check src tests/unit/test_conversation_repository.py`, `uv run mypy src`, and `uv lock --check`.
+- [x] Commit only Task 1 files as `feat: add bounded conversation passage store`.
 
 ---
 
@@ -103,11 +103,11 @@
 - `index_conversation` first commits lexical segments/references, then embeds only missing segment vectors one at a time. Provider failure leaves lexical rows intact and retries with safe `conversation_embedding_failed` state.
 - Worker structured events: `conversation_index_started`, `conversation_index_completed`, `conversation_index_failed`, and `conversation_backfill_enqueued`; content is excluded.
 
-- [ ] Write a failing network-free embedder test proving one-input request shape, exact dimension validation, and one safe failure class.
-- [ ] Extend the worker test to prove completed-turn processing queues both independent jobs and that a later embedding failure does not remove lexical passage rows.
-- [ ] Implement configuration, client, bootstrap enqueue, worker routing, safe logs, Compose/environment examples, and deployment-contract assertions.
-- [ ] Run `uv run pytest tests/unit/test_conversation_embedder.py tests/unit/test_worker_unit.py tests/unit/test_deployment_assets.py -q`, then Ruff, mypy, and lock checks for touched source.
-- [ ] Commit only Task 2 files as `feat: index completed conversations asynchronously`.
+- [x] Write a failing network-free embedder test proving one-input request shape, exact dimension validation, and one safe failure class.
+- [x] Extend the worker test to prove completed-turn processing queues both independent jobs and that a later embedding failure does not remove lexical passage rows.
+- [x] Implement configuration, client, bootstrap enqueue, worker routing, safe logs, Compose/environment examples, and deployment-contract assertions.
+- [x] Run `uv run pytest tests/unit/test_conversation_embedder.py tests/unit/test_worker_unit.py tests/unit/test_deployment_assets.py -q`, then Ruff, mypy, and lock checks for touched source.
+- [x] Commit only Task 2 files as `feat: index completed conversations asynchronously`.
 
 ---
 
@@ -131,12 +131,12 @@
 - `read_personal_context(memory_source_id)` first resolves an active owned memory, then an active owned conversation reference. A conversation read returns the selected passage plus at most one previous and one next active reference, capped to 12,000 characters total.
 - Query embedding errors emit metadata-only `personal_context_search_completed` with `mode=lexical` and never fail the route.
 
-- [ ] Extend one API test to cover a paraphrased hybrid conversation hit followed by a bounded neighboring read, while another user's identical text remains inaccessible.
-- [ ] Add one API assertion that embedder failure returns lexical mode and valid memory/conversation lexical results.
-- [ ] Update the self-contained Tool test for generic source output while proving public method names/arguments and the fixed unavailable result remain unchanged.
-- [ ] Implement repository fusion/read, route schemas, metadata-only search logging, and adapter rendering.
-- [ ] Run `uv run pytest tests/unit/test_personal_context_api.py ../adapters/openwebui/tests/test_assistant_core_tool.py -q`, then Ruff and mypy for touched source.
-- [ ] Commit only Task 3 files as `feat: add hybrid source-linked conversation recall`.
+- [x] Extend one API test to cover a paraphrased hybrid conversation hit followed by a bounded neighboring read, while another user's identical text remains inaccessible.
+- [x] Add one API assertion that embedder failure returns lexical mode and valid memory/conversation lexical results.
+- [x] Update the self-contained Tool test for generic source output while proving public method names/arguments and the fixed unavailable result remain unchanged.
+- [x] Implement repository fusion/read, route schemas, metadata-only search logging, and adapter rendering.
+- [x] Run `uv run pytest tests/unit/test_personal_context_api.py ../adapters/openwebui/tests/test_assistant_core_tool.py -q`, then Ruff and mypy for touched source.
+- [x] Commit only Task 3 files as `feat: add hybrid source-linked conversation recall`.
 
 ---
 
@@ -156,17 +156,17 @@
 - Search and read always require `tombstoned_at IS NULL`.
 - Worker emits `conversation_chat_tombstoned` with IDs/counts only. It does not physically delete segment text or embeddings in this plan.
 
-- [ ] Add one deletion/data-loss test proving a deleted chat's exclusive reference cannot be searched/read while another live reference to the same segment survives.
-- [ ] Add one worker test proving duplicate `chat.deleted` delivery converges to the same state and logs no content.
-- [ ] Implement tombstoning and event routing.
-- [ ] Run `uv run pytest tests/unit/test_conversation_repository.py tests/unit/test_worker_unit.py tests/unit/test_personal_context_api.py -q`, then Ruff and mypy for touched source.
-- [ ] Commit only Task 4 files as `feat: tombstone deleted conversation sources`.
+- [x] Add one deletion/data-loss test proving a deleted chat's exclusive reference cannot be searched/read while another live reference to the same segment survives.
+- [x] Add one worker test proving duplicate `chat.deleted` delivery converges to the same state and logs no content.
+- [x] Implement tombstoning and event routing.
+- [x] Run `uv run pytest tests/unit/test_conversation_repository.py tests/unit/test_worker_unit.py tests/unit/test_personal_context_api.py -q`, then Ruff and mypy for touched source.
+- [x] Commit only Task 4 files as `feat: tombstone deleted conversation sources`.
 
 ---
 
 ## Phase boundary verification and live pilot
 
-- [ ] Run once from `assistant-core`:
+- [x] Run once from `assistant-core`:
 
 ```powershell
 uv run pytest tests ../adapters/openwebui/tests -q
@@ -175,9 +175,9 @@ uv run mypy src
 uv lock --check
 ```
 
-- [ ] Scan the exact Phase 2C diff and committed files for credential-like values while excluding lockfile hashes and documented placeholders.
-- [ ] Use Luna/high for one read-only review of the exact Phase 2C commit range; fix Critical/Important findings only.
-- [ ] Update `.superpowers/sdd/progress.md`, this plan, and the current handoff with exact commits, verification, review, CI/CD state, and the first unfinished manual gate.
+- [x] Scan the exact Phase 2C diff and committed files for credential-like values while excluding lockfile hashes and documented placeholders.
+- [x] Use Luna/high for one read-only review of the exact Phase 2C commit range; fix Critical/Important findings only. Four runtime/privacy findings were fixed in `2573af0`; a new local PostgreSQL harness was declined as disproportionate, with the real Dokploy migration/search pilot retained as the database gate.
+- [x] Update `.superpowers/sdd/progress.md`, this plan, and the current handoff with exact commits, verification, review, CI/CD state, and the first unfinished manual gate.
 - [ ] Push the reviewed `assistant-foundation` commits. Dokploy deploys that upstream branch automatically.
 - [ ] Manually verify migration `0005_conversation_recall`, API/worker health, and metadata-only indexing logs without exposing secrets or content.
 - [ ] Re-import only `adapters/openwebui/assistant_core_tool.py`; the current Context Filter and Lifecycle Event Function remain installed unless implementation proves they changed.
@@ -191,4 +191,3 @@ uv lock --check
 - Pre-Phase-2A full-history import and fork-lineage reconstruction.
 - Message edit/delete reconciliation, periodic native-state reconciliation, and 24-hour physical garbage collection.
 - Global uploaded-file indexing, canonical file deduplication, topic episodes, and external reranking.
-
