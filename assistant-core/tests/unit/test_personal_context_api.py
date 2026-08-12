@@ -54,7 +54,7 @@ class _ContextSession:
         native_user_id = next(
             value for value in compiled.params.values() if value in {"user-1", "user-2"}
         )
-        if "memory_evidence" in str(compiled):
+        if "ORDER BY assistant_core.memory_evidence.created_at" in str(compiled):
             return _Result(row=self.read_row if native_user_id == "user-1" else None)
         if "conversation_reference" in str(compiled):
             return _Result(row=None, rows=[])

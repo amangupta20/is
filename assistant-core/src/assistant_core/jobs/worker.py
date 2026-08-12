@@ -18,6 +18,7 @@ from assistant_core.conversation.embedder import (
     CONVERSATION_EMBEDDING_FAILED_ERROR,
     EMBEDDING_VERSION,
     ConversationEmbeddingError,
+    EmbeddingConfigurationError,
     OpenAICompatibleEmbedder,
 )
 from assistant_core.conversation.embedder import (
@@ -202,13 +203,13 @@ async def _handle_extract_memory(
     """Extract after ending the DB read, then apply candidates in a fresh transaction."""
     turn_id = _turn_id_from_payload(payload)
     turn = await session.get(CompletedTurn, turn_id)
-    if turn is None:
+    if turn is None or turn.tombstoned_at is not None:
         raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
     turn_data = CompletedTurnData(id=turn.id, user_content=turn.user_content)
     await session.rollback()
     candidates = await asyncio.to_thread(get_memory_extractor().extract, turn_data)
     fresh_turn = await session.get(CompletedTurn, turn_id)
-    if fresh_turn is None:
+    if fresh_turn is None or fresh_turn.tombstoned_at is not None:
         raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
     await apply_explicit_candidates(session, fresh_turn, candidates)
 
@@ -222,19 +223,25 @@ async def _handle_index_conversation(
     if turn is None or turn.tombstoned_at is not None:
         raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
     started_at = perf_counter()
+    turn_id_text = str(turn.id)
+    user_id_text = str(turn.user_id)
+    chat_id = turn.native_chat_id
+    user_chars = len(turn.user_content)
+    assistant_chars = len(turn.assistant_content)
     LOGGER.info(
         "conversation_index_started",
-        turn_id=str(turn.id),
-        user_id=str(turn.user_id),
-        chat_id=turn.native_chat_id,
-        user_chars=len(turn.user_content),
-        assistant_chars=len(turn.assistant_content),
+        turn_id=turn_id_text,
+        user_id=user_id_text,
+        chat_id=chat_id,
+        user_chars=user_chars,
+        assistant_chars=assistant_chars,
     )
     materialization = await materialize_turn_passages(session, turn)
     await session.commit()
-    embedder = get_conversation_embedder()
+    embedder: OpenAICompatibleEmbedder | None = None
     embedded_count = 0
     try:
+        embedder = get_conversation_embedder()
         for segment_id in materialization.missing_embedding_ids:
             content = await get_segment_content(session, segment_id)
             if content is None:
@@ -253,25 +260,25 @@ async def _handle_index_conversation(
             )
             await session.commit()
             embedded_count += int(stored)
-    except ConversationEmbeddingError:
+    except (ConversationEmbeddingError, EmbeddingConfigurationError):
         LOGGER.warning(
             "conversation_index_failed",
-            turn_id=str(turn.id),
-            user_id=str(turn.user_id),
-            chat_id=turn.native_chat_id,
+            turn_id=turn_id_text,
+            user_id=user_id_text,
+            chat_id=chat_id,
             missing_embedding_count=len(materialization.missing_embedding_ids),
             embedded_count=embedded_count,
-            model=embedder.model,
-            dimension=embedder.dimension,
+            model=embedder.model if embedder is not None else None,
+            dimension=embedder.dimension if embedder is not None else None,
             duration_ms=round((perf_counter() - started_at) * 1000, 3),
             error_code=CONVERSATION_EMBEDDING_FAILED_ERROR,
         )
         raise
     LOGGER.info(
         "conversation_index_completed",
-        turn_id=str(turn.id),
-        user_id=str(turn.user_id),
-        chat_id=turn.native_chat_id,
+        turn_id=turn_id_text,
+        user_id=user_id_text,
+        chat_id=chat_id,
         new_segment_count=materialization.new_segments,
         reused_segment_count=materialization.reused_segments,
         new_reference_count=materialization.new_references,
@@ -311,7 +318,7 @@ async def process_one(session: AsyncSession) -> bool:
         error_code = INVALID_TURN_PAYLOAD_ERROR
     except MemoryExtractionError:
         error_code = MEMORY_EXTRACTION_FAILED_ERROR
-    except ConversationEmbeddingError:
+    except (ConversationEmbeddingError, EmbeddingConfigurationError):
         error_code = CONVERSATION_EMBEDDING_FAILED_ERROR
     except Exception:  # noqa: BLE001 - all ordinary handler failures share one safe code
         error_code = "handler_failed"
@@ -333,7 +340,6 @@ async def run_worker(stop_event: asyncio.Event | None = None) -> None:
     """Run the single-job polling loop until a graceful stop is requested."""
     settings = get_settings()
     _task_model_configuration(settings)
-    build_conversation_embedder(settings)
     engine, session_factory = create_database(settings.database_url)
     resolved_stop_event = stop_event or asyncio.Event()
     loop = asyncio.get_running_loop()

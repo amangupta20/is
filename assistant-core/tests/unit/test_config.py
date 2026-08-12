@@ -68,3 +68,9 @@ def test_settings_read_optional_otlp_endpoint(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("ASSISTANT_OTLP_ENDPOINT", "http://collector.internal:4318/v1/traces")
 
     assert Settings().otlp_endpoint == "http://collector.internal:4318/v1/traces"
+
+
+def test_embedding_dimension_matches_the_fixed_vector_column() -> None:
+    """Configuration cannot admit vectors the PostgreSQL schema rejects."""
+    with pytest.raises(ValidationError):
+        Settings(embedding_dimension=768)

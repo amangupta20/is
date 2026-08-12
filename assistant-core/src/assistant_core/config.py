@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     embedding_base_url: str | None = Field(default=None, min_length=1, max_length=2_048)
     embedding_api_key: SecretStr | None = None
     embedding_model: str | None = Field(default=None, min_length=1, max_length=200)
-    embedding_dimension: int = Field(default=1536, ge=1, le=1536)
+    embedding_dimension: int = Field(default=1536, ge=1536, le=1536)
     embedding_timeout_seconds: float = Field(default=15, ge=1, le=120)
     log_level: str = "INFO"
     otlp_endpoint: str | None = None

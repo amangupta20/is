@@ -3,9 +3,10 @@
 import re
 import uuid
 
-from sqlalchemy import func, select, update
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from assistant_core.identity.models import UserIdentity
 from assistant_core.memory.models import MemoryEvidence, MemoryRecord
@@ -16,6 +17,19 @@ from assistant_core.turns.models import CompletedTurn
 def _normalized_tokens(value: str) -> tuple[str, ...]:
     """Normalize visible text into comparable lexical tokens."""
     return tuple(re.findall(r"\w+", " ".join(value.split()).casefold()))
+
+
+def live_memory_evidence_clause() -> ColumnElement[bool]:
+    """Require at least one owner-matched evidence turn that is not tombstoned."""
+    return exists(
+        select(MemoryEvidence.id)
+        .join(CompletedTurn, CompletedTurn.id == MemoryEvidence.completed_turn_id)
+        .where(
+            MemoryEvidence.memory_record_id == MemoryRecord.id,
+            CompletedTurn.user_id == MemoryRecord.user_id,
+            CompletedTurn.tombstoned_at.is_(None),
+        )
+    )
 
 
 async def search_explicit_memory(
@@ -38,6 +52,7 @@ async def search_explicit_memory(
             UserIdentity.native_user_id == native_user_id,
             MemoryRecord.kind == "explicit",
             MemoryRecord.state == "active",
+            live_memory_evidence_clause(),
         )
     )
     records = (await session.execute(statement)).scalars().all()
@@ -77,6 +92,7 @@ async def read_explicit_memory(
             MemoryRecord.kind == "explicit",
             MemoryRecord.state == "active",
             CompletedTurn.user_id == MemoryRecord.user_id,
+            CompletedTurn.tombstoned_at.is_(None),
         )
         .order_by(MemoryEvidence.created_at.asc(), MemoryEvidence.id.asc())
         .limit(1)

@@ -207,6 +207,10 @@ def test_context_freezes_one_profile_per_chat_and_new_chat_sees_later_memory() -
     ]
     first_snapshot_insert = session.statements[3].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
     second_snapshot_insert = session.statements[9].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+    first_memory_query = session.statements[2].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+    second_memory_query = session.statements[8].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+    assert "completed_turn.tombstoned_at IS NULL" in str(first_memory_query)
+    assert "completed_turn.tombstoned_at IS NULL" in str(second_memory_query)
     assert first_snapshot_insert.params["rendered_text"] == chat_one.rendered_text
     assert first_snapshot_insert.params["source_memory_ids"] == [first_memory.id]
     assert second_snapshot_insert.params["rendered_text"] == chat_two.rendered_text

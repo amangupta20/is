@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from assistant_core.identity.models import UserIdentity
 from assistant_core.memory.models import ChatProfileSnapshot, MemoryRecord
+from assistant_core.memory.repository import live_memory_evidence_clause
 
 
 def _render_profile(
@@ -70,6 +71,7 @@ async def get_or_create_profile(
             MemoryRecord.user_id == user_id,
             MemoryRecord.state == "active",
             MemoryRecord.category.in_(("preference", "instruction")),
+            live_memory_evidence_clause(),
         )
         .order_by(MemoryRecord.category.asc(), MemoryRecord.key.asc(), MemoryRecord.id.asc())
     )

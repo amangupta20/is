@@ -344,6 +344,59 @@ def test_embedding_failure_preserves_committed_lexical_passages(
     assert updates == []
 
 
+def test_missing_embedding_configuration_keeps_worker_available_for_lexical_backfill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Optional embeddings cannot prevent startup or lexical job enqueue."""
+    from assistant_core.config import Settings
+    from assistant_core.jobs import worker
+
+    class Engine:
+        async def dispose(self) -> None:
+            pass
+
+    class Session:
+        async def commit(self) -> None:
+            pass
+
+    class Context:
+        async def __aenter__(self) -> Session:
+            return Session()
+
+        async def __aexit__(self, *_args: object) -> None:
+            pass
+
+    class Factory:
+        def __call__(self) -> Context:
+            return Context()
+
+    enqueued: list[bool] = []
+
+    async def enqueue(_session: object) -> int:
+        enqueued.append(True)
+        return 1
+
+    monkeypatch.setattr(
+        worker,
+        "get_settings",
+        lambda: Settings(
+            task_model_base_url="https://task-model.example/v1",
+            task_model_model="cheap-extractor",
+        ),
+    )
+    monkeypatch.setattr(worker, "create_database", lambda _url: (Engine(), Factory()))
+    monkeypatch.setattr(worker, "enqueue_missing_conversation_jobs", enqueue)
+
+    async def exercise() -> None:
+        stop_event = asyncio.Event()
+        stop_event.set()
+        await worker.run_worker(stop_event)
+
+    anyio.run(exercise)
+
+    assert enqueued == [True]
+
+
 def test_chat_deleted_routes_owner_and_chat_to_idempotent_tombstone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

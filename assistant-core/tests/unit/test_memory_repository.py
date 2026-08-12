@@ -175,3 +175,52 @@ def test_apply_explicit_candidates_inserts_replays_and_supersedes_with_evidence(
     }
     assert "char_length(statement) <= 2000" in record_constraints
     assert "char_length(evidence_quote) <= 1000" in evidence_constraints
+
+
+def test_search_and_read_require_live_completed_turn_evidence() -> None:
+    """Tombstoned chat evidence cannot remain discoverable as explicit memory."""
+    from assistant_core.memory.repository import read_explicit_memory, search_explicit_memory
+
+    class RowsResult:
+        def scalars(self) -> "RowsResult":
+            return self
+
+        def all(self) -> list[object]:
+            return []
+
+        def one_or_none(self) -> None:
+            return None
+
+    class Session:
+        def __init__(self) -> None:
+            self.statements: list[object] = []
+
+        async def execute(self, statement: object) -> RowsResult:
+            self.statements.append(statement)
+            return RowsResult()
+
+    session = Session()
+
+    async def exercise() -> None:
+        await search_explicit_memory(
+            session,  # type: ignore[arg-type]
+            native_user_id="native-user-1",
+            query="direct answers",
+            limit=5,
+        )
+        await read_explicit_memory(
+            session,  # type: ignore[arg-type]
+            native_user_id="native-user-1",
+            memory_source_id=uuid.uuid4(),
+        )
+
+    anyio.run(exercise)
+
+    compiled = [
+        statement.compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+        for statement in session.statements
+    ]
+    sql = "\n".join(str(statement) for statement in compiled)
+    assert len(compiled) == 2
+    assert sql.count("completed_turn.tombstoned_at IS NULL") == 2
+    assert "EXISTS" in str(compiled[0])

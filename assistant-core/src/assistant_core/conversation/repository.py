@@ -135,6 +135,8 @@ async def search_conversation_context(
     ).label("lexical_rank")
     active_filters = (
         UserIdentity.native_user_id == native_user_id,
+        ConversationSegment.user_id == ConversationReference.user_id,
+        CompletedTurn.user_id == ConversationReference.user_id,
         ConversationReference.tombstoned_at.is_(None),
         CompletedTurn.tombstoned_at.is_(None),
     )
@@ -245,6 +247,8 @@ async def read_conversation_context(
             .where(
                 UserIdentity.native_user_id == native_user_id,
                 ConversationReference.id == source_id,
+                ConversationSegment.user_id == ConversationReference.user_id,
+                CompletedTurn.user_id == ConversationReference.user_id,
                 ConversationReference.tombstoned_at.is_(None),
                 CompletedTurn.tombstoned_at.is_(None),
             )
@@ -275,6 +279,8 @@ async def read_conversation_context(
         .where(
             ConversationReference.user_id == selected_reference.user_id,
             ConversationReference.native_chat_id == selected_reference.native_chat_id,
+            ConversationSegment.user_id == ConversationReference.user_id,
+            CompletedTurn.user_id == ConversationReference.user_id,
             ConversationReference.tombstoned_at.is_(None),
             CompletedTurn.tombstoned_at.is_(None),
         )
