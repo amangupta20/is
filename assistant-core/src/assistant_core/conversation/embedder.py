@@ -2,15 +2,23 @@
 
 import math
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
+from assistant_core.config import Settings
+
 CONVERSATION_EMBEDDING_FAILED_ERROR = "conversation_embedding_failed"
 EMBEDDING_VERSION = "openai-compatible-v1"
+EMBEDDING_CONFIGURATION_ERROR = "embedding_configuration_error"
 
 
 class ConversationEmbeddingError(RuntimeError):
     """Raised with one content-free code when embedding cannot be completed."""
+
+
+class EmbeddingConfigurationError(ValueError):
+    """Raised with one content-free code for missing embedding configuration."""
 
 
 class OpenAICompatibleEmbedder:
@@ -68,3 +76,28 @@ class OpenAICompatibleEmbedder:
             raise ConversationEmbeddingError(
                 CONVERSATION_EMBEDDING_FAILED_ERROR
             ) from None
+
+
+def get_conversation_embedder(settings: Settings) -> OpenAICompatibleEmbedder:
+    """Build one client only after its endpoint and model are usable."""
+    base_url = settings.embedding_base_url
+    model = settings.embedding_model
+    parsed = urlparse(base_url) if base_url else None
+    if (
+        not base_url
+        or not model
+        or not base_url.strip()
+        or not model.strip()
+        or parsed is None
+        or parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+    ):
+        raise EmbeddingConfigurationError(EMBEDDING_CONFIGURATION_ERROR)
+    api_key = settings.embedding_api_key
+    return OpenAICompatibleEmbedder(
+        base_url=base_url,
+        api_key=api_key.get_secret_value() if api_key is not None else None,
+        model=model,
+        dimension=settings.embedding_dimension,
+        timeout_seconds=settings.embedding_timeout_seconds,
+    )

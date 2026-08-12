@@ -8,7 +8,11 @@ from sqlalchemy import CheckConstraint, UniqueConstraint
 
 from assistant_core.conversation.chunking import build_turn_passages
 from assistant_core.conversation.models import ConversationReference, ConversationSegment
-from assistant_core.conversation.repository import materialize_turn_passages
+from assistant_core.conversation.repository import (
+    materialize_turn_passages,
+    read_conversation_context,
+    search_conversation_context,
+)
 from assistant_core.turns.models import CompletedTurn
 
 
@@ -196,3 +200,57 @@ def test_materialization_inserts_reuses_and_replays_independent_references() -> 
     assert reused.new_references == 1
     assert reused.missing_embedding_ids == (user_segment_id,)
     assert session.results == []
+
+
+def test_hybrid_search_and_read_queries_are_owner_scoped_and_active_only() -> None:
+    """Lexical/vector candidates and source reads compile with tenant/tombstone guards."""
+    from sqlalchemy.dialects import postgresql
+
+    class EmptyResult:
+        def all(self) -> list[object]:
+            return []
+
+        def one_or_none(self) -> None:
+            return None
+
+    class CaptureSession:
+        def __init__(self) -> None:
+            self.statements: list[object] = []
+
+        async def execute(self, statement: object) -> EmptyResult:
+            self.statements.append(statement)
+            return EmptyResult()
+
+    session = CaptureSession()
+
+    async def exercise() -> tuple[object, object]:
+        hits = await search_conversation_context(
+            session,  # type: ignore[arg-type]
+            native_user_id="native-user-1",
+            query="paraphrased discussion",
+            query_embedding=[0.1] * 1536,
+            limit=5,
+        )
+        read = await read_conversation_context(
+            session,  # type: ignore[arg-type]
+            native_user_id="native-user-1",
+            source_id=uuid.uuid4(),
+        )
+        return hits, read
+
+    hits, read = anyio.run(exercise)
+
+    assert hits == []
+    assert read is None
+    assert len(session.statements) == 3
+    compiled = [
+        statement.compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+        for statement in session.statements
+    ]
+    sql = "\n".join(str(statement) for statement in compiled)
+    parameters = [value for statement in compiled for value in statement.params.values()]
+    assert "websearch_to_tsquery" in sql
+    assert "<=>" in sql
+    assert sql.count("conversation_reference.tombstoned_at IS NULL") == 3
+    assert sql.count("completed_turn.tombstoned_at IS NULL") == 3
+    assert parameters.count("native-user-1") == 3

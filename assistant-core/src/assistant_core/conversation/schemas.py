@@ -2,6 +2,7 @@
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
 
 ConversationRole = Literal["user", "assistant"]
@@ -27,3 +28,34 @@ class PassageMaterialization:
     reused_segments: int
     new_references: int
     missing_embedding_ids: tuple[uuid.UUID, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationHit:
+    """One owner-scoped conversation reference ranked for retrieval."""
+
+    source_id: uuid.UUID
+    content: str
+    role: ConversationRole
+    native_chat_id: str
+    native_message_id: str
+    occurred_at: datetime
+    score: float
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationNeighbor:
+    """One bounded adjacent passage around a selected source."""
+
+    role: ConversationRole
+    content: str
+    native_chat_id: str
+    native_message_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationRead:
+    """A selected passage and at most its immediate active neighbors."""
+
+    selected: ConversationHit
+    neighbors: tuple[ConversationNeighbor, ...]

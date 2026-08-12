@@ -20,6 +20,9 @@ from assistant_core.conversation.embedder import (
     ConversationEmbeddingError,
     OpenAICompatibleEmbedder,
 )
+from assistant_core.conversation.embedder import (
+    get_conversation_embedder as build_conversation_embedder,
+)
 from assistant_core.conversation.repository import (
     enqueue_missing_conversation_jobs,
     get_segment_content,
@@ -49,7 +52,6 @@ UNSUPPORTED_KIND_ERROR = "unsupported_job_kind"
 CLAIMED_JOB_MISSING_ERROR = "claimed_job_missing"
 INVALID_JOB_CLAIM_ERROR = "invalid_job_claim"
 TASK_MODEL_CONFIGURATION_ERROR = "task_model_configuration_error"
-EMBEDDING_CONFIGURATION_ERROR = "embedding_configuration_error"
 IDLE_POLL_SECONDS = 1.0
 LOGGER = structlog.get_logger("assistant_core.worker")
 
@@ -68,10 +70,6 @@ class InvalidJobClaimError(RuntimeError):
 
 class TaskModelConfigurationError(ValueError):
     """Raised with one content-free code for missing worker task-model config."""
-
-
-class EmbeddingConfigurationError(ValueError):
-    """Raised with one content-free code for missing worker embedding config."""
 
 
 def _task_model_configuration(settings: Settings) -> tuple[str, str]:
@@ -105,38 +103,11 @@ def get_memory_extractor(settings: Settings | None = None) -> TaskModelMemoryExt
     )
 
 
-def _embedding_configuration(settings: Settings) -> tuple[str, str]:
-    """Return only a usable endpoint and model name for conversation indexing."""
-    base_url = settings.embedding_base_url
-    model = settings.embedding_model
-    parsed = urlparse(base_url) if base_url else None
-    if (
-        not base_url
-        or not model
-        or not base_url.strip()
-        or not model.strip()
-        or parsed is None
-        or parsed.scheme not in {"http", "https"}
-        or not parsed.netloc
-    ):
-        raise EmbeddingConfigurationError(EMBEDDING_CONFIGURATION_ERROR)
-    return base_url, model
-
-
 def get_conversation_embedder(
     settings: Settings | None = None,
 ) -> OpenAICompatibleEmbedder:
     """Build the configured one-input embedding client."""
-    resolved_settings = settings or get_settings()
-    base_url, model = _embedding_configuration(resolved_settings)
-    api_key = resolved_settings.embedding_api_key
-    return OpenAICompatibleEmbedder(
-        base_url=base_url,
-        api_key=api_key.get_secret_value() if api_key is not None else None,
-        model=model,
-        dimension=resolved_settings.embedding_dimension,
-        timeout_seconds=resolved_settings.embedding_timeout_seconds,
-    )
+    return build_conversation_embedder(settings or get_settings())
 
 
 async def handle(
@@ -341,7 +312,7 @@ async def run_worker(stop_event: asyncio.Event | None = None) -> None:
     """Run the single-job polling loop until a graceful stop is requested."""
     settings = get_settings()
     _task_model_configuration(settings)
-    _embedding_configuration(settings)
+    build_conversation_embedder(settings)
     engine, session_factory = create_database(settings.database_url)
     resolved_stop_event = stop_event or asyncio.Event()
     loop = asyncio.get_running_loop()

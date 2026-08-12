@@ -192,23 +192,38 @@ def test_personal_context_tools_show_profile_search_read_and_fail_open(
             "degraded": False,
         },
         "/v1/personal-context/search": {
-            "mode": "lexical",
+            "mode": "hybrid",
             "results": [
                 {
-                    "memory_source_id": source_id,
+                    "source_id": source_id,
+                    "source_type": "memory",
                     "category": "preference",
+                    "role": None,
                     "preview": "Use direct answers.",
+                    "source_native_chat_id": None,
+                    "source_native_message_id": None,
+                },
+                {
+                    "source_id": "00000000-0000-0000-0000-000000000012",
+                    "source_type": "conversation",
+                    "category": "conversation_evidence",
+                    "role": "assistant",
+                    "preview": "We used bounded hybrid recall.",
+                    "source_native_chat_id": "chat-2",
+                    "source_native_message_id": "message-2",
                 }
             ],
         },
         "/v1/personal-context/read": {
-            "memory_source_id": source_id,
-            "statement": "Use direct answers.",
+            "source_id": source_id,
+            "source_type": "memory",
+            "content": "Use direct answers.",
             "category": "preference",
+            "role": None,
             "evidence_quote": "I prefer direct answers.",
             "source_native_chat_id": "chat-1",
             "source_native_message_id": "message-1",
-            "neighboring_available": False,
+            "neighbors": [],
             "full_source_available": False,
         },
     }
@@ -235,17 +250,22 @@ def test_personal_context_tools_show_profile_search_read_and_fail_open(
     )
     assert asyncio.run(
         tool.search_personal_context("direct", __user__=user, __metadata__=metadata)
-    ) == f"Personal memory search (lexical):\n- {source_id}: Use direct answers. (preference)"
+    ) == (
+        "Personal context search (hybrid):\n"
+        f"- [memory/preference] {source_id}: Use direct answers.\n"
+        "- [conversation/assistant evidence] 00000000-0000-0000-0000-000000000012: "
+        "We used bounded hybrid recall. (chat chat-2, message message-2)"
+    )
     assert asyncio.run(
         tool.read_personal_context(source_id, __user__=user)
     ) == (
         f"Personal memory source {source_id}:\n"
-        "Statement: Use direct answers.\n"
+        "Content: Use direct answers.\n"
         "Category: preference\n"
         'Evidence: "I prefer direct answers."\n'
         "Source chat: chat-1\n"
         "Source message: message-1\n"
-        "Neighboring expansion available: no\n"
+        "Neighboring context: none\n"
         "Full-source expansion available: no"
     )
 

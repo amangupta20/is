@@ -130,11 +130,7 @@ class Tools:
         __user__: dict | None = None,
         __metadata__: dict | None = None,
     ) -> str:
-        """Proactively search memory before claims about preferences, facts, projects, or decisions.
-
-        This v1 search covers memory records only; native current-chat file/chat tools remain
-        separate until later source indexes join the same contract.
-        """
+        """Search durable memory and past conversation evidence before personal claims."""
         try:
             payload = self._context_payload(__user__, __metadata__)
             payload.update({"query": query.strip(), "limit": limit})
@@ -142,22 +138,52 @@ class Tools:
             if not isinstance(response, dict) or set(response) != {"mode", "results"}:
                 return self._UNAVAILABLE
             results = response["results"]
-            if response["mode"] != "lexical" or type(results) is not list:
+            mode = response["mode"]
+            if mode not in {"lexical", "hybrid"} or type(results) is not list:
                 return self._UNAVAILABLE
             lines: list[str] = []
             for result in results:
                 if not isinstance(result, dict) or set(result) != {
-                    "memory_source_id",
+                    "source_id",
+                    "source_type",
                     "category",
+                    "role",
                     "preview",
-                } or any(type(result[key]) is not str for key in result):
+                    "source_native_chat_id",
+                    "source_native_message_id",
+                }:
+                    return self._UNAVAILABLE
+                if any(
+                    type(result[key]) is not str
+                    for key in ("source_id", "source_type", "category", "preview")
+                ):
+                    return self._UNAVAILABLE
+                source_type = result["source_type"]
+                role = result["role"]
+                chat_id = result["source_native_chat_id"]
+                message_id = result["source_native_message_id"]
+                if source_type == "memory":
+                    if role is not None or chat_id is not None or message_id is not None:
+                        return self._UNAVAILABLE
+                    label = f"memory/{result['category']}"
+                    provenance = ""
+                elif source_type == "conversation":
+                    if (
+                        role not in {"user", "assistant"}
+                        or type(chat_id) is not str
+                        or type(message_id) is not str
+                    ):
+                        return self._UNAVAILABLE
+                    label = f"conversation/{role} evidence"
+                    provenance = f" (chat {chat_id}, message {message_id})"
+                else:
                     return self._UNAVAILABLE
                 lines.append(
-                    f"- {result['memory_source_id']}: {result['preview']} ({result['category']})"
+                    f"- [{label}] {result['source_id']}: {result['preview']}{provenance}"
                 )
             if not lines:
-                return "No matching personal memory records found."
-            return "Personal memory search (lexical):\n" + "\n".join(lines)
+                return "No matching personal context found."
+            return f"Personal context search ({mode}):\n" + "\n".join(lines)
         except Exception:  # noqa: BLE001 - optional memory search must fail open.
             return self._UNAVAILABLE
 
@@ -166,7 +192,7 @@ class Tools:
         memory_source_id: str,
         __user__: dict | None = None,
     ) -> str:
-        """Expand one memory search result into evidence and native source IDs."""
+        """Expand one memory or conversation source with bounded provenance."""
         try:
             payload = {
                 "native_user_id": self._optional_id(__user__, "id") or "unknown",
@@ -174,39 +200,76 @@ class Tools:
             }
             response = await self._signed_json_post("/v1/personal-context/read", payload)
             expected = {
-                "memory_source_id",
-                "statement",
+                "source_id",
+                "source_type",
+                "content",
                 "category",
+                "role",
                 "evidence_quote",
                 "source_native_chat_id",
                 "source_native_message_id",
-                "neighboring_available",
+                "neighbors",
                 "full_source_available",
             }
             if not isinstance(response, dict) or set(response) != expected:
                 return self._UNAVAILABLE
             text_fields = (
-                "memory_source_id",
-                "statement",
+                "source_id",
+                "source_type",
+                "content",
                 "category",
-                "evidence_quote",
                 "source_native_chat_id",
                 "source_native_message_id",
             )
-            if any(type(response[field]) is not str for field in text_fields) or any(
-                type(response[field]) is not bool
-                for field in ("neighboring_available", "full_source_available")
+            if (
+                any(type(response[field]) is not str for field in text_fields)
+                or type(response["full_source_available"]) is not bool
+                or type(response["neighbors"]) is not list
             ):
                 return self._UNAVAILABLE
+            source_type = response["source_type"]
+            role = response["role"]
+            evidence_quote = response["evidence_quote"]
+            if source_type == "memory":
+                if role is not None or type(evidence_quote) is not str:
+                    return self._UNAVAILABLE
+            elif source_type == "conversation":
+                if role not in {"user", "assistant"} or evidence_quote is not None:
+                    return self._UNAVAILABLE
+            else:
+                return self._UNAVAILABLE
+            neighbor_lines: list[str] = []
+            for neighbor in response["neighbors"]:
+                if not isinstance(neighbor, dict) or set(neighbor) != {
+                    "role",
+                    "content",
+                    "source_native_chat_id",
+                    "source_native_message_id",
+                } or any(type(value) is not str for value in neighbor.values()):
+                    return self._UNAVAILABLE
+                if neighbor["role"] not in {"user", "assistant"}:
+                    return self._UNAVAILABLE
+                neighbor_lines.append(
+                    f"- {neighbor['role']} ({neighbor['source_native_message_id']}): "
+                    f"{neighbor['content']}"
+                )
+            source_label = "memory" if source_type == "memory" else "conversation"
+            role_line = f"Role: {role}\n" if role is not None else ""
+            evidence_line = (
+                f"Evidence: \"{evidence_quote}\"\n" if evidence_quote is not None else ""
+            )
+            neighbor_text = (
+                "\n".join(neighbor_lines) if neighbor_lines else "none"
+            )
             return (
-                f"Personal memory source {response['memory_source_id']}:\n"
-                f"Statement: {response['statement']}\n"
+                f"Personal {source_label} source {response['source_id']}:\n"
+                f"Content: {response['content']}\n"
                 f"Category: {response['category']}\n"
-                f"Evidence: \"{response['evidence_quote']}\"\n"
+                f"{role_line}"
+                f"{evidence_line}"
                 f"Source chat: {response['source_native_chat_id']}\n"
                 f"Source message: {response['source_native_message_id']}\n"
-                "Neighboring expansion available: "
-                f"{'yes' if response['neighboring_available'] else 'no'}\n"
+                f"Neighboring context: {neighbor_text}\n"
                 "Full-source expansion available: "
                 f"{'yes' if response['full_source_available'] else 'no'}"
             )
