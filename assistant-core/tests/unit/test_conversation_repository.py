@@ -12,6 +12,7 @@ from assistant_core.conversation.repository import (
     materialize_turn_passages,
     read_conversation_context,
     search_conversation_context,
+    tombstone_chat,
 )
 from assistant_core.turns.models import CompletedTurn
 
@@ -254,3 +255,78 @@ def test_hybrid_search_and_read_queries_are_owner_scoped_and_active_only() -> No
     assert sql.count("conversation_reference.tombstoned_at IS NULL") == 3
     assert sql.count("completed_turn.tombstoned_at IS NULL") == 3
     assert parameters.count("native-user-1") == 3
+
+
+def test_chat_tombstone_is_idempotent_and_preserves_shared_segments() -> None:
+    """Deletion hides native references/turns without physically deleting shared text."""
+    from sqlalchemy.dialects import postgresql
+
+    shared_segment = uuid.uuid4()
+    exclusive_segment = uuid.uuid4()
+
+    class RowsResult:
+        def __init__(self, values: list[uuid.UUID]) -> None:
+            self.values = values
+
+        def scalars(self) -> "RowsResult":
+            return self
+
+        def all(self) -> list[uuid.UUID]:
+            return self.values
+
+    class TombstoneSession:
+        def __init__(self) -> None:
+            self.results = iter(
+                [
+                    RowsResult([shared_segment, exclusive_segment]),
+                    RowsResult([uuid.uuid4(), uuid.uuid4()]),
+                    RowsResult([uuid.uuid4()]),
+                    RowsResult([exclusive_segment]),
+                    RowsResult([]),
+                    RowsResult([]),
+                    RowsResult([]),
+                    RowsResult([]),
+                ]
+            )
+            self.statements: list[object] = []
+
+        async def execute(self, statement: object) -> RowsResult:
+            self.statements.append(statement)
+            return next(self.results)
+
+    session = TombstoneSession()
+    user_id = uuid.uuid4()
+    occurred_at = datetime(2026, 8, 12, 13, 0, tzinfo=UTC)
+
+    async def exercise() -> tuple[object, object]:
+        first = await tombstone_chat(
+            session,  # type: ignore[arg-type]
+            user_id=user_id,
+            native_chat_id="deleted-chat",
+            occurred_at=occurred_at,
+        )
+        replay = await tombstone_chat(
+            session,  # type: ignore[arg-type]
+            user_id=user_id,
+            native_chat_id="deleted-chat",
+            occurred_at=occurred_at,
+        )
+        return first, replay
+
+    first, replay = anyio.run(exercise)
+
+    assert first.reference_count == 2
+    assert first.turn_count == 1
+    assert first.orphan_segment_count == 1
+    assert replay.reference_count == 0
+    assert replay.turn_count == 0
+    assert replay.orphan_segment_count == 0
+    compiled = [
+        statement.compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+        for statement in session.statements
+    ]
+    sql = "\n".join(str(statement) for statement in compiled)
+    assert "DELETE FROM" not in sql
+    assert sql.count("conversation_reference.tombstoned_at IS NULL") >= 4
+    assert "NOT (EXISTS" in sql
+    assert str(shared_segment) not in sql

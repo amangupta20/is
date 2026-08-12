@@ -59,3 +59,12 @@ class ConversationRead:
 
     selected: ConversationHit
     neighbors: tuple[ConversationNeighbor, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TombstoneResult:
+    """Content-free counts from one idempotent native-chat tombstone."""
+
+    reference_count: int
+    turn_count: int
+    orphan_segment_count: int

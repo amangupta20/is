@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select, tuple_, update
+from sqlalchemy import exists, func, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,7 @@ from assistant_core.conversation.schemas import (
     ConversationRead,
     ConversationRole,
     PassageMaterialization,
+    TombstoneResult,
 )
 from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
@@ -314,6 +315,71 @@ async def read_conversation_context(
     if following is not None:
         neighbors.append(following)
     return ConversationRead(selected=selected, neighbors=tuple(neighbors))
+
+
+async def tombstone_chat(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    native_chat_id: str,
+    occurred_at: datetime,
+) -> TombstoneResult:
+    """Hide one user's native chat while retaining reusable canonical segments."""
+    affected_segment_ids = list(
+        (
+            await session.execute(
+                select(ConversationReference.segment_id)
+                .where(
+                    ConversationReference.user_id == user_id,
+                    ConversationReference.native_chat_id == native_chat_id,
+                    ConversationReference.tombstoned_at.is_(None),
+                )
+                .distinct()
+            )
+        ).scalars().all()
+    )
+    reference_ids = (
+        await session.execute(
+            update(ConversationReference)
+            .where(
+                ConversationReference.user_id == user_id,
+                ConversationReference.native_chat_id == native_chat_id,
+                ConversationReference.tombstoned_at.is_(None),
+            )
+            .values(tombstoned_at=occurred_at)
+            .returning(ConversationReference.id)
+        )
+    ).scalars().all()
+    turn_ids = (
+        await session.execute(
+            update(CompletedTurn)
+            .where(
+                CompletedTurn.user_id == user_id,
+                CompletedTurn.native_chat_id == native_chat_id,
+                CompletedTurn.tombstoned_at.is_(None),
+            )
+            .values(tombstoned_at=occurred_at)
+            .returning(CompletedTurn.id)
+        )
+    ).scalars().all()
+    orphan_segment_ids = (
+        await session.execute(
+            select(ConversationSegment.id).where(
+                ConversationSegment.id.in_(affected_segment_ids),
+                ~exists(
+                    select(ConversationReference.id).where(
+                        ConversationReference.segment_id == ConversationSegment.id,
+                        ConversationReference.tombstoned_at.is_(None),
+                    )
+                ),
+            )
+        )
+    ).scalars().all()
+    return TombstoneResult(
+        reference_count=len(reference_ids),
+        turn_count=len(turn_ids),
+        orphan_segment_count=len(orphan_segment_ids),
+    )
 
 
 async def materialize_turn_passages(

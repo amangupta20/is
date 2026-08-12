@@ -28,6 +28,7 @@ from assistant_core.conversation.repository import (
     get_segment_content,
     materialize_turn_passages,
     store_segment_embedding,
+    tombstone_chat,
 )
 from assistant_core.db.session import create_database
 from assistant_core.events.models import EventInbox
@@ -135,6 +136,26 @@ async def handle(
     event = await session.get(EventInbox, event_id)
     if event is None:
         raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
+    if event.event_type == "chat.deleted":
+        native_chat_id = event.native_chat_id
+        if not native_chat_id or not native_chat_id.strip():
+            raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
+        result = await tombstone_chat(
+            session,
+            user_id=event.user_id,
+            native_chat_id=native_chat_id,
+            occurred_at=event.occurred_at,
+        )
+        LOGGER.info(
+            "conversation_chat_tombstoned",
+            event_id=event.event_id,
+            user_id=str(event.user_id),
+            chat_id=native_chat_id,
+            reference_count=result.reference_count,
+            turn_count=result.turn_count,
+            orphan_segment_count=result.orphan_segment_count,
+        )
+        return
     if event.event_type == "turn.completed.v1":
         await materialize_completed_turn(session, event)
         turn = await get_completed_turn_for_event(session, event.event_id)

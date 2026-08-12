@@ -344,6 +344,70 @@ def test_embedding_failure_preserves_committed_lexical_passages(
     assert updates == []
 
 
+def test_chat_deleted_routes_owner_and_chat_to_idempotent_tombstone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Duplicate deletion deliveries converge and logs contain only metadata."""
+    from assistant_core.conversation.schemas import TombstoneResult
+    from assistant_core.jobs import worker
+
+    user_id = uuid.uuid4()
+    event = EventInbox(
+        event_id="chat-deleted-event",
+        event_type="chat.deleted",
+        user_id=user_id,
+        native_chat_id="deleted-chat",
+        native_message_id=None,
+        occurred_at=datetime(2026, 8, 12, 13, 0, tzinfo=UTC),
+        payload={"source": "openwebui_event"},
+    )
+    calls: list[tuple[uuid.UUID, str]] = []
+    logs: list[dict[str, object]] = []
+    outcomes = iter(
+        [
+            TombstoneResult(reference_count=2, turn_count=1, orphan_segment_count=1),
+            TombstoneResult(reference_count=0, turn_count=0, orphan_segment_count=0),
+        ]
+    )
+
+    class Session:
+        async def get(self, model: object, key: object) -> object:
+            assert model is EventInbox
+            assert key == event.event_id
+            return event
+
+    async def tombstone(
+        _session: object,
+        *,
+        user_id: uuid.UUID,
+        native_chat_id: str,
+        occurred_at: datetime,
+    ) -> TombstoneResult:
+        assert occurred_at == event.occurred_at
+        calls.append((user_id, native_chat_id))
+        return next(outcomes)
+
+    class Logger:
+        def info(self, event_name: str, **fields: object) -> None:
+            logs.append({"event": event_name, **fields})
+
+    monkeypatch.setattr(worker, "tombstone_chat", tombstone, raising=False)
+    monkeypatch.setattr(worker, "LOGGER", Logger())
+
+    for _ in range(2):
+        anyio.run(
+            worker.handle,
+            Session(),  # type: ignore[arg-type]
+            "process_event",
+            {"event_id": event.event_id},
+        )
+
+    assert calls == [(user_id, "deleted-chat"), (user_id, "deleted-chat")]
+    assert [log["reference_count"] for log in logs] == [2, 0]
+    assert all(log["event"] == "conversation_chat_tombstoned" for log in logs)
+    assert "source" not in str(logs)
+
+
 def test_unsupported_kind_raises_constant_payload_free_error() -> None:
     """Unsupported jobs fail without rendering their payload."""
     from assistant_core.jobs.worker import (
