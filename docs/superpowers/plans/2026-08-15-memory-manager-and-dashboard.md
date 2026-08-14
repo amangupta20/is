@@ -34,7 +34,7 @@
 - Consumes: `AssistantSettings.admin_password` (or `hmac_secret` fallback) from `assistant_core/config.py`.
 - Produces: `POST /v1/auth/login`, `GET /v1/auth/check`, `POST /v1/auth/logout`, and dependency `require_session_or_signature`.
 
-- [ ] **Step 1: Write the failing tests for Auth API**
+- [x] **Step 1: Write the failing tests for Auth API**
 
 ```python
 # assistant-core/tests/unit/test_auth_api.py
@@ -64,21 +64,21 @@ def test_login_invalid_password_returns_401():
     assert res.status_code == 401
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run --directory assistant-core pytest tests/unit/test_auth_api.py -v`  
 Expected: FAIL (route not found / import error)
 
-- [ ] **Step 3: Implement Auth routes and dependency**
+- [x] **Step 3: Implement Auth routes and dependency**
 
 Add `admin_password` to `assistant_core/config.py`, create `assistant_core/api/routes/auth.py` with HMAC session token generation & verification, update `require_session_or_signature` in `assistant_core/api/dependencies.py`, and register auth router in `assistant_core/main.py`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run --directory assistant-core pytest tests/unit/test_auth_api.py -v`  
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add assistant-core/src/assistant_core/ assistant-core/tests/unit/test_auth_api.py
@@ -98,7 +98,7 @@ git commit -m "feat(auth): add password login and session authentication"
 - Consumes: `require_session_or_signature` from `assistant_core/api/dependencies.py`.
 - Produces: `POST /v1/personal-context/list`, `POST /v1/personal-context/archive`, `POST /v1/personal-context/update`, `POST /v1/personal-context/merge`.
 
-- [ ] **Step 1: Write the failing tests for Memory Management**
+- [x] **Step 1: Write the failing tests for Memory Management**
 
 ```python
 # In assistant-core/tests/unit/test_personal_context_api.py
@@ -108,21 +108,21 @@ def test_list_archive_and_merge_memories():
     # Test merging two memories into a single consolidated memory and archiving sources
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run --directory assistant-core pytest tests/unit/test_personal_context_api.py -v`  
 Expected: FAIL (endpoints not found)
 
-- [ ] **Step 3: Implement repository methods and routes**
+- [x] **Step 3: Implement repository methods and routes**
 
 Implement `list_memories`, `archive_memory`, `update_memory`, `merge_memories` in `assistant_core/memory/repository.py`. Expose endpoints in `assistant_core/api/routes/personal_context.py` protected by `require_session_or_signature`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run --directory assistant-core pytest tests/unit/test_personal_context_api.py -v`  
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add assistant-core/src/assistant_core/memory/ assistant-core/src/assistant_core/api/routes/ assistant-core/tests/unit/
@@ -141,7 +141,7 @@ git commit -m "feat(memory): add list, archive, update, and merge endpoints"
 - Consumes: `/v1/personal-context/list`, `/v1/personal-context/archive`, `/v1/personal-context/merge`.
 - Produces: Tool methods `list_memories`, `archive_memory`, `merge_memories`.
 
-- [ ] **Step 1: Write the failing tests in `test_assistant_core_tool.py`**
+- [x] **Step 1: Write the failing tests in `test_assistant_core_tool.py`**
 
 ```python
 # In adapters/openwebui/tests/test_assistant_core_tool.py
@@ -152,21 +152,21 @@ def test_tool_list_archive_and_merge_memories():
     # Test all fail open to _UNAVAILABLE on transport error
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run --directory assistant-core pytest ../adapters/openwebui/tests/test_assistant_core_tool.py -v`  
 Expected: FAIL (methods not present)
 
-- [ ] **Step 3: Implement tool methods**
+- [x] **Step 3: Implement tool methods**
 
 Add `list_memories`, `archive_memory`, `merge_memories` to `Tools` class in `adapters/openwebui/assistant_core_tool.py`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run --directory assistant-core pytest ../adapters/openwebui/tests/test_assistant_core_tool.py -v`  
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add adapters/openwebui/assistant_core_tool.py adapters/openwebui/tests/test_assistant_core_tool.py
@@ -188,7 +188,7 @@ git commit -m "feat(adapter): add list_memories, archive_memory, and merge_memor
 - Consumes: `/v1/auth/login`, `/v1/auth/check`, `/v1/personal-context/list`, `/v1/personal-context/archive`, `/v1/personal-context/update`, `/v1/personal-context/merge`, `/v1/inspection/stats`, `/v1/inspection/recent`.
 - Produces: `GET /ui` and static assets route.
 
-- [ ] **Step 1: Write the failing tests for UI routing**
+- [x] **Step 1: Write the failing tests for UI routing**
 
 ```python
 # assistant-core/tests/unit/test_ui_routes.py
@@ -204,12 +204,12 @@ def test_ui_index_served():
     assert "Memory Manager" in res.text
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run --directory assistant-core pytest tests/unit/test_ui_routes.py -v`  
 Expected: FAIL (404 Not Found)
 
-- [ ] **Step 3: Implement Dashboard UI and static mount**
+- [x] **Step 3: Implement Dashboard UI and static mount**
 
 Build modern, responsive `index.html`, `styles.css`, and `app.js` in `assistant-core/src/assistant_core/ui/` with:
 - Clean login screen.
@@ -218,14 +218,15 @@ Build modern, responsive `index.html`, `styles.css`, and `app.js` in `assistant-
 - Memory cards with status badges, evidence quotes, inline archive/edit.
 - Multi-select merge bar and modal.
 - Recent Activity tab with conversation and file references.
+- User identity context switcher.
 Mount `/ui` and static assets in `assistant-core/src/assistant_core/main.py`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run --directory assistant-core pytest tests/unit/test_ui_routes.py -v`  
 Expected: PASS
 
-- [ ] **Step 5: Run full test suite, linter, and type checks**
+- [x] **Step 5: Run full test suite, linter, and type checks**
 
 ```bash
 uv run --directory assistant-core pytest
@@ -234,7 +235,7 @@ uv run --directory assistant-core ruff check . ../adapters/openwebui
 uv run --directory assistant-core mypy
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add assistant-core/src/assistant_core/ui/ assistant-core/src/assistant_core/main.py assistant-core/tests/unit/test_ui_routes.py
