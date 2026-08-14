@@ -1,10 +1,32 @@
 """Strict extraction boundary for explicit-memory candidates."""
 
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 MemoryCategory = Literal["fact", "preference", "instruction", "project", "decision"]
+
+
+@dataclass(frozen=True, slots=True)
+class UserMemoryItem:
+    """Detailed memory item representation for management and inspection."""
+
+    id: str
+    key: str
+    category: str
+    statement: str
+    state: str
+    confidence: int
+    created_at: datetime
+    updated_at: datetime
+    archived_at: datetime | None
+    superseded_at: datetime | None
+    superseded_by_id: str | None
+    evidence_quote: str | None
+    native_chat_id: str | None
+    native_message_id: str | None
 
 
 class ExplicitMemoryCandidate(BaseModel):
@@ -28,3 +50,4 @@ class ExplicitMemoryCandidate(BaseModel):
         if not value.strip():
             raise ValueError("memory text must not be blank")
         return value
+
