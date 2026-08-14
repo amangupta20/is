@@ -309,3 +309,223 @@ def test_tool_valves_are_json_persistable_and_password_marked() -> None:
         module.Tools.Valves(timeout_seconds=0.09)
     with pytest.raises(ValidationError):
         module.Tools.Valves(timeout_seconds=10.01)
+
+
+def test_tool_list_memories_formats_markdown_and_handles_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module()
+    memories_payload = {
+        "memories": [
+            {
+                "id": "00000000-0000-0000-0000-000000000001",
+                "key": "pref_1",
+                "category": "preference",
+                "statement": "Keep responses concise.",
+                "state": "active",
+                "confidence": 95,
+                "created_at": "2026-08-15T03:00:00Z",
+                "updated_at": "2026-08-15T03:00:00Z",
+                "evidence_quote": "Please keep it brief.",
+            },
+            {
+                "id": "00000000-0000-0000-0000-000000000002",
+                "key": "fact_1",
+                "category": "fact",
+                "statement": "Building Open WebUI companion.",
+                "state": "active",
+                "confidence": 90,
+                "created_at": "2026-08-14T12:00:00Z",
+                "updated_at": "2026-08-14T12:00:00Z",
+                "evidence_quote": None,
+            },
+        ]
+    }
+    capture: dict[str, Any] = {}
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda *, timeout: _RecordingClient(capture, timeout, memories_payload),
+    )
+    tool = module.Tools()
+    user = {"id": "user-1"}
+    res = asyncio.run(
+        tool.list_memories(category="preference", status="active", limit=50, __user__=user)
+    )
+
+    assert (
+        "- [preference] 00000000-0000-0000-0000-000000000001: Keep responses concise. (created 2026-08-15 | state: active)\n  Evidence: \"Please keep it brief.\""
+        in res
+    )
+    assert (
+        "- [fact] 00000000-0000-0000-0000-000000000002: Building Open WebUI companion. (created 2026-08-14 | state: active)"
+        in res
+    )
+
+    body = json.loads(capture["content"])
+    assert body["native_user_id"] == "user-1"
+    assert body["category"] == "preference"
+    assert body["status"] == "active"
+    assert body["limit"] == 50
+
+    # Test empty list
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda *, timeout: _RecordingClient(capture, timeout, {"memories": []}),
+    )
+    empty_res = asyncio.run(tool.list_memories(__user__=user))
+    assert empty_res == "No memories found matching criteria."
+
+    # Test invalid status fallback to active and category None
+    asyncio.run(
+        tool.list_memories(category="", status="invalid_status", limit=20, __user__=user)
+    )
+    body_fallback = json.loads(capture["content"])
+    assert body_fallback["status"] == "active"
+    assert body_fallback["category"] is None
+    assert body_fallback["limit"] == 20
+
+    # Test failure / network error fails open to UNAVAILABLE
+    class _FailingClient(_RecordingClient):
+        async def post(self, url: str, **kwargs: Any) -> _Response:
+            raise RuntimeError("network failure")
+
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda *, timeout: _FailingClient({}, timeout, {}),
+    )
+    assert asyncio.run(tool.list_memories(__user__=user)) == UNAVAILABLE
+
+
+def test_tool_archive_memory(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+    mem_id = "00000000-0000-0000-0000-000000000001"
+    capture: dict[str, Any] = {}
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda *, timeout: _RecordingClient(
+            capture,
+            timeout,
+            {"status": "ok", "archived_id": mem_id, "archived_at": "2026-08-15T03:30:00Z"},
+        ),
+    )
+    tool = module.Tools()
+    user = {"id": "user-1"}
+    res = asyncio.run(tool.archive_memory(memory_id=f"  {mem_id}  ", __user__=user))
+    assert res == f"Successfully archived memory   {mem_id}  ."
+    body = json.loads(capture["content"])
+    assert body["native_user_id"] == "user-1"
+    assert body["memory_id"] == mem_id
+
+    # Test empty memory_id fails open to UNAVAILABLE
+    assert asyncio.run(tool.archive_memory(memory_id="   ", __user__=user)) == UNAVAILABLE
+
+    # Test failure / network error fails open to UNAVAILABLE
+    class _FailingClient(_RecordingClient):
+        async def post(self, url: str, **kwargs: Any) -> _Response:
+            raise RuntimeError("network failure")
+
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda *, timeout: _FailingClient({}, timeout, {}),
+    )
+    assert asyncio.run(tool.archive_memory(memory_id=mem_id, __user__=user)) == UNAVAILABLE
+
+
+def test_tool_merge_memories(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+    source_ids = "00000000-0000-0000-0000-000000000001, 00000000-0000-0000-0000-000000000002"
+    created_id = "00000000-0000-0000-0000-000000000003"
+    new_stmt = "Consolidated preference statement."
+    capture: dict[str, Any] = {}
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda *, timeout: _RecordingClient(
+            capture,
+            timeout,
+            {
+                "status": "ok",
+                "created_id": created_id,
+                "archived_source_ids": [
+                    "00000000-0000-0000-0000-000000000001",
+                    "00000000-0000-0000-0000-000000000002",
+                ],
+            },
+        ),
+    )
+    tool = module.Tools()
+    user = {"id": "user-1"}
+    res = asyncio.run(
+        tool.merge_memories(
+            source_memory_ids=source_ids,
+            new_statement=new_stmt,
+            category="preference",
+            __user__=user,
+        )
+    )
+    assert (
+        res
+        == f"Successfully merged 2 memories into new preference memory {created_id}: '{new_stmt}'."
+    )
+    body = json.loads(capture["content"])
+    assert body["native_user_id"] == "user-1"
+    assert body["source_memory_ids"] == [
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000002",
+    ]
+    assert body["target_category"] == "preference"
+    assert body["new_statement"] == new_stmt
+
+    # Test fewer than 2 IDs fails open to UNAVAILABLE
+    assert (
+        asyncio.run(
+            tool.merge_memories(
+                source_memory_ids="00000000-0000-0000-0000-000000000001",
+                new_statement=new_stmt,
+                category="preference",
+                __user__=user,
+            )
+        )
+        == UNAVAILABLE
+    )
+
+    # Test empty statement fails open to UNAVAILABLE
+    assert (
+        asyncio.run(
+            tool.merge_memories(
+                source_memory_ids=source_ids,
+                new_statement="   ",
+                category="preference",
+                __user__=user,
+            )
+        )
+        == UNAVAILABLE
+    )
+
+    # Test failure / network error fails open to UNAVAILABLE
+    class _FailingClient(_RecordingClient):
+        async def post(self, url: str, **kwargs: Any) -> _Response:
+            raise RuntimeError("network failure")
+
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda *, timeout: _FailingClient({}, timeout, {}),
+    )
+    assert (
+        asyncio.run(
+            tool.merge_memories(
+                source_memory_ids=source_ids,
+                new_statement=new_stmt,
+                category="preference",
+                __user__=user,
+            )
+        )
+        == UNAVAILABLE
+    )
+
