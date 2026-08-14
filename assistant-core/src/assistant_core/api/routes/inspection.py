@@ -23,7 +23,7 @@ class InspectionRecentRequest(BaseModel):
     native_user_id: str = Field(min_length=1, max_length=200)
     native_chat_id: str | None = Field(default=None, max_length=200)
     native_message_id: str | None = Field(default=None, max_length=200)
-    limit: int = Field(default=5, ge=1, le=10)
+    limit: int = Field(default=5, ge=1, le=100)
 
 
 class RecentReferenceItem(BaseModel):

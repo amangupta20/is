@@ -304,6 +304,54 @@ async function handleLogin(e) {
   setButtonLoading(els.loginBtn, false);
 }
 
+async function initUserSelector() {
+  try {
+    const data = await api('/v1/personal-context/users', { method: 'GET' });
+    const users = data.users || [];
+    if (users.length > 0) {
+      // If current userId is placeholder default or not found, select primary active user
+      if (state.userId === 'default' || !users.includes(state.userId)) {
+        state.userId = users[0];
+        localStorage.setItem('assistant_ui_user_id', state.userId);
+      }
+      if (els.userIdInput) {
+        els.userIdInput.value = state.userId;
+      }
+      // Populate datalist for user dropdown suggestions
+      let datalist = document.getElementById('user-ids-list');
+      if (!datalist) {
+        datalist = document.createElement('datalist');
+        datalist.id = 'user-ids-list';
+        document.body.appendChild(datalist);
+      }
+      datalist.innerHTML = users.map((u) => `<option value="${escapeHtml(u)}"></option>`).join('');
+      if (els.userIdInput) {
+        els.userIdInput.setAttribute('list', 'user-ids-list');
+      }
+    }
+  } catch (err) {
+    console.warn('Could not auto-fetch user list:', err);
+  }
+}
+
+async function setAuthenticated(isAuth) {
+  state.authenticated = isAuth;
+  if (isAuth) {
+    if (els.authView) {
+      els.authView.classList.add('hidden');
+      els.authView.style.display = 'none';
+    }
+    if (els.dashboardView) {
+      els.dashboardView.classList.remove('hidden');
+      els.dashboardView.style.display = 'block';
+    }
+    await initUserSelector();
+    refreshDashboard();
+  } else {
+    handleUnauthenticated();
+  }
+}
+
 async function handleLogout() {
   try {
     await api('/v1/auth/logout', { method: 'POST' });
@@ -380,24 +428,27 @@ function renderStats(stats) {
   const deadJobs = stats.dead_jobs || 0;
 
   els.statConversationSegments.textContent = totalSegments.toLocaleString();
-  els.statConversationSub.textContent = `${embeddedSegments.toLocaleString()} embedded &bull; ${lexicalSegments.toLocaleString()} lexical`;
+  els.statConversationSub.textContent = `${embeddedSegments.toLocaleString()} embedded • ${lexicalSegments.toLocaleString()} lexical`;
 
   els.statFileSegments.textContent = totalFileSegments.toLocaleString();
   els.statFilesSub.textContent = `${(stats.active_file_references || 0).toLocaleString()} active file references`;
 
   els.statQueueStatus.textContent = queuedJobs === 0 && deadJobs === 0 ? 'Healthy' : `${queuedJobs} queued`;
-  els.statQueueSub.textContent = `${queuedJobs} queued &bull; ${deadJobs} dead jobs`;
+  els.statQueueSub.textContent = `${queuedJobs} queued • ${deadJobs} dead jobs`;
 }
 
 async function loadRecentReferences() {
   try {
     const data = await api('/v1/inspection/recent', {
       method: 'POST',
-      body: JSON.stringify({ native_user_id: state.userId, limit: 15 }),
+      body: JSON.stringify({ native_user_id: state.userId, limit: 10 }),
     });
     state.recentReferences = data.results || [];
     renderRecentReferencesTable();
   } catch (err) {
+    showToast(`Failed to load inspection references: ${err.message}`, 'error');
+  }
+}
     showToast(`Failed to load inspection references: ${err.message}`, 'error');
   }
 }
@@ -454,7 +505,7 @@ function updateCategoryCounts() {
 
   els.memoriesCountBadge.textContent = counts.all;
   els.statActiveMemories.textContent = counts.all;
-  els.statMemoriesSub.textContent = `${counts.preference} pref &bull; ${counts.instruction} inst &bull; ${counts.fact} fact`;
+  els.statMemoriesSub.textContent = `${counts.preference} pref • ${counts.instruction} inst • ${counts.fact} fact`;
 
   document.getElementById('pill-count-all').textContent = counts.all;
   document.getElementById('pill-count-preference').textContent = counts.preference;

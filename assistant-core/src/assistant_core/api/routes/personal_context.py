@@ -9,6 +9,7 @@ from typing import Literal
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import select
 
 from assistant_core.api.dependencies import (
     require_adapter_signature,
@@ -591,4 +592,31 @@ async def merge_personal_context_memories(
         created_id=str(new_record.id),
         archived_source_ids=[str(sid) for sid in source_ids],
     )
+
+
+class PersonalContextUsersResponse(BaseModel):
+    """List of known native user IDs in the database."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    users: list[str]
+
+
+@router.get(
+    "/users",
+    dependencies=[Depends(require_session_or_signature)],
+    response_model=PersonalContextUsersResponse,
+)
+async def list_personal_context_users(request: Request) -> PersonalContextUsersResponse:
+    """Return all known native user IDs ordered by recent activity."""
+    async with request.app.state.session_factory() as session:
+        statement = (
+            select(UserIdentity.native_user_id)
+            .order_by(UserIdentity.created_at.desc())
+            .limit(100)
+        )
+        result = await session.execute(statement)
+        users = [str(row[0]) for row in result.all()]
+    return PersonalContextUsersResponse(users=users)
+
 
