@@ -40,6 +40,24 @@ class FileMaterializeResponse(BaseModel):
     embedded: int = 0
 
 
+class FileTombstoneRequest(BaseModel):
+    """Per-user file to tombstone."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    native_user_id: str = Field(min_length=1, max_length=200)
+    native_file_id: str = Field(min_length=1, max_length=200)
+
+
+class FileTombstoneResponse(BaseModel):
+    """Metadata-only tombstone result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    native_file_id: str
+    tombstoned_references: int
+
+
 @router.post(
     "/materialize",
     dependencies=[Depends(require_adapter_signature)],
@@ -143,3 +161,34 @@ async def materialize_file_route(
             new_references=counts["new_references"],
             embedded=embedded,
         )
+
+
+@router.post(
+    "/tombstone",
+    dependencies=[Depends(require_adapter_signature)],
+    response_model=FileTombstoneResponse,
+)
+async def tombstone_file_route(
+    body: FileTombstoneRequest, request: Request
+) -> FileTombstoneResponse:
+    """Tombstone all active references for a file without exposing content."""
+    from assistant_core.files.repository import tombstone_file
+
+    async with request.app.state.session_factory() as session:
+        user_id = (
+            await session.execute(
+                select(UserIdentity.id).where(UserIdentity.native_user_id == body.native_user_id)
+            )
+        ).scalar_one_or_none()
+        if user_id is None:
+            LOGGER.info("file_tombstone_completed", user_found=False, native_file_id=body.native_file_id)
+            return FileTombstoneResponse(native_file_id=body.native_file_id, tombstoned_references=0)
+        count = await tombstone_file(session, user_id=user_id, native_file_id=body.native_file_id)
+        await session.commit()
+        LOGGER.info(
+            "file_tombstone_completed",
+            user_found=True,
+            native_file_id=body.native_file_id,
+            tombstoned_references=count,
+        )
+        return FileTombstoneResponse(native_file_id=body.native_file_id, tombstoned_references=count)

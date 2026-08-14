@@ -33,6 +33,7 @@ from assistant_core.conversation.repository import (
 )
 from assistant_core.db.session import create_database
 from assistant_core.events.models import EventInbox
+from assistant_core.files.repository import tombstone_file
 from assistant_core.jobs.models import Job
 from assistant_core.jobs.repository import claim_next_job, complete_job, fail_job
 from assistant_core.memory.extractor import (
@@ -137,6 +138,27 @@ async def handle(
     event = await session.get(EventInbox, event_id)
     if event is None:
         raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
+    if event.event_type == "file.deleted":
+        # Lifecycle Event forwards file_id in payload for file.deleted
+        file_id = None
+        if isinstance(event.payload, dict):
+            file_id = event.payload.get("file_id")
+            if not isinstance(file_id, str) or not file_id.strip():
+                file_id = None
+        # Fallback to native_chat_id for legacy file_id transport
+        if file_id is None:
+            file_id = event.native_chat_id
+        if not file_id or not file_id.strip():
+            raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
+        count = await tombstone_file(session, user_id=event.user_id, native_file_id=file_id)
+        LOGGER.info(
+            "file_tombstoned",
+            event_id=event.event_id,
+            user_id=str(event.user_id),
+            file_id=file_id,
+            reference_count=count,
+        )
+        return
     if event.event_type == "chat.deleted":
         native_chat_id = event.native_chat_id
         if not native_chat_id or not native_chat_id.strip():

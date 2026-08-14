@@ -2,6 +2,7 @@
 
 import hashlib
 import uuid
+from datetime import UTC
 from typing import Any
 
 from sqlalchemy import func, select, text
@@ -145,6 +146,31 @@ async def get_file_stats(session: AsyncSession, user_id: uuid.UUID) -> dict[str,
         "tombstoned_references": total_references - active_references,
     }
 
+
+async def tombstone_file(
+    session: AsyncSession, *, user_id: uuid.UUID, native_file_id: str
+) -> int:
+    """Mark all active references for a file as tombstoned. Returns count."""
+    from datetime import datetime
+
+    result = await session.execute(
+        select(FileReference.id).where(
+            FileReference.user_id == user_id,
+            FileReference.native_file_id == native_file_id,
+            FileReference.tombstoned_at.is_(None),
+        )
+    )
+    ids = [r[0] for r in result.all()]
+    if not ids:
+        return 0
+    from sqlalchemy import update
+
+    await session.execute(
+        update(FileReference)
+        .where(FileReference.id.in_(ids))
+        .values(tombstoned_at=datetime.now(UTC))
+    )
+    return len(ids)
 
 async def search_file_context(
     session: AsyncSession,
