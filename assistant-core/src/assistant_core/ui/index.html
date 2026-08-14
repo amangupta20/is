@@ -4,10 +4,1437 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Assistant Core &bull; Memory Manager &amp; Diagnostics</title>
-  <link rel="stylesheet" href="/ui/styles.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+/* ==========================================================================
+   Assistant Core Dashboard Design System & Tokens
+   ========================================================================== */
+
+:root {
+  /* Theme: Dark (Default) */
+  --bg-canvas: #090d16;
+  --bg-surface: #0f172a;
+  --bg-card: #131d31;
+  --bg-card-hover: #17243c;
+  --bg-elevated: #1e293b;
+  --bg-input: #0b1120;
+  --bg-modal-overlay: rgba(3, 7, 18, 0.75);
+
+  --border-subtle: #1e293b;
+  --border-base: #334155;
+  --border-focus: #3b82f6;
+
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --text-inverted: #0f172a;
+
+  --accent-primary: #3b82f6;
+  --accent-primary-hover: #2563eb;
+  --accent-primary-subtle: rgba(59, 130, 246, 0.12);
+  --accent-primary-border: rgba(59, 130, 246, 0.25);
+
+  --cat-pref-bg: rgba(56, 189, 248, 0.12);
+  --cat-pref-text: #38bdf8;
+  --cat-pref-border: rgba(56, 189, 248, 0.25);
+
+  --cat-inst-bg: rgba(45, 212, 191, 0.12);
+  --cat-inst-text: #2dd4bf;
+  --cat-inst-border: rgba(45, 212, 191, 0.25);
+
+  --cat-fact-bg: rgba(251, 191, 36, 0.12);
+  --cat-fact-text: #fbbf24;
+  --cat-fact-border: rgba(251, 191, 36, 0.25);
+
+  --cat-proj-bg: rgba(129, 140, 248, 0.12);
+  --cat-proj-text: #818cf8;
+  --cat-proj-border: rgba(129, 140, 248, 0.25);
+
+  --cat-dec-bg: rgba(251, 113, 133, 0.12);
+  --cat-dec-text: #fb7185;
+  --cat-dec-border: rgba(251, 113, 133, 0.25);
+
+  --status-active-bg: rgba(34, 197, 94, 0.12);
+  --status-active-text: #4ade80;
+  --status-active-border: rgba(34, 197, 94, 0.25);
+
+  --status-archived-bg: rgba(148, 163, 184, 0.12);
+  --status-archived-text: #94a3b8;
+  --status-archived-border: rgba(148, 163, 184, 0.25);
+
+  --status-superseded-bg: rgba(245, 158, 11, 0.12);
+  --status-superseded-text: #fbbf24;
+  --status-superseded-border: rgba(245, 158, 11, 0.25);
+
+  --danger-bg: rgba(239, 68, 68, 0.12);
+  --danger-text: #f87171;
+  --danger-border: rgba(239, 68, 68, 0.25);
+  --danger-btn: #dc2626;
+  --danger-btn-hover: #b91c1c;
+
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 8px 10px -6px rgba(0, 0, 0, 0.6);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 9999px;
+
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+[data-theme="light"] {
+  --bg-canvas: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f1f5f9;
+  --bg-elevated: #f1f5f9;
+  --bg-input: #ffffff;
+  --bg-modal-overlay: rgba(15, 23, 42, 0.5);
+
+  --border-subtle: #e2e8f0;
+  --border-base: #cbd5e1;
+  --border-focus: #2563eb;
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --text-inverted: #ffffff;
+
+  --accent-primary: #2563eb;
+  --accent-primary-hover: #1d4ed8;
+  --accent-primary-subtle: rgba(37, 99, 235, 0.08);
+  --accent-primary-border: rgba(37, 99, 235, 0.2);
+
+  --cat-pref-bg: #e0f2fe;
+  --cat-pref-text: #0284c7;
+  --cat-pref-border: #bae6fd;
+
+  --cat-inst-bg: #ccfbf1;
+  --cat-inst-text: #0f766e;
+  --cat-inst-border: #99f6e4;
+
+  --cat-fact-bg: #fef3c7;
+  --cat-fact-text: #b45309;
+  --cat-fact-border: #fde68a;
+
+  --cat-proj-bg: #e0e7ff;
+  --cat-proj-text: #4338ca;
+  --cat-proj-border: #c7d2fe;
+
+  --cat-dec-bg: #ffe4e6;
+  --cat-dec-text: #be123c;
+  --cat-dec-border: #fecdd3;
+
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
+}
+
+/* ==========================================================================
+   Base Styles & Reset
+   ========================================================================== */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  background-color: var(--bg-canvas);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+input, button, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ==========================================================================
+   Layout Containers
+   ========================================================================== */
+
+.app-root {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.view {
+  width: 100%;
+}
+
+/* ==========================================================================
+   Authentication Screen
+   ========================================================================== */
+
+.auth-view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.auth-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  width: 100%;
+  max-width: 440px;
+  padding: 36px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.auth-header {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: var(--accent-primary-subtle);
+  border: 1px solid var(--accent-primary-border);
+  color: var(--accent-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+
+.auth-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+.auth-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* ==========================================================================
+   Header & Navigation
+   ========================================================================== */
+
+.app-header {
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  backdrop-filter: blur(8px);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+
+.brand-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+.brand-badge svg {
+  color: var(--accent-primary);
+}
+
+.nav-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-input);
+  padding: 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+}
+
+.nav-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+
+.nav-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-card);
+}
+
+.nav-tab.active {
+  color: var(--text-primary);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-identity-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 4px 10px;
+}
+
+.identity-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.identity-input {
+  background: transparent;
+  border: none;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  width: 110px;
+  outline: none;
+}
+
+.identity-input:focus {
+  color: var(--accent-primary);
+}
+
+/* ==========================================================================
+   Main Content Layout
+   ========================================================================== */
+
+.app-main {
+  max-width: 1360px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  flex: 1;
+}
+
+/* ==========================================================================
+   Metrics Overview Bar
+   ========================================================================== */
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.metric-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--transition-fast), border-color var(--transition-fast);
+}
+
+.metric-card:hover {
+  transform: translateY(-1px);
+  border-color: var(--border-base);
+}
+
+.metric-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.metric-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.metric-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.metric-icon-blue {
+  background: var(--accent-primary-subtle);
+  color: var(--accent-primary);
+}
+
+.metric-icon-emerald {
+  background: var(--cat-inst-bg);
+  color: var(--cat-inst-text);
+}
+
+.metric-icon-indigo {
+  background: var(--cat-proj-bg);
+  color: var(--cat-proj-text);
+}
+
+.metric-icon-amber {
+  background: var(--cat-fact-bg);
+  color: var(--cat-fact-text);
+}
+
+.metric-value {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.03em;
+  margin-top: 2px;
+}
+
+.metric-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ==========================================================================
+   Toolbar & Filtering
+   ========================================================================== */
+
+.toolbar-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.toolbar-search-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.search-input-wrapper {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.search-icon {
+  position: absolute;
+  left: 14px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.search-input {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 10px 38px 10px 42px;
+  font-size: 13.5px;
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.search-input:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 1px var(--border-focus);
+}
+
+.search-clear-btn {
+  position: absolute;
+  right: 12px;
+  font-size: 18px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.search-clear-btn:hover {
+  color: var(--text-primary);
+}
+
+.status-segmented-control {
+  display: flex;
+  align-items: center;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 3px;
+}
+
+.segment-btn {
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+
+.segment-btn:hover {
+  color: var(--text-primary);
+}
+
+.segment-btn.active {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+.category-pills-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 12.5px;
+  font-weight: 500;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+
+.pill:hover {
+  border-color: var(--border-base);
+  color: var(--text-primary);
+}
+
+.pill.active {
+  background: var(--accent-primary-subtle);
+  border-color: var(--accent-primary-border);
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.pill-pref .pill-dot { background-color: var(--cat-pref-text); }
+.pill-inst .pill-dot { background-color: var(--cat-inst-text); }
+.pill-fact .pill-dot { background-color: var(--cat-fact-text); }
+.pill-proj .pill-dot { background-color: var(--cat-proj-text); }
+.pill-dec .pill-dot { background-color: var(--cat-dec-text); }
+
+.pill-count {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* ==========================================================================
+   Memory Cards Grid & Cards
+   ========================================================================== */
+
+.memories-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.memories-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: 16px;
+}
+
+.memory-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: var(--shadow-sm);
+  transition: all var(--transition-fast);
+  position: relative;
+}
+
+.memory-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-base);
+  box-shadow: var(--shadow-md);
+}
+
+.memory-card.selected {
+  border-color: var(--accent-primary);
+  background: rgba(59, 130, 246, 0.03);
+}
+
+.memory-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.card-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.card-select-checkbox {
+  width: 17px;
+  height: 17px;
+  border-radius: 4px;
+  cursor: pointer;
+  accent-color: var(--accent-primary);
+}
+
+.memory-statement {
+  font-size: 14.5px;
+  font-weight: 500;
+  line-height: 1.55;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+/* Collapsible Evidence Accordion */
+.evidence-accordion {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  overflow: hidden;
+}
+
+.evidence-toggle {
+  width: 100%;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  transition: color var(--transition-fast);
+}
+
+.evidence-toggle:hover {
+  color: var(--text-secondary);
+}
+
+.evidence-toggle svg {
+  transition: transform var(--transition-fast);
+}
+
+.evidence-accordion.open .evidence-toggle svg {
+  transform: rotate(180deg);
+}
+
+.evidence-content {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.evidence-quote {
+  font-style: italic;
+  line-height: 1.45;
+  border-left: 2px solid var(--accent-primary);
+  padding-left: 10px;
+  color: var(--text-primary);
+}
+
+.evidence-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ==========================================================================
+   Badges, Pills, Buttons
+   ========================================================================== */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.badge-pill {
+  border-radius: var(--radius-pill);
+  background: var(--bg-elevated);
+  padding: 2px 7px;
+  font-size: 11px;
+}
+
+.badge-pref {
+  background: var(--cat-pref-bg);
+  color: var(--cat-pref-text);
+  border: 1px solid var(--cat-pref-border);
+}
+
+.badge-inst {
+  background: var(--cat-inst-bg);
+  color: var(--cat-inst-text);
+  border: 1px solid var(--cat-inst-border);
+}
+
+.badge-fact {
+  background: var(--cat-fact-bg);
+  color: var(--cat-fact-text);
+  border: 1px solid var(--cat-fact-border);
+}
+
+.badge-proj {
+  background: var(--cat-proj-bg);
+  color: var(--cat-proj-text);
+  border: 1px solid var(--cat-proj-border);
+}
+
+.badge-dec {
+  background: var(--cat-dec-bg);
+  color: var(--cat-dec-text);
+  border: 1px solid var(--cat-dec-border);
+}
+
+.badge-active {
+  background: var(--status-active-bg);
+  color: var(--status-active-text);
+  border: 1px solid var(--status-active-border);
+}
+
+.badge-archived {
+  background: var(--status-archived-bg);
+  color: var(--status-archived-text);
+  border: 1px solid var(--status-archived-border);
+}
+
+.badge-superseded {
+  background: var(--status-superseded-bg);
+  color: var(--status-superseded-text);
+  border: 1px solid var(--status-superseded-border);
+}
+
+.code-pill {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 600;
+  transition: all var(--transition-fast);
+}
+
+.btn-primary {
+  background: var(--accent-primary);
+  color: #ffffff;
+}
+
+.btn-primary:hover {
+  background: var(--accent-primary-hover);
+}
+
+.btn-secondary {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.btn-secondary:hover {
+  border-color: var(--border-base);
+  background: var(--bg-card-hover);
+}
+
+.btn-danger-ghost {
+  color: var(--text-muted);
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.btn-danger-ghost:hover {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+}
+
+.btn-ghost {
+  color: var(--text-muted);
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.btn-ghost:hover {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+}
+
+.btn-sm {
+  padding: 5px 12px;
+  font-size: 12.5px;
+  border-radius: var(--radius-sm);
+}
+
+.btn-block {
+  width: 100%;
+}
+
+.btn-icon-only {
+  padding: 8px;
+}
+
+.icon-btn {
+  padding: 8px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+
+.icon-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+}
+
+/* ==========================================================================
+   Floating Merge Action Bar
+   ========================================================================== */
+
+.floating-merge-bar {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-pill);
+  padding: 10px 20px;
+  box-shadow: var(--shadow-xl);
+  z-index: 50;
+  animation: slideUp 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 20px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.merge-bar-content {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.merge-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.merge-count-badge {
+  background: var(--accent-primary);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+
+.merge-info-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.merge-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ==========================================================================
+   Modals
+   ========================================================================== */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-modal-overlay);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 100;
+}
+
+.modal-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  width: 100%;
+  max-width: 540px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: modalEnter 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.modal-card-lg {
+  max-width: 680px;
+}
+
+@keyframes modalEnter {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.modal-header {
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.modal-close-btn {
+  font-size: 22px;
+  color: var(--text-muted);
+  line-height: 1;
+  padding: 4px;
+}
+
+.modal-close-btn:hover {
+  color: var(--text-primary);
+}
+
+.modal-form {
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.modal-description {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.modal-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.modal-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.modal-meta-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.form-input, .form-textarea, .form-select {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 9px 12px;
+  font-size: 13.5px;
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.form-input:focus, .form-textarea:focus, .form-select:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 1px var(--border-focus);
+}
+
+.form-textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.char-count {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.merge-sources-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.merge-source-item {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.merge-source-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* ==========================================================================
+   Diagnostics & Tables
+   ========================================================================== */
+
+.diagnostics-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: var(--shadow-sm);
+}
+
+.diagnostics-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.section-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.table-wrapper {
+  overflow-x: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+
+.data-table th {
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.data-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.data-table tbody tr:hover {
+  background: var(--bg-card-hover);
+}
+
+.table-empty {
+  text-align: center;
+  padding: 32px 16px !important;
+  color: var(--text-muted);
+}
+
+/* ==========================================================================
+   Empty & Loading States
+   ========================================================================== */
+
+.loading-state, .empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+  gap: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.empty-icon {
+  color: var(--text-muted);
+}
+
+.empty-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.empty-description {
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-width: 440px;
+  line-height: 1.45;
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--border-subtle);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+.btn-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ==========================================================================
+   Toast Notifications
+   ========================================================================== */
+
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.toast {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-md);
+  padding: 12px 18px;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  pointer-events: auto;
+  animation: toastIn 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  min-width: 280px;
+  max-width: 400px;
+}
+
+.toast-success {
+  border-left: 4px solid #10b981;
+}
+
+.toast-error {
+  border-left: 4px solid #ef4444;
+}
+
+.toast-info {
+  border-left: 4px solid #3b82f6;
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.toast-out {
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+/* ==========================================================================
+   Form Errors & Helpers
+   ========================================================================== */
+
+.form-error {
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  color: var(--danger-text);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+}
+
+.input-with-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input-action-btn {
+  position: absolute;
+  right: 10px;
+  color: var(--text-muted);
+  padding: 4px;
+}
+
+.input-action-btn:hover {
+  color: var(--text-primary);
+}
+
+/* ==========================================================================
+   Responsive Breakpoints
+   ========================================================================== */
+
+@media (max-width: 1024px) {
+  .metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .memories-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-header {
+    flex-direction: column;
+    gap: 12px;
+    align-items: stretch;
+    padding: 12px 16px;
+  }
+  .header-left, .header-right {
+    justify-content: space-between;
+  }
+  .metrics-grid {
+    grid-template-columns: 1fr;
+  }
+  .toolbar-search-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .status-segmented-control {
+    width: 100%;
+    justify-content: center;
+  }
+  .form-grid-2 {
+    grid-template-columns: 1fr;
+  }
+  .floating-merge-bar {
+    width: calc(100% - 32px);
+    border-radius: var(--radius-lg);
+  }
+}
+
+    /* Fallback guaranteed critical rules */
+    .hidden { display: none !important; }
+    .form-error {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fca5a5;
+      padding: 10px 14px;
+      border-radius: var(--radius-md);
+      font-size: 13px;
+      font-weight: 500;
+      text-align: center;
+      margin-top: 4px;
+    }
+  </style>
 </head>
 <body>
   <!-- Toast Notification Container -->
@@ -17,7 +1444,7 @@
   <div id="app" class="app-root">
 
     <!-- Auth View (Shown when not authenticated) -->
-    <section id="auth-view" class="view auth-view hidden">
+    <section id="auth-view" class="view auth-view">
       <div class="auth-card">
         <div class="auth-header">
           <div class="brand-icon">
@@ -64,8 +1491,8 @@
       </div>
     </section>
 
-    <!-- Main Dashboard View (Shown when authenticated) -->
-    <div id="dashboard-view" class="view dashboard-view hidden">
+    <!-- Main Dashboard View (Shown ONLY when authenticated) -->
+    <div id="dashboard-view" class="view dashboard-view hidden" style="display: none !important;">
       <!-- Top Navigation Bar -->
       <header class="app-header">
         <div class="header-left">
@@ -215,7 +1642,7 @@
                   type="text" 
                   id="search-input" 
                   class="search-input" 
-                  placeholder="Filter statements, keys, or evidence quotes..."
+                  placeholder="Filter statements, keys, or evidence quotes..." 
                   aria-label="Search memories"
                 >
                 <button type="button" id="search-clear-btn" class="search-clear-btn hidden" title="Clear search">
@@ -240,61 +1667,57 @@
               </button>
             </div>
 
-            <!-- Category Pills -->
+            <!-- Category Pills Filter Row -->
             <div class="category-pills-row" role="group" aria-label="Category filter">
               <button type="button" class="pill active" data-category="all">
                 <span>All Categories</span>
                 <span class="pill-count" id="pill-count-all">0</span>
               </button>
               <button type="button" class="pill pill-pref" data-category="preference">
-                <span class="pill-dot"></span>
                 <span>Preferences</span>
                 <span class="pill-count" id="pill-count-preference">0</span>
               </button>
               <button type="button" class="pill pill-inst" data-category="instruction">
-                <span class="pill-dot"></span>
                 <span>Instructions</span>
                 <span class="pill-count" id="pill-count-instruction">0</span>
               </button>
               <button type="button" class="pill pill-fact" data-category="fact">
-                <span class="pill-dot"></span>
                 <span>Facts</span>
                 <span class="pill-count" id="pill-count-fact">0</span>
               </button>
               <button type="button" class="pill pill-proj" data-category="project">
-                <span class="pill-dot"></span>
                 <span>Projects</span>
                 <span class="pill-count" id="pill-count-project">0</span>
               </button>
               <button type="button" class="pill pill-dec" data-category="decision">
-                <span class="pill-dot"></span>
                 <span>Decisions</span>
                 <span class="pill-count" id="pill-count-decision">0</span>
               </button>
             </div>
           </div>
 
-          <!-- Memory List Container -->
-          <div class="memories-container">
-            <!-- Loading Indicator -->
-            <div id="memories-loading" class="loading-state hidden">
-              <div class="spinner"></div>
-              <p>Fetching memories...</p>
-            </div>
+          <!-- Memories Grid Container -->
+          <div id="memories-grid" class="memories-grid" role="region" aria-label="Memory cards list">
+            <!-- Loaded dynamically via JS -->
+          </div>
 
-            <!-- Empty State -->
-            <div id="memories-empty" class="empty-state hidden">
-              <div class="empty-icon">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
-                </svg>
-              </div>
-              <h2 class="empty-title">No memories found</h2>
-              <p class="empty-description">No memory records match the current filters or user ID. Memories are automatically extracted during conversations or can be checked under another user ID.</p>
-            </div>
+          <!-- Loading State -->
+          <div id="memories-loading" class="loading-container hidden">
+            <div class="spinner"></div>
+            <p>Fetching memories...</p>
+          </div>
 
-            <!-- Memory Cards Grid -->
-            <div id="memories-grid" class="memories-grid"></div>
+          <!-- Empty State -->
+          <div id="memories-empty" class="empty-state hidden">
+            <div class="empty-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                <polyline points="2 17 12 22 22 17"/>
+                <polyline points="2 12 12 17 22 12"/>
+              </svg>
+            </div>
+            <h2 class="empty-title">No memories found</h2>
+            <p class="empty-desc">No explicit memories match your search query or selected status filter.</p>
           </div>
         </section>
 
@@ -302,9 +1725,9 @@
         <section id="tab-panel-diagnostics" class="tab-panel hidden">
           <div class="diagnostics-card">
             <div class="diagnostics-header">
-              <div class="diagnostics-title-group">
-                <h2 class="section-title">Recent Ingested References</h2>
-                <p class="section-subtitle">Live inspection of recent conversation chunks, file segments, and their retrieval readiness.</p>
+              <div>
+                <h2 class="card-title">Recent Indexed Conversation References</h2>
+                <p class="card-subtitle">Metadata stream of conversation passages indexed for recall (without content).</p>
               </div>
               <button type="button" id="refresh-diagnostics-btn" class="btn btn-secondary btn-sm">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -316,22 +1739,22 @@
               </button>
             </div>
 
-            <div class="table-wrapper">
-              <table class="data-table" id="recent-references-table">
+            <div class="table-responsive">
+              <table class="data-table">
                 <thead>
                   <tr>
                     <th>Reference ID</th>
                     <th>Role</th>
                     <th>Chat ID</th>
                     <th>Message ID</th>
-                    <th>Ordinal</th>
+                    <th>Chunk</th>
                     <th>Status</th>
                     <th>Indexed At</th>
                   </tr>
                 </thead>
                 <tbody id="recent-references-tbody">
                   <tr>
-                    <td colspan="7" class="table-empty">Loading inspection telemetry...</td>
+                    <td colspan="7" class="table-empty">Loading references...</td>
                   </tr>
                 </tbody>
               </table>
@@ -340,128 +1763,1127 @@
         </section>
       </main>
 
-      <!-- Floating Merge Action Bar (appears when 2+ memories are selected) -->
-      <aside id="floating-merge-bar" class="floating-merge-bar hidden" aria-label="Bulk actions bar">
+      <!-- Floating Multi-Select Merge Action Bar -->
+      <aside id="floating-merge-bar" class="floating-merge-bar hidden" aria-label="Merge actions toolbar">
         <div class="merge-bar-content">
-          <div class="merge-info">
-            <span class="merge-count-badge" id="merge-selected-count">2</span>
-            <span class="merge-info-text">memories selected for consolidation</span>
+          <div class="merge-bar-info">
+            <span class="selected-count-badge" id="merge-selected-count">0</span>
+            <span>memories selected for consolidation</span>
           </div>
-          <div class="merge-actions">
-            <button type="button" id="merge-clear-btn" class="btn btn-secondary btn-sm">Deselect All</button>
+          <div class="merge-bar-actions">
+            <button type="button" id="merge-clear-btn" class="btn btn-ghost btn-sm">Clear selection</button>
             <button type="button" id="merge-open-modal-btn" class="btn btn-primary btn-sm">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+                <polyline points="16 3 21 3 21 8"/>
+                <line x1="4" y1="20" x2="21" y2="3"/>
+                <polyline points="21 16 21 21 16 21"/>
+                <line x1="15" y1="15" x2="21" y2="21"/>
+                <line x1="4" y1="4" x2="9" y2="9"/>
               </svg>
-              <span>Merge Memories</span>
+              <span>Merge &amp; Consolidate</span>
             </button>
           </div>
         </div>
       </aside>
     </div>
 
-    <!-- Edit Memory Modal -->
-    <div id="edit-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="edit-modal-title">
-      <div class="modal-card">
-        <div class="modal-header">
-          <h2 id="edit-modal-title" class="modal-title">Edit Memory Statement</h2>
-          <button type="button" class="modal-close-btn" data-close-modal="edit-modal" aria-label="Close modal">&times;</button>
-        </div>
-        <form id="edit-memory-form" class="modal-form">
-          <input type="hidden" id="edit-memory-id">
-          
-          <div class="modal-meta-row">
-            <div class="modal-meta-item">
-              <span class="modal-meta-label">Category:</span>
-              <span id="edit-modal-category" class="badge">preference</span>
-            </div>
-            <div class="modal-meta-item">
-              <span class="modal-meta-label">Memory ID:</span>
-              <code id="edit-modal-id-text" class="code-pill">uuid</code>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label for="edit-statement-input" class="form-label">Durable Statement</label>
-            <textarea 
-              id="edit-statement-input" 
-              class="form-textarea" 
-              rows="4" 
-              required 
-              placeholder="Refined memory statement..."
-              maxlength="2000"
-            ></textarea>
-            <div class="char-count"><span id="edit-char-count">0</span> / 2000</div>
-          </div>
-
-          <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-close-modal="edit-modal">Cancel</button>
-            <button type="submit" id="edit-save-btn" class="btn btn-primary">
-              <span class="btn-text">Save Changes</span>
-              <span class="btn-spinner hidden"></span>
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <!-- Merge Memories Modal -->
-    <div id="merge-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="merge-modal-title">
-      <div class="modal-card modal-card-lg">
-        <div class="modal-header">
-          <h2 id="merge-modal-title" class="modal-title">Merge &amp; Consolidate Memories</h2>
-          <button type="button" class="modal-close-btn" data-close-modal="merge-modal" aria-label="Close modal">&times;</button>
-        </div>
-        <form id="merge-memories-form" class="modal-form">
-          <p class="modal-description">
-            The selected source memories will be superseded/archived and replaced with a single consolidated memory record.
-          </p>
-
-          <!-- Source statements display -->
-          <div class="form-group">
-            <label class="form-label">Source Statements to Consolidate</label>
-            <div id="merge-sources-container" class="merge-sources-list"></div>
-          </div>
-
-          <div class="form-grid-2">
-            <div class="form-group">
-              <label for="merge-category-select" class="form-label">Target Category</label>
-              <select id="merge-category-select" class="form-select">
-                <option value="preference">Preference</option>
-                <option value="instruction">Instruction</option>
-                <option value="fact">Fact</option>
-                <option value="project">Project</option>
-                <option value="decision">Decision</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label for="merge-statement-input" class="form-label">New Consolidated Statement</label>
-            <textarea 
-              id="merge-statement-input" 
-              class="form-textarea" 
-              rows="4" 
-              required 
-              placeholder="Consolidated memory statement combining all key points..."
-              maxlength="2000"
-            ></textarea>
-            <div class="char-count"><span id="merge-char-count">0</span> / 2000</div>
-          </div>
-
-          <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-close-modal="merge-modal">Cancel</button>
-            <button type="submit" id="merge-submit-btn" class="btn btn-primary">
-              <span class="btn-text">Consolidate &amp; Merge</span>
-              <span class="btn-spinner hidden"></span>
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-
   </div>
 
-  <script type="module" src="/ui/app.js"></script>
+  <!-- Edit Statement Modal -->
+  <div id="edit-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="edit-modal-title">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div>
+          <h3 id="edit-modal-title" class="modal-title">Edit Memory Statement</h3>
+          <div class="modal-sub-meta">
+            <span id="edit-modal-category" class="badge badge-pref">preference</span>
+            <code id="edit-modal-id-text" class="code-pill">uuid</code>
+          </div>
+        </div>
+        <button type="button" class="modal-close-btn" data-close-modal="edit-modal" aria-label="Close modal">&times;</button>
+      </div>
+
+      <form id="edit-memory-form" class="modal-form">
+        <input type="hidden" id="edit-memory-id">
+        <div class="form-group">
+          <label for="edit-statement-input" class="form-label">Durable Statement</label>
+          <textarea 
+            id="edit-statement-input" 
+            class="form-textarea" 
+            rows="4" 
+            maxlength="2000" 
+            placeholder="Refine or correct the memory statement..." 
+            required
+          ></textarea>
+          <div class="char-counter"><span id="edit-char-count">0</span> / 2000</div>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal="edit-modal">Cancel</button>
+          <button type="submit" id="edit-save-btn" class="btn btn-primary">
+            <span class="btn-text">Save Changes</span>
+            <span class="btn-spinner hidden"></span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Merge Memories Modal -->
+  <div id="merge-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="merge-modal-title">
+    <div class="modal-card modal-card-lg">
+      <div class="modal-header">
+        <div>
+          <h3 id="merge-modal-title" class="modal-title">Merge &amp; Consolidate Memories</h3>
+          <p class="modal-subtitle">Combine selected memories into one active record. Original memories will be archived.</p>
+        </div>
+        <button type="button" class="modal-close-btn" data-close-modal="merge-modal" aria-label="Close modal">&times;</button>
+      </div>
+
+      <form id="merge-memories-form" class="modal-form">
+        <!-- Selected Source Statements Preview -->
+        <div class="form-group">
+          <label class="form-label">Original Source Memories (to be archived)</label>
+          <div id="merge-sources-container" class="merge-sources-list">
+            <!-- Rendered via JS -->
+          </div>
+        </div>
+
+        <!-- Target Category -->
+        <div class="form-group">
+          <label for="merge-category-select" class="form-label">Consolidated Category</label>
+          <select id="merge-category-select" class="form-select" required>
+            <option value="preference">Preference</option>
+            <option value="instruction">Instruction</option>
+            <option value="fact">Fact</option>
+            <option value="project">Project</option>
+            <option value="decision">Decision</option>
+          </select>
+        </div>
+
+        <!-- Consolidated Statement Input -->
+        <div class="form-group">
+          <label for="merge-statement-input" class="form-label">Consolidated Statement</label>
+          <textarea 
+            id="merge-statement-input" 
+            class="form-textarea" 
+            rows="4" 
+            maxlength="2000" 
+            placeholder="Write the consolidated statement combining these memories..." 
+            required
+          ></textarea>
+          <div class="char-counter"><span id="merge-char-count">0</span> / 2000</div>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal="merge-modal">Cancel</button>
+          <button type="submit" id="merge-submit-btn" class="btn btn-primary">
+            <span class="btn-text">Merge &amp; Archive Originals</span>
+            <span class="btn-spinner hidden"></span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+/**
+ * Assistant Core - Memory Manager & System Diagnostics
+ * Zero-Build Vanilla ES Module
+ */
+
+// Global State
+const state = {
+  token: sessionStorage.getItem('assistant_session_token') || null,
+  authenticated: false,
+  userId: localStorage.getItem('assistant_ui_user_id') || 'default',
+  activeTab: 'memories',
+  categoryFilter: 'all',
+  statusFilter: 'active',
+  searchQuery: '',
+  memories: [],
+  selectedMemoryIds: new Set(),
+  stats: null,
+  recentReferences: [],
+  loadingMemories: false,
+};
+
+// DOM Elements cache
+const els = {};
+
+function initDOMElements() {
+  els.authView = document.getElementById('auth-view');
+  els.dashboardView = document.getElementById('dashboard-view');
+  els.loginForm = document.getElementById('login-form');
+  els.passwordInput = document.getElementById('password-input');
+  els.togglePasswordBtn = document.getElementById('toggle-password-btn');
+  els.loginError = document.getElementById('login-error');
+  els.loginBtn = document.getElementById('login-btn');
+  els.logoutBtn = document.getElementById('logout-btn');
+  els.themeToggleBtn = document.getElementById('theme-toggle-btn');
+  els.themeIconDark = document.getElementById('theme-icon-dark');
+  els.themeIconLight = document.getElementById('theme-icon-light');
+
+  els.userIdInput = document.getElementById('user-id-input');
+  els.tabMemoriesBtn = document.getElementById('tab-memories-btn');
+  els.tabDiagnosticsBtn = document.getElementById('tab-diagnostics-btn');
+  els.tabPanelMemories = document.getElementById('tab-panel-memories');
+  els.tabPanelDiagnostics = document.getElementById('tab-panel-diagnostics');
+  els.memoriesCountBadge = document.getElementById('memories-count-badge');
+
+  els.statActiveMemories = document.getElementById('stat-active-memories');
+  els.statMemoriesSub = document.getElementById('stat-memories-sub');
+  els.statConversationSegments = document.getElementById('stat-conversation-segments');
+  els.statConversationSub = document.getElementById('stat-conversation-sub');
+  els.statFileSegments = document.getElementById('stat-file-segments');
+  els.statFilesSub = document.getElementById('stat-files-sub');
+  els.statQueueStatus = document.getElementById('stat-queue-status');
+  els.statQueueSub = document.getElementById('stat-queue-sub');
+
+  els.searchInput = document.getElementById('search-input');
+  els.searchClearBtn = document.getElementById('search-clear-btn');
+  els.refreshBtn = document.getElementById('refresh-btn');
+  els.memoriesContainer = document.getElementById('memories-grid');
+  els.memoriesLoading = document.getElementById('memories-loading');
+  els.memoriesEmpty = document.getElementById('memories-empty');
+
+  els.floatingMergeBar = document.getElementById('floating-merge-bar');
+  els.mergeSelectedCount = document.getElementById('merge-selected-count');
+  els.mergeClearBtn = document.getElementById('merge-clear-btn');
+  els.mergeOpenModalBtn = document.getElementById('merge-open-modal-btn');
+
+  // Edit Modal
+  els.editModal = document.getElementById('edit-modal');
+  els.editMemoryForm = document.getElementById('edit-memory-form');
+  els.editMemoryId = document.getElementById('edit-memory-id');
+  els.editModalCategory = document.getElementById('edit-modal-category');
+  els.editModalIdText = document.getElementById('edit-modal-id-text');
+  els.editStatementInput = document.getElementById('edit-statement-input');
+  els.editCharCount = document.getElementById('edit-char-count');
+  els.editSaveBtn = document.getElementById('edit-save-btn');
+
+  // Merge Modal
+  els.mergeModal = document.getElementById('merge-modal');
+  els.mergeMemoriesForm = document.getElementById('merge-memories-form');
+  els.mergeSourcesContainer = document.getElementById('merge-sources-container');
+  els.mergeCategorySelect = document.getElementById('merge-category-select');
+  els.mergeStatementInput = document.getElementById('merge-statement-input');
+  els.mergeCharCount = document.getElementById('merge-char-count');
+  els.mergeSubmitBtn = document.getElementById('merge-submit-btn');
+
+  // Diagnostics Tab
+  els.refreshDiagnosticsBtn = document.getElementById('refresh-diagnostics-btn');
+  els.recentReferencesTbody = document.getElementById('recent-references-tbody');
+  els.toastContainer = document.getElementById('toast-container');
+}
+
+/* ==========================================================================
+   API Client Helper
+   ========================================================================== */
+
+async function api(path, options = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  };
+
+  if (state.token) {
+    headers['x-assistant-session'] = state.token;
+  }
+
+  const response = await fetch(path, {
+    ...options,
+    headers,
+  });
+
+  if (response.status === 401) {
+    handleUnauthenticated();
+    throw new Error('Authentication required');
+  }
+
+  if (!response.ok) {
+    let errorDetail = `Request failed (${response.status})`;
+    try {
+      const errJson = await response.json();
+      if (errJson.detail) {
+        errorDetail = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+      }
+    } catch {
+      // Ignore JSON parse errors on failure
+    }
+    throw new Error(errorDetail);
+  }
+
+  return response.json();
+}
+
+/* ==========================================================================
+   Toast Notifications
+   ========================================================================== */
+
+function showToast(message, type = 'info', duration = 3200) {
+  if (!els.toastContainer) return;
+
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+
+  const iconSvg =
+    type === 'success'
+      ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`
+      : type === 'error'
+      ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`
+      : `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
+
+  toast.innerHTML = `
+    ${iconSvg}
+    <span>${escapeHtml(message)}</span>
+  `;
+
+  els.toastContainer.appendChild(toast);
+
+  setTimeout(() => {
+    toast.classList.add('toast-out');
+    setTimeout(() => {
+      if (toast.parentElement) toast.parentElement.removeChild(toast);
+    }, 160);
+  }, duration);
+}
+
+/* ==========================================================================
+   Authentication Flow
+   ========================================================================== */
+
+async function checkAuth() {
+  try {
+    const data = await api('/v1/auth/check', { method: 'GET' });
+    if (data && data.authenticated) {
+      setAuthenticated(true);
+      return;
+    }
+  } catch {
+    // 401 will trigger handleUnauthenticated
+  }
+  handleUnauthenticated();
+}
+
+function handleUnauthenticated() {
+  state.authenticated = false;
+  state.token = null;
+  sessionStorage.removeItem('assistant_session_token');
+  els.dashboardView.classList.add('hidden');
+  els.authView.classList.remove('hidden');
+}
+
+function setAuthenticated(isAuth) {
+  state.authenticated = isAuth;
+  if (isAuth) {
+    els.authView.classList.add('hidden');
+    els.dashboardView.classList.remove('hidden');
+    els.userIdInput.value = state.userId;
+    refreshDashboard();
+  } else {
+    handleUnauthenticated();
+  }
+}
+
+async function handleLogin(e) {
+  e.preventDefault();
+  const password = els.passwordInput.value.trim();
+  if (!password) return;
+
+  setButtonLoading(els.loginBtn, true);
+  els.loginError.classList.add('hidden');
+
+  try {
+    const res = await fetch('/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.detail || 'Invalid admin password');
+    }
+
+    state.token = data.token;
+    sessionStorage.setItem('assistant_session_token', data.token);
+    els.passwordInput.value = '';
+    setAuthenticated(true);
+    showToast('Authenticated successfully', 'success');
+  } catch (err) {
+    els.loginError.textContent = err.message || 'Login failed. Please check credentials.';
+    els.loginError.classList.remove('hidden');
+  } finally {
+    setButtonLoading(els.loginBtn, false);
+  }
+}
+
+async function handleLogout() {
+  try {
+    await api('/v1/auth/logout', { method: 'POST' });
+  } catch {
+    // Fail silently on logout endpoint failure
+  }
+  handleUnauthenticated();
+  showToast('Logged out of Assistant Core', 'info');
+}
+
+/* ==========================================================================
+   Data Fetching & Rendering
+   ========================================================================== */
+
+async function refreshDashboard() {
+  await Promise.all([
+    loadMemories(),
+    loadStats(),
+    state.activeTab === 'diagnostics' ? loadRecentReferences() : Promise.resolve(),
+  ]);
+}
+
+async function loadMemories() {
+  state.loadingMemories = true;
+  els.memoriesLoading.classList.remove('hidden');
+  els.memoriesEmpty.classList.add('hidden');
+
+  try {
+    const payload = {
+      native_user_id: state.userId,
+      status: state.statusFilter,
+      category: state.categoryFilter === 'all' ? null : state.categoryFilter,
+      limit: 250,
+    };
+
+    const data = await api('/v1/personal-context/list', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+
+    state.memories = data.memories || [];
+    updateCategoryCounts();
+    renderMemoriesGrid();
+  } catch (err) {
+    showToast(`Failed to load memories: ${err.message}`, 'error');
+  } finally {
+    state.loadingMemories = false;
+    els.memoriesLoading.classList.add('hidden');
+  }
+}
+
+async function loadStats() {
+  try {
+    const stats = await api('/v1/inspection/stats', {
+      method: 'POST',
+      body: JSON.stringify({ native_user_id: state.userId }),
+    });
+    state.stats = stats;
+    renderStats(stats);
+  } catch (err) {
+    // If stats call fails, display placeholder
+    console.warn('Inspection stats error:', err);
+  }
+}
+
+function renderStats(stats) {
+  if (!stats) return;
+
+  const totalSegments = stats.total_segments || 0;
+  const embeddedSegments = stats.embedded_segments || 0;
+  const lexicalSegments = stats.lexical_segments || 0;
+  const totalFileSegments = stats.total_file_segments || 0;
+  const queuedJobs = stats.queued_jobs || 0;
+  const deadJobs = stats.dead_jobs || 0;
+
+  els.statConversationSegments.textContent = totalSegments.toLocaleString();
+  els.statConversationSub.textContent = `${embeddedSegments.toLocaleString()} embedded &bull; ${lexicalSegments.toLocaleString()} lexical`;
+
+  els.statFileSegments.textContent = totalFileSegments.toLocaleString();
+  els.statFilesSub.textContent = `${(stats.active_file_references || 0).toLocaleString()} active file references`;
+
+  els.statQueueStatus.textContent = queuedJobs === 0 && deadJobs === 0 ? 'Healthy' : `${queuedJobs} queued`;
+  els.statQueueSub.textContent = `${queuedJobs} queued &bull; ${deadJobs} dead jobs`;
+}
+
+async function loadRecentReferences() {
+  try {
+    const data = await api('/v1/inspection/recent', {
+      method: 'POST',
+      body: JSON.stringify({ native_user_id: state.userId, limit: 15 }),
+    });
+    state.recentReferences = data.results || [];
+    renderRecentReferencesTable();
+  } catch (err) {
+    showToast(`Failed to load inspection references: ${err.message}`, 'error');
+  }
+}
+
+function renderRecentReferencesTable() {
+  const tbody = els.recentReferencesTbody;
+  if (!state.recentReferences.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="table-empty">No indexed conversation references found for user '${escapeHtml(state.userId)}'.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = state.recentReferences
+    .map((ref) => {
+      const isTombstoned = Boolean(ref.tombstoned_at);
+      const statusBadge = isTombstoned
+        ? `<span class="badge badge-archived">Tombstoned</span>`
+        : `<span class="badge badge-active">Active</span>`;
+      const dateStr = formatDate(ref.created_at);
+
+      return `
+      <tr>
+        <td><code class="code-pill" title="${escapeHtml(ref.reference_id)}">${escapeHtml(ref.reference_id.slice(0, 8))}…</code></td>
+        <td><span class="badge ${ref.role === 'user' ? 'badge-pref' : 'badge-inst'}">${escapeHtml(ref.role)}</span></td>
+        <td><code class="code-pill" title="${escapeHtml(ref.native_chat_id)}">${escapeHtml(ref.native_chat_id.slice(0, 12))}…</code></td>
+        <td><code class="code-pill" title="${escapeHtml(ref.native_message_id)}">${escapeHtml(ref.native_message_id.slice(0, 12))}…</code></td>
+        <td>${ref.chunk_ordinal}</td>
+        <td>${statusBadge}</td>
+        <td>${dateStr}</td>
+      </tr>
+    `;
+    })
+    .join('');
+}
+
+/* ==========================================================================
+   Memory Cards Rendering & Filtering
+   ========================================================================== */
+
+function updateCategoryCounts() {
+  const counts = {
+    all: state.memories.length,
+    preference: 0,
+    instruction: 0,
+    fact: 0,
+    project: 0,
+    decision: 0,
+  };
+
+  for (const m of state.memories) {
+    if (counts[m.category] !== undefined) {
+      counts[m.category]++;
+    }
+  }
+
+  els.memoriesCountBadge.textContent = counts.all;
+  els.statActiveMemories.textContent = counts.all;
+  els.statMemoriesSub.textContent = `${counts.preference} pref &bull; ${counts.instruction} inst &bull; ${counts.fact} fact`;
+
+  document.getElementById('pill-count-all').textContent = counts.all;
+  document.getElementById('pill-count-preference').textContent = counts.preference;
+  document.getElementById('pill-count-instruction').textContent = counts.instruction;
+  document.getElementById('pill-count-fact').textContent = counts.fact;
+  document.getElementById('pill-count-project').textContent = counts.project;
+  document.getElementById('pill-count-decision').textContent = counts.decision;
+}
+
+function getFilteredMemories() {
+  const query = state.searchQuery.trim().toLowerCase();
+  return state.memories.filter((m) => {
+    // Category match
+    if (state.categoryFilter !== 'all' && m.category !== state.categoryFilter) {
+      return false;
+    }
+
+    // Status match
+    if (state.statusFilter !== 'all') {
+      const memStatus = m.status || m.state || 'active';
+      if (memStatus !== state.statusFilter) return false;
+    }
+
+    // Search query match
+    if (query) {
+      const matchStatement = m.statement && m.statement.toLowerCase().includes(query);
+      const matchKey = m.key && m.key.toLowerCase().includes(query);
+      const matchEvidence = m.evidence_quote && m.evidence_quote.toLowerCase().includes(query);
+      const matchChatId = m.native_chat_id && m.native_chat_id.toLowerCase().includes(query);
+      if (!matchStatement && !matchKey && !matchEvidence && !matchChatId) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+}
+
+function renderMemoriesGrid() {
+  const filtered = getFilteredMemories();
+  const container = els.memoriesContainer;
+  container.innerHTML = '';
+
+  if (filtered.length === 0) {
+    els.memoriesEmpty.classList.remove('hidden');
+    return;
+  }
+  els.memoriesEmpty.classList.add('hidden');
+
+  const fragment = document.createDocumentFragment();
+
+  for (const memory of filtered) {
+    const card = document.createElement('div');
+    const isSelected = state.selectedMemoryIds.has(memory.id);
+    const memStatus = memory.status || memory.state || 'active';
+
+    card.className = `memory-card ${isSelected ? 'selected' : ''}`;
+    card.id = `memory-card-${memory.id}`;
+
+    const categoryBadgeClass = getCategoryBadgeClass(memory.category);
+    const confidencePct = Math.round((memory.confidence || 1.0) * 100);
+    const isArchived = memStatus === 'archived';
+    const isSuperseded = memStatus === 'superseded';
+
+    let statusBadgeHtml = '';
+    if (isArchived) {
+      statusBadgeHtml = `<span class="badge badge-archived">Archived</span>`;
+    } else if (isSuperseded) {
+      statusBadgeHtml = `<span class="badge badge-superseded">Superseded</span>`;
+    }
+
+    const hasEvidence = Boolean(memory.evidence_quote);
+    const evidenceHtml = hasEvidence
+      ? `
+      <div class="evidence-accordion" id="accordion-${memory.id}">
+        <button type="button" class="evidence-toggle" data-toggle-accordion="${memory.id}">
+          <span>Evidence Quote &amp; Origin</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+        </button>
+        <div class="evidence-content hidden" id="evidence-content-${memory.id}">
+          <div class="evidence-quote">"${escapeHtml(memory.evidence_quote)}"</div>
+          <div class="evidence-meta-row">
+            ${memory.native_chat_id ? `<span>Chat: <code class="code-pill" title="${escapeHtml(memory.native_chat_id)}">${escapeHtml(memory.native_chat_id.slice(0, 10))}…</code></span>` : ''}
+            ${memory.native_message_id ? `<span>Msg: <code class="code-pill" title="${escapeHtml(memory.native_message_id)}">${escapeHtml(memory.native_message_id.slice(0, 10))}…</code></span>` : ''}
+          </div>
+        </div>
+      </div>
+    `
+      : '';
+
+    card.innerHTML = `
+      <div class="memory-card-header">
+        <div class="card-header-left">
+          <input 
+            type="checkbox" 
+            class="card-select-checkbox" 
+            data-memory-id="${escapeHtml(memory.id)}"
+            ${isSelected ? 'checked' : ''}
+            aria-label="Select memory for merge"
+          >
+          <span class="badge ${categoryBadgeClass}">${escapeHtml(memory.category)}</span>
+          ${statusBadgeHtml}
+        </div>
+        <div class="card-header-right">
+          <span class="code-pill" title="${confidencePct}% confidence score">${confidencePct}%</span>
+        </div>
+      </div>
+
+      <div class="memory-statement" id="statement-${memory.id}">
+        ${escapeHtml(memory.statement)}
+      </div>
+
+      ${evidenceHtml}
+
+      <div class="card-footer">
+        <div class="card-meta">
+          <span title="Created at">${formatDate(memory.created_at)}</span>
+        </div>
+        <div class="card-actions">
+          <button type="button" class="btn btn-ghost btn-sm" data-action="edit" data-id="${escapeHtml(memory.id)}" title="Edit statement">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 20h9"/>
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+            </svg>
+            <span>Edit</span>
+          </button>
+          ${
+            !isArchived
+              ? `
+            <button type="button" class="btn btn-danger-ghost btn-sm" data-action="archive" data-id="${escapeHtml(memory.id)}" title="Archive memory">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="21 8 21 21 3 21 3 8"/>
+                <rect x="1" y="3" width="22" height="5"/>
+                <line x1="10" y1="12" x2="14" y2="12"/>
+              </svg>
+              <span>Archive</span>
+            </button>
+          `
+              : ''
+          }
+        </div>
+      </div>
+    `;
+
+    fragment.appendChild(card);
+  }
+
+  container.appendChild(fragment);
+  updateFloatingMergeBar();
+}
+
+function getCategoryBadgeClass(category) {
+  switch (category) {
+    case 'preference':
+      return 'badge-pref';
+    case 'instruction':
+      return 'badge-inst';
+    case 'fact':
+      return 'badge-fact';
+    case 'project':
+      return 'badge-proj';
+    case 'decision':
+      return 'badge-dec';
+    default:
+      return 'badge-pref';
+  }
+}
+
+/* ==========================================================================
+   Memory Actions: Archive, Edit, Merge
+   ========================================================================== */
+
+async function handleArchiveMemory(memoryId) {
+  const memory = state.memories.find((m) => m.id === memoryId);
+  if (!memory) return;
+
+  // Optimistic UI update: mark archived in local state
+  const prevStatus = memory.status || memory.state;
+  memory.status = 'archived';
+  memory.state = 'archived';
+  memory.archived_at = new Date().toISOString();
+
+  // If viewing active only, remove from UI immediately
+  if (state.statusFilter === 'active') {
+    state.selectedMemoryIds.delete(memoryId);
+    renderMemoriesGrid();
+  } else {
+    renderMemoriesGrid();
+  }
+
+  showToast('Memory archived', 'success');
+
+  try {
+    await api('/v1/personal-context/archive', {
+      method: 'POST',
+      body: JSON.stringify({
+        native_user_id: state.userId,
+        memory_id: memoryId,
+      }),
+    });
+    updateCategoryCounts();
+  } catch (err) {
+    // Rollback on error
+    memory.status = prevStatus;
+    memory.state = prevStatus;
+    renderMemoriesGrid();
+    showToast(`Failed to archive memory: ${err.message}`, 'error');
+  }
+}
+
+function openEditModal(memoryId) {
+  const memory = state.memories.find((m) => m.id === memoryId);
+  if (!memory) return;
+
+  els.editMemoryId.value = memory.id;
+  els.editModalIdText.textContent = memory.id;
+  els.editModalCategory.className = `badge ${getCategoryBadgeClass(memory.category)}`;
+  els.editModalCategory.textContent = memory.category;
+  els.editStatementInput.value = memory.statement;
+  els.editCharCount.textContent = memory.statement.length;
+
+  els.editModal.classList.remove('hidden');
+  els.editStatementInput.focus();
+}
+
+async function handleSaveEdit(e) {
+  e.preventDefault();
+  const memoryId = els.editMemoryId.value;
+  const newStatement = els.editStatementInput.value.trim();
+  if (!newStatement) return;
+
+  setButtonLoading(els.editSaveBtn, true);
+
+  try {
+    const res = await api('/v1/personal-context/update', {
+      method: 'POST',
+      body: JSON.stringify({
+        native_user_id: state.userId,
+        memory_id: memoryId,
+        new_statement: newStatement,
+      }),
+    });
+
+    const memory = state.memories.find((m) => m.id === memoryId);
+    if (memory) {
+      memory.statement = res.statement;
+      memory.updated_at = new Date().toISOString();
+    }
+
+    renderMemoriesGrid();
+    closeModal(els.editModal);
+    showToast('Memory updated successfully', 'success');
+  } catch (err) {
+    showToast(`Failed to update memory: ${err.message}`, 'error');
+  } finally {
+    setButtonLoading(els.editSaveBtn, false);
+  }
+}
+
+function openMergeModal() {
+  const selectedIds = Array.from(state.selectedMemoryIds);
+  if (selectedIds.length < 2) return;
+
+  const selectedMemories = state.memories.filter((m) => selectedIds.includes(m.id));
+
+  // Render sources preview
+  els.mergeSourcesContainer.innerHTML = selectedMemories
+    .map(
+      (m) => `
+    <div class="merge-source-item">
+      <div class="merge-source-header">
+        <span class="badge ${getCategoryBadgeClass(m.category)}">${escapeHtml(m.category)}</span>
+        <code class="code-pill">${escapeHtml(m.id.slice(0, 8))}…</code>
+      </div>
+      <div class="merge-source-statement">${escapeHtml(m.statement)}</div>
+    </div>
+  `
+    )
+    .join('');
+
+  // Default target category to the category of the first source memory
+  const firstCat = selectedMemories[0]?.category || 'preference';
+  els.mergeCategorySelect.value = firstCat;
+
+  // Auto-suggested merged text: join statements
+  const suggestedStatement = selectedMemories.map((m) => m.statement).join('; ');
+  els.mergeStatementInput.value = suggestedStatement;
+  els.mergeCharCount.textContent = suggestedStatement.length;
+
+  els.mergeModal.classList.remove('hidden');
+  els.mergeStatementInput.focus();
+}
+
+async function handleSaveMerge(e) {
+  e.preventDefault();
+  const selectedIds = Array.from(state.selectedMemoryIds);
+  if (selectedIds.length < 2) return;
+
+  const targetCategory = els.mergeCategorySelect.value;
+  const newStatement = els.mergeStatementInput.value.trim();
+  if (!newStatement) return;
+
+  setButtonLoading(els.mergeSubmitBtn, true);
+
+  try {
+    const res = await api('/v1/personal-context/merge', {
+      method: 'POST',
+      body: JSON.stringify({
+        native_user_id: state.userId,
+        source_memory_ids: selectedIds,
+        target_category: targetCategory,
+        new_statement: newStatement,
+      }),
+    });
+
+    state.selectedMemoryIds.clear();
+    closeModal(els.mergeModal);
+    showToast(`Merged ${res.archived_source_ids.length} memories into a consolidated record`, 'success');
+    await loadMemories();
+  } catch (err) {
+    showToast(`Failed to merge memories: ${err.message}`, 'error');
+  } finally {
+    setButtonLoading(els.mergeSubmitBtn, false);
+  }
+}
+
+function updateFloatingMergeBar() {
+  const count = state.selectedMemoryIds.size;
+  if (count >= 2) {
+    els.mergeSelectedCount.textContent = count;
+    els.floatingMergeBar.classList.remove('hidden');
+  } else {
+    els.floatingMergeBar.classList.add('hidden');
+  }
+}
+
+/* ==========================================================================
+   UI Helpers & Event Wiring
+   ========================================================================== */
+
+function closeModal(modalEl) {
+  if (modalEl) modalEl.classList.add('hidden');
+}
+
+function setButtonLoading(btn, loading) {
+  const text = btn.querySelector('.btn-text');
+  const spinner = btn.querySelector('.btn-spinner');
+  if (loading) {
+    btn.disabled = true;
+    if (text) text.classList.add('hidden');
+    if (spinner) spinner.classList.remove('hidden');
+  } else {
+    btn.disabled = false;
+    if (text) text.classList.remove('hidden');
+    if (spinner) spinner.classList.add('hidden');
+  }
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function formatDate(isoStr) {
+  if (!isoStr) return '-';
+  try {
+    const d = new Date(isoStr);
+    return d.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return isoStr;
+  }
+}
+
+/* Theme Management */
+function initTheme() {
+  const saved = localStorage.getItem('assistant_theme');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const theme = saved || (prefersDark ? 'dark' : 'dark');
+  applyTheme(theme);
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('assistant_theme', theme);
+  if (theme === 'dark') {
+    els.themeIconDark.classList.remove('hidden');
+    els.themeIconLight.classList.add('hidden');
+  } else {
+    els.themeIconDark.classList.add('hidden');
+    els.themeIconLight.classList.remove('hidden');
+  }
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') || 'dark';
+  const next = current === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+}
+
+/* Event Handlers Setup */
+function setupEventListeners() {
+  // Auth Form
+  els.loginForm.addEventListener('submit', handleLogin);
+  els.logoutBtn.addEventListener('click', handleLogout);
+  els.themeToggleBtn.addEventListener('click', toggleTheme);
+
+  // Toggle Password
+  els.togglePasswordBtn.addEventListener('click', () => {
+    const type = els.passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
+    els.passwordInput.setAttribute('type', type);
+  });
+
+  // User ID input change
+  let userDebounce;
+  els.userIdInput.addEventListener('input', () => {
+    clearTimeout(userDebounce);
+    userDebounce = setTimeout(() => {
+      const val = els.userIdInput.value.trim() || 'default';
+      state.userId = val;
+      localStorage.setItem('assistant_ui_user_id', val);
+      state.selectedMemoryIds.clear();
+      refreshDashboard();
+      showToast(`Switched user context to '${val}'`, 'info');
+    }, 450);
+  });
+
+  // Tab Navigation
+  els.tabMemoriesBtn.addEventListener('click', () => switchTab('memories'));
+  els.tabDiagnosticsBtn.addEventListener('click', () => switchTab('diagnostics'));
+
+  // Search input
+  let searchDebounce;
+  els.searchInput.addEventListener('input', () => {
+    const val = els.searchInput.value;
+    state.searchQuery = val;
+    els.searchClearBtn.classList.toggle('hidden', !val);
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      renderMemoriesGrid();
+    }, 150);
+  });
+
+  els.searchClearBtn.addEventListener('click', () => {
+    els.searchInput.value = '';
+    state.searchQuery = '';
+    els.searchClearBtn.classList.add('hidden');
+    renderMemoriesGrid();
+  });
+
+  // Status Segmented Control
+  document.querySelectorAll('.status-segmented-control .segment-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.status-segmented-control .segment-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.statusFilter = btn.getAttribute('data-status');
+      loadMemories();
+    });
+  });
+
+  // Category Pills
+  document.querySelectorAll('.category-pills-row .pill').forEach((pill) => {
+    pill.addEventListener('click', () => {
+      document.querySelectorAll('.category-pills-row .pill').forEach((p) => p.classList.remove('active'));
+      pill.classList.add('active');
+      state.categoryFilter = pill.getAttribute('data-category');
+      renderMemoriesGrid();
+    });
+  });
+
+  // Refresh Buttons
+  els.refreshBtn.addEventListener('click', () => {
+    loadMemories();
+    loadStats();
+    showToast('Refreshed memories and statistics', 'info');
+  });
+
+  els.refreshDiagnosticsBtn.addEventListener('click', () => {
+    loadRecentReferences();
+    loadStats();
+    showToast('Refreshed diagnostic telemetry', 'info');
+  });
+
+  // Card Grid Event Delegation (checkbox, archive, edit, accordion)
+  els.memoriesContainer.addEventListener('click', (e) => {
+    const target = e.target;
+
+    // Checkbox toggle
+    const checkbox = target.closest('.card-select-checkbox');
+    if (checkbox) {
+      const memoryId = checkbox.getAttribute('data-memory-id');
+      if (checkbox.checked) {
+        state.selectedMemoryIds.add(memoryId);
+      } else {
+        state.selectedMemoryIds.delete(memoryId);
+      }
+      const card = document.getElementById(`memory-card-${memoryId}`);
+      if (card) card.classList.toggle('selected', checkbox.checked);
+      updateFloatingMergeBar();
+      return;
+    }
+
+    // Archive button
+    const archiveBtn = target.closest('[data-action="archive"]');
+    if (archiveBtn) {
+      const memoryId = archiveBtn.getAttribute('data-id');
+      handleArchiveMemory(memoryId);
+      return;
+    }
+
+    // Edit button
+    const editBtn = target.closest('[data-action="edit"]');
+    if (editBtn) {
+      const memoryId = editBtn.getAttribute('data-id');
+      openEditModal(memoryId);
+      return;
+    }
+
+    // Accordion toggle
+    const toggleBtn = target.closest('[data-toggle-accordion]');
+    if (toggleBtn) {
+      const memoryId = toggleBtn.getAttribute('data-toggle-accordion');
+      const accordion = document.getElementById(`accordion-${memoryId}`);
+      const content = document.getElementById(`evidence-content-${memoryId}`);
+      if (accordion && content) {
+        accordion.classList.toggle('open');
+        content.classList.toggle('hidden');
+      }
+      return;
+    }
+  });
+
+  // Floating Merge Bar
+  els.mergeClearBtn.addEventListener('click', () => {
+    state.selectedMemoryIds.clear();
+    renderMemoriesGrid();
+  });
+
+  els.mergeOpenModalBtn.addEventListener('click', openMergeModal);
+
+  // Edit Modal
+  els.editMemoryForm.addEventListener('submit', handleSaveEdit);
+  els.editStatementInput.addEventListener('input', () => {
+    els.editCharCount.textContent = els.editStatementInput.value.length;
+  });
+
+  // Merge Modal
+  els.mergeMemoriesForm.addEventListener('submit', handleSaveMerge);
+  els.mergeStatementInput.addEventListener('input', () => {
+    els.mergeCharCount.textContent = els.mergeStatementInput.value.length;
+  });
+
+  // Modal Close buttons
+  document.querySelectorAll('[data-close-modal]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const modalId = btn.getAttribute('data-close-modal');
+      closeModal(document.getElementById(modalId));
+    });
+  });
+
+  // Close modals on Escape or backdrop click
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeModal(els.editModal);
+      closeModal(els.mergeModal);
+    }
+  });
+
+  [els.editModal, els.mergeModal].forEach((modal) => {
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeModal(modal);
+    });
+  });
+}
+
+function switchTab(tabName) {
+  state.activeTab = tabName;
+  if (tabName === 'memories') {
+    els.tabMemoriesBtn.classList.add('active');
+    els.tabDiagnosticsBtn.classList.remove('active');
+    els.tabPanelMemories.classList.remove('hidden');
+    els.tabPanelDiagnostics.classList.add('hidden');
+  } else {
+    els.tabMemoriesBtn.classList.remove('active');
+    els.tabDiagnosticsBtn.classList.add('active');
+    els.tabPanelMemories.classList.add('hidden');
+    els.tabPanelDiagnostics.classList.remove('hidden');
+    loadRecentReferences();
+  }
+}
+
+/* ==========================================================================
+   Initialization
+   ========================================================================== */
+
+document.addEventListener('DOMContentLoaded', () => {
+  initDOMElements();
+  initTheme();
+  setupEventListeners();
+  checkAuth();
+});
+
+  </script>
 </body>
 </html>

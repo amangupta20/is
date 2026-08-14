@@ -55,10 +55,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     if UI_DIR.exists():
         @app.get("/ui", response_class=FileResponse, include_in_schema=False)
+        @app.get("/ui/", response_class=FileResponse, include_in_schema=False)
+        @app.get("/ui/index.html", response_class=FileResponse, include_in_schema=False)
         async def serve_ui() -> FileResponse:
             """Serve dashboard single-page application."""
             return FileResponse(UI_DIR / "index.html", media_type="text/html")
 
-        app.mount("/ui", StaticFiles(directory=UI_DIR, html=True), name="ui")
+        @app.get("/ui/styles.css", response_class=FileResponse, include_in_schema=False)
+        @app.get("/styles.css", response_class=FileResponse, include_in_schema=False)
+        async def serve_css() -> FileResponse:
+            return FileResponse(UI_DIR / "styles.css", media_type="text/css")
+
+        @app.get("/ui/app.js", response_class=FileResponse, include_in_schema=False)
+        @app.get("/app.js", response_class=FileResponse, include_in_schema=False)
+        async def serve_js() -> FileResponse:
+            return FileResponse(UI_DIR / "app.js", media_type="application/javascript")
+
+        app.mount("/ui/assets", StaticFiles(directory=UI_DIR), name="ui-assets")
+        app.mount("/assets", StaticFiles(directory=UI_DIR), name="assets")
 
     return app
