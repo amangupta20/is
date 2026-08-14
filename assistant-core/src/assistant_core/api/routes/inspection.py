@@ -177,10 +177,10 @@ async def inspection_stats(
         )
         return InspectionStatsResponse(
             **stats,  # type: ignore[arg-type]
-            total_file_segments=file_stats["total_segments"],  # type: ignore[arg-type]
-            embedded_file_segments=file_stats["embedded_segments"],  # type: ignore[arg-type]
-            lexical_file_segments=file_stats["lexical_segments"],  # type: ignore[arg-type]
-            total_file_references=file_stats["total_references"],  # type: ignore[arg-type]
-            active_file_references=file_stats["active_references"],  # type: ignore[arg-type]
-            tombstoned_file_references=file_stats["tombstoned_references"],  # type: ignore[arg-type]
-        )  # type: ignore[arg-type]
+            total_file_segments=file_stats["total_segments"],
+            embedded_file_segments=file_stats["embedded_segments"],
+            lexical_file_segments=file_stats["lexical_segments"],
+            total_file_references=file_stats["total_references"],
+            active_file_references=file_stats["active_references"],
+            tombstoned_file_references=file_stats["tombstoned_references"],
+        )

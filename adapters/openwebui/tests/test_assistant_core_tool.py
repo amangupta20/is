@@ -211,7 +211,16 @@ def test_personal_context_tools_show_profile_search_read_and_fail_open(
                     "preview": "We used bounded hybrid recall.",
                     "source_native_chat_id": "chat-2",
                     "source_native_message_id": "message-2",
-                }
+                },
+                {
+                    "source_id": "00000000-0000-0000-0000-000000000013",
+                    "source_type": "file",
+                    "category": "file_evidence",
+                    "role": None,
+                    "preview": "Architecture specification notes.",
+                    "source_native_chat_id": "file-abc",
+                    "source_native_message_id": "0",
+                },
             ],
         },
         "/v1/personal-context/read": {
@@ -254,7 +263,9 @@ def test_personal_context_tools_show_profile_search_read_and_fail_open(
         "Personal context search (hybrid):\n"
         f"- [memory/preference] {source_id}: Use direct answers.\n"
         "- [conversation/assistant evidence] 00000000-0000-0000-0000-000000000012: "
-        "We used bounded hybrid recall. (chat chat-2, message message-2)"
+        "We used bounded hybrid recall. (chat chat-2, message message-2)\n"
+        "- [file evidence] 00000000-0000-0000-0000-000000000013: "
+        "Architecture specification notes. (file file-abc, chunk 0)"
     )
     assert asyncio.run(
         tool.read_personal_context(source_id, __user__=user)

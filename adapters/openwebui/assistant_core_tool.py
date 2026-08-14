@@ -176,6 +176,15 @@ class Tools:
                         return self._UNAVAILABLE
                     label = f"conversation/{role} evidence"
                     provenance = f" (chat {chat_id}, message {message_id})"
+                elif source_type == "file":
+                    if (
+                        role is not None
+                        or type(chat_id) is not str
+                        or type(message_id) is not str
+                    ):
+                        return self._UNAVAILABLE
+                    label = "file evidence"
+                    provenance = f" (file {chat_id}, chunk {message_id})"
                 else:
                     return self._UNAVAILABLE
                 lines.append(
@@ -405,11 +414,20 @@ class Tools:
                 return self._UNAVAILABLE
             last = data.get("last_indexed_at")
             last_str = str(last) if last else "never"
+            file_part = ""
+            if "total_file_segments" in data:
+                file_part = (
+                    f", files {data['total_file_segments']} "
+                    f"(embedded {data.get('embedded_file_segments', 0)}, "
+                    f"active refs {data.get('active_file_references', 0)}, "
+                    f"tombstoned {data.get('tombstoned_file_references', 0)})"
+                )
             return (
                 f"Index stats: segments {data['total_segments']} "
                 f"(embedded {data['embedded_segments']}, lexical {data['lexical_segments']}), "
                 f"references {data['total_references']} "
-                f"(active {data['active_references']}, tombstoned {data['tombstoned_references']}), "
+                f"(active {data['active_references']}, tombstoned {data['tombstoned_references']})"
+                f"{file_part}, "
                 f"jobs queued {data['queued_jobs']} dead {data['dead_jobs']}, "
                 f"last indexed {last_str}."
             )
