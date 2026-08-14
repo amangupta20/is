@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from assistant_core.api.routes.auth import router as auth_router
 from assistant_core.api.routes.context import router as context_router
 from assistant_core.api.routes.events import router as events_router
 from assistant_core.api.routes.files import router as files_router
@@ -38,6 +39,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = resolved_settings
     app.state.engine, app.state.session_factory = create_database(resolved_settings.database_url)
     setup_observability(app, resolved_settings)
+    app.include_router(auth_router)
     app.include_router(context_router)
     app.include_router(events_router)
     app.include_router(files_router)
