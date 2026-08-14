@@ -1982,19 +1982,43 @@ function initDOMElements() {
    ========================================================================== */
 
 async function api(path, options = {}) {
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(options.headers || {}),
-  };
-
-  if (state.token) {
-    headers['x-assistant-session'] = state.token;
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  const candidates = [cleanPath];
+  if (!cleanPath.startsWith('/ui/')) {
+    candidates.push(`/ui${cleanPath}`);
   }
 
-  const response = await fetch(path, {
-    ...options,
-    headers,
-  });
+  let response;
+  let lastError;
+
+  for (const url of candidates) {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    };
+
+    if (state.token) {
+      headers['x-assistant-session'] = state.token;
+    }
+
+    try {
+      response = await fetch(url, {
+        ...options,
+        headers,
+      });
+
+      if (response.status === 404 && candidates.length > 1 && url === candidates[0]) {
+        continue;
+      }
+      break;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  if (!response) {
+    throw lastError || new Error('Network error');
+  }
 
   if (response.status === 401) {
     handleUnauthenticated();
@@ -2070,16 +2094,30 @@ function handleUnauthenticated() {
   state.authenticated = false;
   state.token = null;
   sessionStorage.removeItem('assistant_session_token');
-  els.dashboardView.classList.add('hidden');
-  els.authView.classList.remove('hidden');
+  if (els.dashboardView) {
+    els.dashboardView.classList.add('hidden');
+    els.dashboardView.style.display = 'none';
+  }
+  if (els.authView) {
+    els.authView.classList.remove('hidden');
+    els.authView.style.display = 'flex';
+  }
 }
 
 function setAuthenticated(isAuth) {
   state.authenticated = isAuth;
   if (isAuth) {
-    els.authView.classList.add('hidden');
-    els.dashboardView.classList.remove('hidden');
-    els.userIdInput.value = state.userId;
+    if (els.authView) {
+      els.authView.classList.add('hidden');
+      els.authView.style.display = 'none';
+    }
+    if (els.dashboardView) {
+      els.dashboardView.classList.remove('hidden');
+      els.dashboardView.style.display = 'block';
+    }
+    if (els.userIdInput) {
+      els.userIdInput.value = state.userId;
+    }
     refreshDashboard();
   } else {
     handleUnauthenticated();
@@ -2087,36 +2125,72 @@ function setAuthenticated(isAuth) {
 }
 
 async function handleLogin(e) {
-  e.preventDefault();
+  if (e && e.preventDefault) e.preventDefault();
   const password = els.passwordInput.value.trim();
-  if (!password) return;
+  if (!password) {
+    if (els.loginError) {
+      els.loginError.textContent = 'Please enter your Admin Password.';
+      els.loginError.classList.remove('hidden');
+      els.loginError.style.display = 'block';
+    }
+    return;
+  }
 
   setButtonLoading(els.loginBtn, true);
-  els.loginError.classList.add('hidden');
-
-  try {
-    const res = await fetch('/v1/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
-    });
-
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.detail || 'Invalid admin password');
-    }
-
-    state.token = data.token;
-    sessionStorage.setItem('assistant_session_token', data.token);
-    els.passwordInput.value = '';
-    setAuthenticated(true);
-    showToast('Authenticated successfully', 'success');
-  } catch (err) {
-    els.loginError.textContent = err.message || 'Login failed. Please check credentials.';
-    els.loginError.classList.remove('hidden');
-  } finally {
-    setButtonLoading(els.loginBtn, false);
+  if (els.loginError) {
+    els.loginError.classList.add('hidden');
+    els.loginError.style.display = 'none';
   }
+
+  const endpoints = ['/v1/auth/login', '/ui/v1/auth/login'];
+  let success = false;
+  let errorMsg = 'Login failed. Please check credentials.';
+
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+
+      if (res.status === 404 && endpoint === endpoints[0]) {
+        continue;
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 401) {
+          errorMsg = 'Incorrect admin password. Please try again.';
+        } else {
+          errorMsg = data.detail || `Server error (${res.status})`;
+        }
+        break;
+      }
+
+      state.token = data.token;
+      sessionStorage.setItem('assistant_session_token', data.token);
+      els.passwordInput.value = '';
+      setAuthenticated(true);
+      showToast('Dashboard unlocked successfully', 'success');
+      success = true;
+      break;
+    } catch (err) {
+      errorMsg = err.message || 'Unable to connect to Assistant Core API.';
+    }
+  }
+
+  if (!success && els.loginError) {
+    els.loginError.textContent = errorMsg;
+    els.loginError.classList.remove('hidden');
+    els.loginError.style.display = 'block';
+    if (els.passwordInput) {
+      els.passwordInput.focus();
+      els.passwordInput.select();
+    }
+  }
+
+  setButtonLoading(els.loginBtn, false);
 }
 
 async function handleLogout() {
