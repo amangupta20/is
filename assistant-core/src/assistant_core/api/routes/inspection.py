@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
-from assistant_core.api.dependencies import require_adapter_signature
+from assistant_core.api.dependencies import require_session_or_signature
 from assistant_core.conversation.repository import get_conversation_stats, get_recent_references
 from assistant_core.files.repository import get_file_stats
 from assistant_core.identity.models import UserIdentity
@@ -82,7 +82,7 @@ class InspectionStatsResponse(BaseModel):
 
 @router.post(
     "/recent",
-    dependencies=[Depends(require_adapter_signature)],
+    dependencies=[Depends(require_session_or_signature)],
     response_model=InspectionRecentResponse,
 )
 async def inspection_recent(
@@ -122,7 +122,7 @@ async def inspection_recent(
 
 @router.post(
     "/stats",
-    dependencies=[Depends(require_adapter_signature)],
+    dependencies=[Depends(require_session_or_signature)],
     response_model=InspectionStatsResponse,
 )
 async def inspection_stats(

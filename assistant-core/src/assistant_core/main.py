@@ -2,8 +2,11 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from assistant_core.api.routes.auth import router as auth_router
 from assistant_core.api.routes.context import router as context_router
@@ -16,6 +19,8 @@ from assistant_core.api.routes.status import router as status_router
 from assistant_core.config import Settings
 from assistant_core.db.session import create_database
 from assistant_core.observability import setup_observability
+
+UI_DIR = Path(__file__).parent / "ui"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -47,4 +52,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(inspection_router)
     app.include_router(personal_context_router)
     app.include_router(status_router)
+
+    if UI_DIR.exists():
+        @app.get("/ui", response_class=FileResponse, include_in_schema=False)
+        async def serve_ui() -> FileResponse:
+            """Serve dashboard single-page application."""
+            return FileResponse(UI_DIR / "index.html", media_type="text/html")
+
+        app.mount("/ui", StaticFiles(directory=UI_DIR, html=True), name="ui")
+
     return app

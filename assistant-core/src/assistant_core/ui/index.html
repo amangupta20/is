@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Assistant Core &bull; Memory Manager &amp; Diagnostics</title>
+  <link rel="stylesheet" href="/ui/styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- App Wrapper -->
+  <div id="app" class="app-root">
+
+    <!-- Auth View (Shown when not authenticated) -->
+    <section id="auth-view" class="view auth-view hidden">
+      <div class="auth-card">
+        <div class="auth-header">
+          <div class="brand-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a8 8 0 0 0-8 8c0 3.36 2.07 6.24 5 7.42V20a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-2.58c2.93-1.18 5-4.06 5-7.42a8 8 0 0 0-8-8z"/>
+              <line x1="9" y1="9" x2="9.01" y2="9"/>
+              <line x1="15" y1="9" x2="15.01" y2="9"/>
+              <path d="M10 14h4"/>
+            </svg>
+          </div>
+          <h1 class="auth-title">Assistant Core</h1>
+          <p class="auth-subtitle">Enter your Admin Secret or Password to access the Memory Manager &amp; Diagnostics dashboard.</p>
+        </div>
+
+        <form id="login-form" class="auth-form" autocomplete="on">
+          <div class="form-group">
+            <label for="password-input" class="form-label">Admin Password</label>
+            <div class="input-with-icon">
+              <input 
+                type="password" 
+                id="password-input" 
+                class="form-input" 
+                placeholder="Enter password..." 
+                required 
+                autofocus
+                autocomplete="current-password"
+              >
+              <button type="button" id="toggle-password-btn" class="input-action-btn" title="Toggle password visibility" aria-label="Toggle password visibility">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div id="login-error" class="form-error hidden" role="alert"></div>
+
+          <button type="submit" id="login-btn" class="btn btn-primary btn-block">
+            <span class="btn-text">Unlock Dashboard</span>
+            <span class="btn-spinner hidden"></span>
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Main Dashboard View (Shown when authenticated) -->
+    <div id="dashboard-view" class="view dashboard-view hidden">
+      <!-- Top Navigation Bar -->
+      <header class="app-header">
+        <div class="header-left">
+          <div class="brand-badge">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a8 8 0 0 0-8 8c0 3.36 2.07 6.24 5 7.42V20a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-2.58c2.93-1.18 5-4.06 5-7.42a8 8 0 0 0-8-8z"/>
+              <line x1="9" y1="9" x2="9.01" y2="9"/>
+              <line x1="15" y1="9" x2="15.01" y2="9"/>
+              <path d="M10 14h4"/>
+            </svg>
+            <span class="brand-text">Assistant Core</span>
+          </div>
+
+          <nav class="nav-tabs" aria-label="Dashboard navigation">
+            <button class="nav-tab active" data-tab="memories" id="tab-memories-btn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+                <line x1="12" y1="22.08" x2="12" y2="12"/>
+              </svg>
+              <span>Memories</span>
+              <span id="memories-count-badge" class="badge badge-pill">0</span>
+            </button>
+            <button class="nav-tab" data-tab="diagnostics" id="tab-diagnostics-btn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+              </svg>
+              <span>Diagnostics</span>
+            </button>
+          </nav>
+        </div>
+
+        <div class="header-right">
+          <!-- Native User ID Selector -->
+          <div class="user-identity-box" title="Current native user context for memories and history">
+            <label for="user-id-input" class="identity-label">User:</label>
+            <input 
+              type="text" 
+              id="user-id-input" 
+              class="identity-input" 
+              value="default" 
+              placeholder="user_id"
+              title="Change User ID to inspect context for another user"
+            >
+          </div>
+
+          <!-- Theme Toggle -->
+          <button id="theme-toggle-btn" class="icon-btn" title="Toggle dark/light theme" aria-label="Toggle theme">
+            <svg id="theme-icon-dark" class="theme-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+            </svg>
+            <svg id="theme-icon-light" class="theme-icon hidden" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="5"/>
+              <line x1="12" y1="1" x2="12" y2="3"/>
+              <line x1="12" y1="21" x2="12" y2="23"/>
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+              <line x1="1" y1="12" x2="3" y2="12"/>
+              <line x1="21" y1="12" x2="23" y2="12"/>
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+            </svg>
+          </button>
+
+          <!-- Logout Button -->
+          <button id="logout-btn" class="btn btn-secondary btn-sm" title="Log out">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+            <span>Logout</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Main Layout Container -->
+      <main class="app-main">
+        <!-- Overview Telemetry Metrics Bar -->
+        <section class="metrics-grid" aria-label="System overview metrics">
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">Active Memories</span>
+              <span class="metric-icon metric-icon-blue">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 2a8 8 0 0 0-8 8c0 3.36 2.07 6.24 5 7.42V20a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-2.58c2.93-1.18 5-4.06 5-7.42a8 8 0 0 0-8-8z"/>
+                </svg>
+              </span>
+            </div>
+            <div class="metric-value" id="stat-active-memories">-</div>
+            <div class="metric-sub" id="stat-memories-sub">Loaded for current user</div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">Conversation Segments</span>
+              <span class="metric-icon metric-icon-emerald">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+              </span>
+            </div>
+            <div class="metric-value" id="stat-conversation-segments">-</div>
+            <div class="metric-sub" id="stat-conversation-sub">0 embedded / 0 lexical</div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">Library Files</span>
+              <span class="metric-icon metric-icon-indigo">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
+                  <polyline points="13 2 13 9 20 9"/>
+                </svg>
+              </span>
+            </div>
+            <div class="metric-value" id="stat-file-segments">-</div>
+            <div class="metric-sub" id="stat-files-sub">0 segments indexed</div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">Async Queue</span>
+              <span class="metric-icon metric-icon-amber">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"/>
+                  <polyline points="12 6 12 12 16 14"/>
+                </svg>
+              </span>
+            </div>
+            <div class="metric-value" id="stat-queue-status">-</div>
+            <div class="metric-sub" id="stat-queue-sub">0 queued &bull; 0 dead</div>
+          </div>
+        </section>
+
+        <!-- Tab Content 1: Memory Manager -->
+        <section id="tab-panel-memories" class="tab-panel">
+          <!-- Filter and Search Toolbar -->
+          <div class="toolbar-card">
+            <div class="toolbar-search-row">
+              <div class="search-input-wrapper">
+                <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="8"/>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+                <input 
+                  type="text" 
+                  id="search-input" 
+                  class="search-input" 
+                  placeholder="Filter statements, keys, or evidence quotes..."
+                  aria-label="Search memories"
+                >
+                <button type="button" id="search-clear-btn" class="search-clear-btn hidden" title="Clear search">
+                  &times;
+                </button>
+              </div>
+
+              <!-- Status Toggle -->
+              <div class="status-segmented-control" role="group" aria-label="Status filter">
+                <button type="button" class="segment-btn active" data-status="active">Active</button>
+                <button type="button" class="segment-btn" data-status="archived">Archived</button>
+                <button type="button" class="segment-btn" data-status="all">All</button>
+              </div>
+
+              <!-- Refresh Button -->
+              <button type="button" id="refresh-btn" class="btn btn-secondary btn-icon-only" title="Refresh list">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="23 4 23 10 17 10"/>
+                  <polyline points="1 20 1 14 7 14"/>
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                </svg>
+              </button>
+            </div>
+
+            <!-- Category Pills -->
+            <div class="category-pills-row" role="group" aria-label="Category filter">
+              <button type="button" class="pill active" data-category="all">
+                <span>All Categories</span>
+                <span class="pill-count" id="pill-count-all">0</span>
+              </button>
+              <button type="button" class="pill pill-pref" data-category="preference">
+                <span class="pill-dot"></span>
+                <span>Preferences</span>
+                <span class="pill-count" id="pill-count-preference">0</span>
+              </button>
+              <button type="button" class="pill pill-inst" data-category="instruction">
+                <span class="pill-dot"></span>
+                <span>Instructions</span>
+                <span class="pill-count" id="pill-count-instruction">0</span>
+              </button>
+              <button type="button" class="pill pill-fact" data-category="fact">
+                <span class="pill-dot"></span>
+                <span>Facts</span>
+                <span class="pill-count" id="pill-count-fact">0</span>
+              </button>
+              <button type="button" class="pill pill-proj" data-category="project">
+                <span class="pill-dot"></span>
+                <span>Projects</span>
+                <span class="pill-count" id="pill-count-project">0</span>
+              </button>
+              <button type="button" class="pill pill-dec" data-category="decision">
+                <span class="pill-dot"></span>
+                <span>Decisions</span>
+                <span class="pill-count" id="pill-count-decision">0</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Memory List Container -->
+          <div class="memories-container">
+            <!-- Loading Indicator -->
+            <div id="memories-loading" class="loading-state hidden">
+              <div class="spinner"></div>
+              <p>Fetching memories...</p>
+            </div>
+
+            <!-- Empty State -->
+            <div id="memories-empty" class="empty-state hidden">
+              <div class="empty-icon">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                </svg>
+              </div>
+              <h2 class="empty-title">No memories found</h2>
+              <p class="empty-description">No memory records match the current filters or user ID. Memories are automatically extracted during conversations or can be checked under another user ID.</p>
+            </div>
+
+            <!-- Memory Cards Grid -->
+            <div id="memories-grid" class="memories-grid"></div>
+          </div>
+        </section>
+
+        <!-- Tab Content 2: System Diagnostics -->
+        <section id="tab-panel-diagnostics" class="tab-panel hidden">
+          <div class="diagnostics-card">
+            <div class="diagnostics-header">
+              <div class="diagnostics-title-group">
+                <h2 class="section-title">Recent Ingested References</h2>
+                <p class="section-subtitle">Live inspection of recent conversation chunks, file segments, and their retrieval readiness.</p>
+              </div>
+              <button type="button" id="refresh-diagnostics-btn" class="btn btn-secondary btn-sm">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="23 4 23 10 17 10"/>
+                  <polyline points="1 20 1 14 7 14"/>
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                </svg>
+                <span>Refresh Telemetry</span>
+              </button>
+            </div>
+
+            <div class="table-wrapper">
+              <table class="data-table" id="recent-references-table">
+                <thead>
+                  <tr>
+                    <th>Reference ID</th>
+                    <th>Role</th>
+                    <th>Chat ID</th>
+                    <th>Message ID</th>
+                    <th>Ordinal</th>
+                    <th>Status</th>
+                    <th>Indexed At</th>
+                  </tr>
+                </thead>
+                <tbody id="recent-references-tbody">
+                  <tr>
+                    <td colspan="7" class="table-empty">Loading inspection telemetry...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <!-- Floating Merge Action Bar (appears when 2+ memories are selected) -->
+      <aside id="floating-merge-bar" class="floating-merge-bar hidden" aria-label="Bulk actions bar">
+        <div class="merge-bar-content">
+          <div class="merge-info">
+            <span class="merge-count-badge" id="merge-selected-count">2</span>
+            <span class="merge-info-text">memories selected for consolidation</span>
+          </div>
+          <div class="merge-actions">
+            <button type="button" id="merge-clear-btn" class="btn btn-secondary btn-sm">Deselect All</button>
+            <button type="button" id="merge-open-modal-btn" class="btn btn-primary btn-sm">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+              </svg>
+              <span>Merge Memories</span>
+            </button>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Edit Memory Modal -->
+    <div id="edit-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="edit-modal-title">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h2 id="edit-modal-title" class="modal-title">Edit Memory Statement</h2>
+          <button type="button" class="modal-close-btn" data-close-modal="edit-modal" aria-label="Close modal">&times;</button>
+        </div>
+        <form id="edit-memory-form" class="modal-form">
+          <input type="hidden" id="edit-memory-id">
+          
+          <div class="modal-meta-row">
+            <div class="modal-meta-item">
+              <span class="modal-meta-label">Category:</span>
+              <span id="edit-modal-category" class="badge">preference</span>
+            </div>
+            <div class="modal-meta-item">
+              <span class="modal-meta-label">Memory ID:</span>
+              <code id="edit-modal-id-text" class="code-pill">uuid</code>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="edit-statement-input" class="form-label">Durable Statement</label>
+            <textarea 
+              id="edit-statement-input" 
+              class="form-textarea" 
+              rows="4" 
+              required 
+              placeholder="Refined memory statement..."
+              maxlength="2000"
+            ></textarea>
+            <div class="char-count"><span id="edit-char-count">0</span> / 2000</div>
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-close-modal="edit-modal">Cancel</button>
+            <button type="submit" id="edit-save-btn" class="btn btn-primary">
+              <span class="btn-text">Save Changes</span>
+              <span class="btn-spinner hidden"></span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Merge Memories Modal -->
+    <div id="merge-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="merge-modal-title">
+      <div class="modal-card modal-card-lg">
+        <div class="modal-header">
+          <h2 id="merge-modal-title" class="modal-title">Merge &amp; Consolidate Memories</h2>
+          <button type="button" class="modal-close-btn" data-close-modal="merge-modal" aria-label="Close modal">&times;</button>
+        </div>
+        <form id="merge-memories-form" class="modal-form">
+          <p class="modal-description">
+            The selected source memories will be superseded/archived and replaced with a single consolidated memory record.
+          </p>
+
+          <!-- Source statements display -->
+          <div class="form-group">
+            <label class="form-label">Source Statements to Consolidate</label>
+            <div id="merge-sources-container" class="merge-sources-list"></div>
+          </div>
+
+          <div class="form-grid-2">
+            <div class="form-group">
+              <label for="merge-category-select" class="form-label">Target Category</label>
+              <select id="merge-category-select" class="form-select">
+                <option value="preference">Preference</option>
+                <option value="instruction">Instruction</option>
+                <option value="fact">Fact</option>
+                <option value="project">Project</option>
+                <option value="decision">Decision</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="merge-statement-input" class="form-label">New Consolidated Statement</label>
+            <textarea 
+              id="merge-statement-input" 
+              class="form-textarea" 
+              rows="4" 
+              required 
+              placeholder="Consolidated memory statement combining all key points..."
+              maxlength="2000"
+            ></textarea>
+            <div class="char-count"><span id="merge-char-count">0</span> / 2000</div>
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-close-modal="merge-modal">Cancel</button>
+            <button type="submit" id="merge-submit-btn" class="btn btn-primary">
+              <span class="btn-text">Consolidate &amp; Merge</span>
+              <span class="btn-spinner hidden"></span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+  </div>
+
+  <script type="module" src="/ui/app.js"></script>
+</body>
+</html>
