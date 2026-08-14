@@ -1500,7 +1500,7 @@ button {
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 2a8 8 0 0 0-8 8c0 3.36 2.07 6.24 5 7.42V20a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-2.58c2.93-1.18 5-4.06 5-7.42a8 8 0 0 0-8-8z"/>
               <line x1="9" y1="9" x2="9.01" y2="9"/>
-              <line x1="15" y1="15.01" y2="9"/>
+              <line x1="15" y1="9" x2="15.01" y2="9"/>
               <path d="M10 14h4"/>
             </svg>
             <span class="brand-text">Assistant Core</span>
@@ -2336,9 +2336,6 @@ async function loadRecentReferences() {
     state.recentReferences = data.results || [];
     renderRecentReferencesTable();
   } catch (err) {
-    showToast(`Failed to load inspection references: ${err.message}`, 'error');
-  }
-}
     showToast(`Failed to load inspection references: ${err.message}`, 'error');
   }
 }

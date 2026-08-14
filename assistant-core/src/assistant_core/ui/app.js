@@ -449,9 +449,6 @@ async function loadRecentReferences() {
     showToast(`Failed to load inspection references: ${err.message}`, 'error');
   }
 }
-    showToast(`Failed to load inspection references: ${err.message}`, 'error');
-  }
-}
 
 function renderRecentReferencesTable() {
   const tbody = els.recentReferencesTbody;
