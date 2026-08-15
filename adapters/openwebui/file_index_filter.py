@@ -29,6 +29,10 @@ class Filter:
         )
         timeout_seconds: float = Field(default=2.0, ge=0.1, le=5.0)
         open_webui_url: str = Field(default="http://open-webui:8080")
+        open_webui_api_key: str = Field(
+            default="",
+            json_schema_extra={"input": {"type": "password"}},
+        )
 
     def __init__(self) -> None:
         self.valves = self.Valves()
@@ -128,6 +132,11 @@ class Filter:
                     token = None
                     if isinstance(__user__, Mapping):
                         token = self._optional_id(__user__, "token") or self._optional_id(__user__, "access_token") or self._optional_id(__user__, "jwt")
+                    if not token:
+                        # Fallback to Valve-stored Open WebUI API key (for Library/paperclip where __user__ has no token)
+                        valve_key = self.valves.open_webui_api_key.strip() if hasattr(self.valves, "open_webui_api_key") else ""
+                        if valve_key:
+                            token = valve_key
                     # Debug: log what we are about to fetch
                     print(
                         f"file_index_filter: fetch attempt file_id={file_id} fetch_id={fetch_id} has_url={bool(url)} token_present={bool(token)} keys={list(f.keys())}",
