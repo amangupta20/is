@@ -118,6 +118,59 @@ class Filter:
                     if isinstance(val, str) and val.strip():
                         content = val
                         break
+                if not content or not content.strip():
+                    nested = f.get("file")
+                    if isinstance(nested, Mapping):
+                        for key in ("content", "text", "data"):
+                            val = nested.get(key)
+                            if isinstance(val, str) and val.strip():
+                                content = val
+                                break
+                        # Some versions store base64 in file.file.content
+                        if not content:
+                            b64 = nested.get("content")
+                            if isinstance(b64, str) and len(b64) > 100 and b64.strip():
+                                try:
+                                    import base64
+
+                                    decoded = base64.b64decode(b64).decode("utf-8", errors="ignore")
+                                    if decoded.strip():
+                                        content = decoded
+                                except Exception:
+                                    pass
+                        # If still no content and file is pdf/docx, try to decode base64 pdf/docx bytes
+                        if not content or not content.strip():
+                            for key in ("data", "content"):
+                                val = nested.get(key)
+                                if isinstance(val, str) and len(val) > 100:
+                                    try:
+                                        import base64
+                                        import io
+
+                                        raw = base64.b64decode(val)
+                                        if raw[:2] == b"%PDF":
+                                            try:
+                                                from pypdf import PdfReader
+
+                                                reader = PdfReader(io.BytesIO(raw))
+                                                texts = [page.extract_text() or "" for page in reader.pages]
+                                                content = "\n".join(t for t in texts if t.strip())
+                                            except Exception:
+                                                content = raw.decode("utf-8", errors="ignore")
+                                        elif raw[:2] == b"PK":
+                                            import zipfile
+                                            import xml.etree.ElementTree as ET
+
+                                            with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                                                xml_content = z.read("word/document.xml")
+                                                root = ET.fromstring(xml_content)
+                                                ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+                                                texts = [n.text for n in root.findall(".//w:t", ns) if n.text]
+                                                content = " ".join(texts)
+                                    except Exception:
+                                        pass
+                                    if content and content.strip():
+                                        break
                 # Fallback: fetch via Open WebUI file content API when only url/id is present
                 if not content or not content.strip():
                     url = self._optional_id(f, "url")
