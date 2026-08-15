@@ -28,6 +28,7 @@ class Filter:
             json_schema_extra={"input": {"type": "password"}},
         )
         timeout_seconds: float = Field(default=2.0, ge=0.1, le=5.0)
+        open_webui_url: str = Field(default="http://open-webui:8080")
 
     def __init__(self) -> None:
         self.valves = self.Valves()
@@ -113,7 +114,55 @@ class Filter:
                     if isinstance(val, str) and val.strip():
                         content = val
                         break
-                # Fallback: if file has `url` we cannot fetch here without auth; skip - user can re-upload as text
+                # Fallback: fetch via Open WebUI file content API when only url/id is present
+                if not content or not content.strip():
+                    url = self._optional_id(f, "url")
+                    # Open WebUI file urls are like /api/v1/files/{id}/content or /files/{id}
+                    fetch_id = file_id
+                    if url and "/files/" in url:
+                        # Try to extract id from url if present
+                        try:
+                            parts = url.split("/files/")[1].split("/")[0].split("?")[0]
+                            if parts:
+                                fetch_id = parts
+                        except Exception:
+                            pass
+                    # Attempt to fetch text via Open WebUI (bearer token from user if available)
+                    token = None
+                    if isinstance(__user__, Mapping):
+                        token = self._optional_id(__user__, "token") or self._optional_id(__user__, "access_token")
+                    try:
+                        headers = {}
+                        if token:
+                            headers["Authorization"] = f"Bearer {token}"
+                        # Try Open WebUI file content endpoint
+                        fetch_url = f"{self.valves.open_webui_url.rstrip('/')}/api/v1/files/{fetch_id}/content"
+                        with httpx.Client(timeout=self.valves.timeout_seconds) as client:
+                            resp = client.get(fetch_url, headers=headers)
+                            if resp.status_code == 200:
+                                # Try to detect docx (zip) vs plain text
+                                body_bytes = resp.content
+                                if body_bytes[:2] == b"PK":  # docx is zip
+                                    try:
+                                        import io
+                                        import xml.etree.ElementTree as ET
+                                        import zipfile
+
+                                        with zipfile.ZipFile(io.BytesIO(body_bytes)) as z:
+                                            xml_content = z.read("word/document.xml")
+                                            # Extract text from w:t nodes
+                                            root = ET.fromstring(xml_content)
+                                            ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+                                            texts = [n.text for n in root.findall(".//w:t", ns) if n.text]
+                                            content = " ".join(texts)
+                                    except Exception:
+                                        # Fallback to raw decode if unzip fails
+                                        content = body_bytes.decode("utf-8", errors="ignore")
+                                else:
+                                    content = body_bytes.decode("utf-8", errors="ignore")
+                    except Exception as exc:
+                        print(f"file_index_filter fetch fail-open {exc}", file=sys.stderr)
+                        content = None
                 if not content or not content.strip():
                     continue
                 if len(content) > 500_000:
