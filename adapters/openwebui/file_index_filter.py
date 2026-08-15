@@ -146,8 +146,15 @@ class Filter:
                         headers = {}
                         if token:
                             headers["Authorization"] = f"Bearer {token}"
-                        fetch_url = f"{self.valves.open_webui_url.rstrip('/')}/api/v1/files/{fetch_id}/content"
-                        with httpx.Client(timeout=self.valves.timeout_seconds) as client:
+                        # Prefer the url field if it's already a full URL, else construct
+                        if url and url.startswith("http"):
+                            fetch_url = url
+                        elif url and url.startswith("/"):
+                            fetch_url = f"{self.valves.open_webui_url.rstrip('/')}{url}"
+                        else:
+                            fetch_url = f"{self.valves.open_webui_url.rstrip('/')}/api/v1/files/{fetch_id}/content"
+                        # Use a longer timeout for file content (docx/pdf can be large)
+                        with httpx.Client(timeout=max(self.valves.timeout_seconds, 10.0)) as client:
                             resp = client.get(fetch_url, headers=headers)
                             print(
                                 f"file_index_filter: fetch {fetch_url} -> {resp.status_code} len={len(resp.content) if resp.content else 0}",
