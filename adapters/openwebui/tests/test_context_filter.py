@@ -789,14 +789,20 @@ def test_outlet_captures_attached_file_ids(monkeypatch: pytest.MonkeyPatch) -> N
         user_content="Here is the architecture doc.",
         assistant_content="I see the details.",
     )
-    body["files"] = [{"id": "file-top-level-1", "type": "file"}]
+    body["files"] = [
+        {"id": "file-top-level-1", "type": "file"},
+        {"id": "kb-obsidian-1", "type": "collection", "collection_name": "obsidian-vault"},
+        {"id": "kb-obsidian-2", "type": "knowledge"},
+    ]
     # Also attach in user message
     body["messages"][0]["files"] = [
         {"id": "file-msg-level-2", "type": "file"},
         {"id": "file-top-level-1"},
+        {"id": "kb-obsidian-3", "collection_id": "vault-1"},
     ]
 
     assert anyio.run(filter_.outlet, body, user, metadata) is body
     payload = delivered_payload.get("payload")
     assert isinstance(payload, dict)
     assert payload.get("attached_file_ids") == ["file-top-level-1", "file-msg-level-2"]
+

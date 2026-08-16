@@ -312,6 +312,23 @@ class Filter:
 
             for f in candidate_files:
                 if isinstance(f, Mapping):
+                    ftype = f.get("type")
+                    if isinstance(ftype, str) and ftype in (
+                        "collection",
+                        "knowledge",
+                        "web",
+                        "note",
+                        "folder",
+                        "doc",
+                    ):
+                        continue
+                    if (
+                        f.get("collection_name")
+                        or f.get("knowledge_id")
+                        or f.get("collection_id")
+                        or f.get("kb_id")
+                    ):
+                        continue
                     fid = f.get("id") or f.get("file_id")
                     if (
                         isinstance(fid, str)
