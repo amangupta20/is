@@ -1,0 +1,74 @@
+"""Unit tests for the asynchronous file indexing worker."""
+
+import uuid
+from unittest.mock import patch
+
+import anyio
+import pytest
+
+from assistant_core.files.client import OpenWebUIFileFetchError
+from assistant_core.files.schemas import FileMaterializationResult
+from assistant_core.jobs.worker import _handle_index_file
+
+
+class FakeSession:
+    def __init__(self) -> None:
+        self.committed = False
+        self.rolled_back = False
+
+    async def commit(self) -> None:
+        self.committed = True
+
+    async def rollback(self) -> None:
+        self.rolled_back = True
+
+
+def test_handle_index_file_success() -> None:
+    user_id = uuid.uuid4()
+    file_id = "test-file-123"
+    payload = {
+        "file_id": file_id,
+        "user_id": str(user_id),
+    }
+
+    session = FakeSession()
+
+    with patch("assistant_core.jobs.worker.fetch_openwebui_file") as mock_fetch, \
+         patch("assistant_core.jobs.worker.materialize_file_passages") as mock_mat, \
+         patch("assistant_core.jobs.worker.get_conversation_embedder"):
+
+        mock_fetch.return_value = ("report.docx", "application/vnd.openxmlformats", "# Heading\n\nContent")
+        mock_mat.return_value = FileMaterializationResult(
+            native_file_id=file_id,
+            total_chunks=1,
+            inserted_segments=1,
+            reused_segments=0,
+            missing_embedding_segment_ids=(),
+        )
+
+        async def exercise() -> None:
+            await _handle_index_file(session, payload)  # type: ignore[arg-type]
+
+        anyio.run(exercise)
+        assert mock_fetch.called
+        assert mock_mat.called
+
+
+def test_handle_index_file_fetch_error() -> None:
+    user_id = uuid.uuid4()
+    file_id = "test-file-123"
+    payload = {
+        "file_id": file_id,
+        "user_id": str(user_id),
+    }
+
+    session = FakeSession()
+
+    with patch("assistant_core.jobs.worker.fetch_openwebui_file") as mock_fetch:
+        mock_fetch.side_effect = OpenWebUIFileFetchError("404 Not Found", status_code=404)
+
+        async def exercise() -> None:
+            await _handle_index_file(session, payload)  # type: ignore[arg-type]
+
+        with pytest.raises(OpenWebUIFileFetchError):
+            anyio.run(exercise)

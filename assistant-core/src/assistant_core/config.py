@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     hmac_secret: str = DEVELOPMENT_HMAC_SECRET
     request_clock_skew_seconds: int = 60
     context_timeout_seconds: float = 1.5
+    open_webui_url: str = Field(default="http://open-webui:8080", min_length=1, max_length=2_048)
+    open_webui_api_key: SecretStr | None = None
+    file_indexing_timeout_seconds: float = Field(default=30, ge=1, le=300)
     task_model_base_url: str | None = Field(default=None, min_length=1, max_length=2_048)
     task_model_api_key: SecretStr | None = None
     task_model_model: str | None = Field(default=None, min_length=1, max_length=200)
@@ -34,6 +37,7 @@ class Settings(BaseSettings):
     otlp_endpoint: str | None = None
 
     @field_validator(
+        "open_webui_url",
         "task_model_base_url",
         "task_model_model",
         "embedding_base_url",
@@ -47,7 +51,7 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator("task_model_api_key", "embedding_api_key", mode="before")
+    @field_validator("open_webui_api_key", "task_model_api_key", "embedding_api_key", mode="before")
     @classmethod
     def _empty_secret_to_none(cls, value: object) -> object:
         if isinstance(value, str) and value.strip() == "":

@@ -33,6 +33,13 @@ from assistant_core.conversation.repository import (
 )
 from assistant_core.db.session import create_database
 from assistant_core.events.models import EventInbox
+from assistant_core.files.client import OpenWebUIFileFetchError, fetch_openwebui_file
+from assistant_core.files.repository import (
+    get_file_segment_content,
+    materialize_file_passages,
+    store_file_segment_embedding,
+    tombstone_file_references,
+)
 from assistant_core.jobs.models import Job
 from assistant_core.jobs.repository import claim_next_job, complete_job, fail_job
 from assistant_core.memory.extractor import (
@@ -108,23 +115,15 @@ def get_memory_extractor(settings: Settings | None = None) -> TaskModelMemoryExt
 def get_conversation_embedder(
     settings: Settings | None = None,
 ) -> OpenAICompatibleEmbedder:
-    """Build the configured one-input embedding client."""
-    return build_conversation_embedder(settings or get_settings())
+    """Return the configured OpenAI-compatible embedder for conversation recall."""
+    resolved_settings = settings or get_settings()
+    return build_conversation_embedder(resolved_settings)
 
 
-async def handle(
-    session: AsyncSession, kind: str, payload: dict[str, JsonValue]
+async def _handle_process_event(
+    session: AsyncSession, payload: dict[str, JsonValue]
 ) -> None:
-    """Route one job without calling the provider for event materialization."""
-    if kind == "extract_memory":
-        await _handle_extract_memory(session, payload)
-        return
-    if kind == "index_conversation":
-        await _handle_index_conversation(session, payload)
-        return
-    if kind != "process_event":
-        raise UnsupportedJobKindError(UNSUPPORTED_KIND_ERROR)
-
+    """Route one received event to its durable materialization."""
     event_id = payload.get("event_id")
     if (
         set(payload) != {"event_id"}
@@ -137,6 +136,38 @@ async def handle(
     event = await session.get(EventInbox, event_id)
     if event is None:
         raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
+
+    if event.event_type in {"file.deleted.v1", "file.deleted"}:
+        file_id = event.payload.get("file_id") if isinstance(event.payload, dict) else None
+        if file_id and isinstance(file_id, str):
+            count = await tombstone_file_references(
+                session, user_id=event.user_id, native_file_id=file_id
+            )
+            LOGGER.info(
+                "file_tombstoned",
+                file_id=file_id,
+                user_id=str(event.user_id),
+                tombstoned_count=count,
+            )
+        return
+
+    if event.event_type in {"file.created.v1", "file.created", "file.attached.v1"}:
+        file_id = event.payload.get("file_id") if isinstance(event.payload, dict) else None
+        if file_id and isinstance(file_id, str):
+            await session.execute(
+                insert(Job)
+                .values(
+                    id=uuid.uuid4(),
+                    identity_key=f"file:{file_id}:{CHUNKING_VERSION}",
+                    kind="index_file",
+                    status="queued",
+                    payload={"file_id": file_id, "user_id": str(event.user_id)},
+                    attempts=0,
+                )
+                .on_conflict_do_nothing(index_elements=[Job.identity_key])
+            )
+        return
+
     if event.event_type == "chat.deleted":
         native_chat_id = event.native_chat_id
         if not native_chat_id or not native_chat_id.strip():
@@ -157,6 +188,7 @@ async def handle(
             orphan_segment_count=result.orphan_segment_count,
         )
         return
+
     if event.event_type == "turn.completed.v1":
         await materialize_completed_turn(session, event)
         turn = await get_completed_turn_for_event(session, event.event_id)
@@ -184,6 +216,23 @@ async def handle(
             )
             .on_conflict_do_nothing(index_elements=[Job.identity_key])
         )
+
+        attached_files = event.payload.get("attached_file_ids") if isinstance(event.payload, dict) else None
+        if isinstance(attached_files, list):
+            for fid in attached_files:
+                if isinstance(fid, str) and fid.strip():
+                    await session.execute(
+                        insert(Job)
+                        .values(
+                            id=uuid.uuid4(),
+                            identity_key=f"file:{fid}:{CHUNKING_VERSION}",
+                            kind="index_file",
+                            status="queued",
+                            payload={"file_id": fid, "user_id": str(event.user_id)},
+                            attempts=0,
+                        )
+                        .on_conflict_do_nothing(index_elements=[Job.identity_key])
+                    )
 
 
 def _turn_id_from_payload(payload: dict[str, JsonValue]) -> uuid.UUID:
@@ -248,19 +297,19 @@ async def _handle_index_conversation(
                 await session.rollback()
                 continue
             await session.rollback()
-            embedding = await asyncio.to_thread(embedder.embed_one, content)
-            stored = await store_segment_embedding(
+            vector = await asyncio.to_thread(embedder.embed_one, content)
+            await store_segment_embedding(
                 session,
                 segment_id,
-                embedding,
+                vector,
                 model=embedder.model,
                 dimension=embedder.dimension,
                 version=EMBEDDING_VERSION,
                 embedded_at=datetime.now(UTC),
             )
             await session.commit()
-            embedded_count += int(stored)
-    except (ConversationEmbeddingError, EmbeddingConfigurationError):
+            embedded_count += 1
+    except (EmbeddingConfigurationError, ConversationEmbeddingError):
         LOGGER.warning(
             "conversation_index_failed",
             turn_id=turn_id_text,
@@ -274,6 +323,7 @@ async def _handle_index_conversation(
             error_code=CONVERSATION_EMBEDDING_FAILED_ERROR,
         )
         raise
+
     LOGGER.info(
         "conversation_index_completed",
         turn_id=turn_id_text,
@@ -287,6 +337,110 @@ async def _handle_index_conversation(
         dimension=embedder.dimension,
         duration_ms=round((perf_counter() - started_at) * 1000, 3),
     )
+
+
+async def _handle_index_file(
+    session: AsyncSession, payload: dict[str, JsonValue]
+) -> None:
+    """Fetch file markdown from Open WebUI, chunk, persist passages, and calculate missing embeddings."""
+    file_id = payload.get("file_id")
+    user_id_raw = payload.get("user_id")
+    if not isinstance(file_id, str) or not file_id.strip() or not isinstance(user_id_raw, str):
+        raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
+    try:
+        user_id = uuid.UUID(user_id_raw)
+    except ValueError:
+        raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR) from None
+
+    settings = get_settings()
+    started_at = perf_counter()
+
+    LOGGER.info(
+        "file_index_started",
+        file_id=file_id,
+        user_id=str(user_id),
+    )
+
+    # Fetch file metadata and extracted content from Open WebUI
+    filename, mime_type, content = await asyncio.to_thread(
+        fetch_openwebui_file,
+        base_url=settings.open_webui_url,
+        api_key=settings.open_webui_api_key.get_secret_value() if settings.open_webui_api_key else None,
+        file_id=file_id,
+        timeout_seconds=settings.file_indexing_timeout_seconds,
+    )
+
+    materialization = await materialize_file_passages(
+        session,
+        user_id=user_id,
+        native_file_id=file_id,
+        filename=filename,
+        mime_type=mime_type,
+        markdown_text=content,
+    )
+    await session.commit()
+
+    # Compute missing embeddings
+    embedder: OpenAICompatibleEmbedder | None = None
+    embedded_count = 0
+    try:
+        embedder = get_conversation_embedder()
+        for seg_id_str in materialization.missing_embedding_segment_ids:
+            seg_id = uuid.UUID(seg_id_str)
+            seg_content = await get_file_segment_content(session, seg_id)
+            if seg_content is None:
+                await session.rollback()
+                continue
+            await session.rollback()
+            vector = await asyncio.to_thread(embedder.embed_one, seg_content)
+            await store_file_segment_embedding(
+                session,
+                seg_id,
+                vector,
+                model=embedder.model,
+                dimension=embedder.dimension,
+                version=EMBEDDING_VERSION,
+            )
+            await session.commit()
+            embedded_count += 1
+    except (EmbeddingConfigurationError, ConversationEmbeddingError) as exc:
+        LOGGER.warning(
+            "file_embedding_unavailable",
+            file_id=file_id,
+            error=str(exc),
+        )
+        await session.rollback()
+
+    duration_ms = (perf_counter() - started_at) * 1000
+    LOGGER.info(
+        "file_index_completed",
+        file_id=file_id,
+        user_id=str(user_id),
+        filename=filename,
+        total_chunks=materialization.total_chunks,
+        inserted_segments=materialization.inserted_segments,
+        reused_segments=materialization.reused_segments,
+        embedded_count=embedded_count,
+        duration_ms=round(duration_ms, 2),
+    )
+
+
+async def handle(
+    session: AsyncSession,
+    kind: str,
+    payload: dict[str, JsonValue],
+) -> None:
+    """Route one claimed payload to its task handler."""
+    if kind == "process_event":
+        await _handle_process_event(session, payload)
+    elif kind == "extract_memory":
+        await _handle_extract_memory(session, payload)
+    elif kind == "index_conversation":
+        await _handle_index_conversation(session, payload)
+    elif kind == "index_file":
+        await _handle_index_file(session, payload)
+    else:
+        raise UnsupportedJobKindError(UNSUPPORTED_KIND_ERROR)
 
 
 async def _record_handler_failure(
@@ -320,6 +474,8 @@ async def process_one(session: AsyncSession) -> bool:
         error_code = MEMORY_EXTRACTION_FAILED_ERROR
     except (ConversationEmbeddingError, EmbeddingConfigurationError):
         error_code = CONVERSATION_EMBEDDING_FAILED_ERROR
+    except OpenWebUIFileFetchError as exc:
+        error_code = f"file_fetch_failed_{exc.status_code}" if exc.status_code else "file_fetch_failed"
     except Exception:  # noqa: BLE001 - all ordinary handler failures share one safe code
         error_code = "handler_failed"
     else:
