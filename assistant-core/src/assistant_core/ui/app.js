@@ -208,6 +208,7 @@ class DashboardApp {
       files: { title: 'Documents', sub: 'Inspect indexed files, full markdown texts, and chunk segment trees.' },
       conversations: { title: 'Conversations', sub: 'Search and inspect indexed conversation turns.' },
       jobs: { title: 'Worker Jobs', sub: 'Monitor asynchronous indexing and re-queue dead jobs.' },
+      playground: { title: 'Search Playground', sub: 'Interactive hybrid RRF retrieval tester and prompt context preview.' },
     };
 
     document.getElementById('page-title').innerText = titles[tabName]?.title || 'Dashboard';
@@ -232,6 +233,8 @@ class DashboardApp {
         break;
       case 'jobs':
         this.loadJobs();
+        break;
+      case 'playground':
         break;
     }
   }
@@ -832,6 +835,167 @@ class DashboardApp {
       this.loadOverview();
     } catch {
       // Error handled in api()
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // Memory Consolidation
+  // ------------------------------------------------------------------------
+  openConsolidationModal() {
+    document.getElementById('consolidation-user-id').value = '';
+    document.getElementById('consolidation-results-box').style.display = 'none';
+    const btn = document.getElementById('start-consolidation-btn');
+    btn.disabled = false;
+    btn.innerText = 'Run Consolidation';
+    document.getElementById('consolidation-modal').style.display = 'flex';
+  }
+
+  closeConsolidationModal() {
+    document.getElementById('consolidation-modal').style.display = 'none';
+  }
+
+  async executeConsolidation() {
+    const userId = document.getElementById('consolidation-user-id').value.trim() || null;
+    const btn = document.getElementById('start-consolidation-btn');
+    btn.disabled = true;
+    btn.innerText = 'Consolidating Memories...';
+
+    const resultsBox = document.getElementById('consolidation-results-box');
+    const resultsTitle = document.getElementById('consolidation-results-title');
+    const resultsList = document.getElementById('consolidation-results-list');
+
+    try {
+      const res = await this.api('/v1/admin/memories/consolidate', {
+        method: 'POST',
+        body: JSON.stringify({ native_user_id: userId }),
+      });
+
+      this.showToast(`Consolidation finished: ${res.total_superseded} memories updated`, 'success');
+      resultsTitle.innerText = `Processed ${res.consolidated_users} user(s) — ${res.total_superseded} conflicts resolved`;
+
+      if (res.details && res.details.length > 0) {
+        resultsList.innerHTML = res.details
+          .map(
+            (d) => `
+          <div style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle);">
+            <div><s class="text-danger">${this.escapeHtml(d.superseded_statement)}</s></div>
+            <div class="text-success">↳ ${this.escapeHtml(d.superseding_statement)}</div>
+            <div class="text-muted" style="font-size: 11px;">Reason: ${this.escapeHtml(d.reason)}</div>
+          </div>
+        `
+          )
+          .join('');
+      } else {
+        resultsList.innerHTML = '<p class="text-muted">No conflicting or obsolete memories found.</p>';
+      }
+
+      resultsBox.style.display = 'block';
+      this.loadMemories();
+      this.loadOverview();
+    } catch {
+      // Handled in api()
+    } finally {
+      btn.disabled = false;
+      btn.innerText = 'Run Consolidation Again';
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // Search Playground
+  // ------------------------------------------------------------------------
+  async runPlaygroundSearch() {
+    const query = document.getElementById('playground-query').value.trim();
+    if (!query) {
+      this.showToast('Please enter a search query', 'error');
+      return;
+    }
+
+    const userId = document.getElementById('playground-user-id').value.trim() || 'user-1';
+    const sourceType = document.getElementById('playground-source-type').value;
+    const limit = parseInt(document.getElementById('playground-limit').value, 10) || 8;
+
+    const btn = document.getElementById('playground-search-btn');
+    btn.disabled = true;
+    btn.innerText = 'Searching...';
+
+    try {
+      const data = await this.api('/v1/admin/playground/search', {
+        method: 'POST',
+        body: JSON.stringify({
+          native_user_id: userId,
+          query,
+          limit,
+          source_type: sourceType,
+        }),
+      });
+
+      this.renderPlaygroundResults(data);
+    } catch {
+      // Handled in api()
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = `<svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> Search`;
+    }
+  }
+
+  renderPlaygroundResults(data) {
+    const statusBar = document.getElementById('playground-status-bar');
+    const modeBadge = document.getElementById('playground-mode-badge');
+    const statsText = document.getElementById('playground-stats-text');
+    const resultsContainer = document.getElementById('playground-results-container');
+    const matchesList = document.getElementById('playground-matches-list');
+    const renderedPreview = document.getElementById('playground-rendered-preview');
+
+    statusBar.style.display = 'flex';
+    resultsContainer.style.display = 'grid';
+
+    modeBadge.className = data.mode === 'hybrid' ? 'badge badge-running' : 'badge badge-queued';
+    modeBadge.innerText = data.mode === 'hybrid' ? '⚡ Hybrid RRF (Vector + Lexical)' : '🔍 Lexical Only';
+    statsText.innerText = `${data.total_results} results retrieved in ${data.duration_ms}ms for user "${data.native_user_id}"`;
+
+    this.currentPlaygroundContext = data.rendered_llm_block || '';
+    renderedPreview.innerText = data.rendered_llm_block || '/* No context generated */';
+
+    if (!data.results || data.results.length === 0) {
+      matchesList.innerHTML = '<div class="card"><p class="text-muted">No matching memories, documents, or conversation turns found.</p></div>';
+      return;
+    }
+
+    const typeIcons = {
+      memory: '🧠 Memory',
+      file: '📁 Document',
+      conversation: '💬 Conversation',
+    };
+
+    matchesList.innerHTML = data.results
+      .map(
+        (r, idx) => `
+      <div class="playground-match-card">
+        <div class="playground-match-header">
+          <div class="playground-match-rank">
+            <span>#${idx + 1}</span>
+            <span class="badge badge-${r.category || r.source_type}">${typeIcons[r.source_type] || r.source_type}</span>
+          </div>
+          <span class="rrf-chip" title="Reciprocal Rank Fusion Score">RRF ${r.rrf_score.toFixed(4)}</span>
+        </div>
+        <div class="playground-match-text">${this.escapeHtml(r.statement)}</div>
+        <div class="playground-match-meta">
+          ${r.source_type === 'file' ? `<span>📄 ${this.escapeHtml(r.metadata?.filename || 'doc')} (chunk #${r.metadata?.chunk_ordinal})</span>` : ''}
+          ${r.source_type === 'conversation' ? `<span>💬 ${this.escapeHtml(r.role || 'user')} turn in chat <code>${this.escapeHtml(r.metadata?.native_chat_id || '')}</code></span>` : ''}
+          ${r.source_type === 'memory' ? `<span>🔑 <code>${this.escapeHtml(r.metadata?.key || '')}</code></span>` : ''}
+          ${r.vector_score !== null ? `<span>• Cosine Sim: <strong>${r.vector_score}</strong></span>` : ''}
+          ${r.lexical_rank ? `<span>• Lexical Rank: #${r.lexical_rank}</span>` : ''}
+        </div>
+      </div>
+    `
+      )
+      .join('');
+  }
+
+  copyPlaygroundContext() {
+    if (this.currentPlaygroundContext) {
+      navigator.clipboard.writeText(this.currentPlaygroundContext);
+      this.showToast('Prompt context copied to clipboard', 'success');
     }
   }
 

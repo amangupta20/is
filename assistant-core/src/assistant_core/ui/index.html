@@ -70,6 +70,10 @@
             <span>Worker Jobs</span>
             <span id="badge-dead-jobs" class="nav-badge badge-danger" style="display: none;">0 dead</span>
           </button>
+          <button class="nav-item" data-tab="playground">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+            <span>Search Playground</span>
+          </button>
         </nav>
 
         <div class="sidebar-footer">
@@ -218,6 +222,7 @@
                 <option value="tombstoned">Tombstoned Only</option>
                 <option value="all">All States</option>
               </select>
+              <button class="btn btn-secondary btn-sm" onclick="app.openConsolidationModal()">⚡ Consolidate</button>
               <button class="btn btn-primary btn-sm" onclick="app.openNewMemoryModal()">+ New Memory</button>
             </div>
           </div>
@@ -382,6 +387,76 @@
             <div id="jobs-pagination" class="pagination-bar"></div>
           </div>
         </section>
+
+        <!-- Tab: Playground -->
+        <section id="tab-playground" class="tab-pane">
+          <div class="card playground-search-card">
+            <div class="playground-form">
+              <div class="form-row" style="align-items: flex-end; gap: 14px;">
+                <div class="form-group flex-2">
+                  <label for="playground-query">Search Query or User Prompt</label>
+                  <div class="search-box playground-search-box">
+                    <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <input type="text" id="playground-query" placeholder="e.g. What are my favorite development tools and database choices?" onkeydown="if(event.key === 'Enter') app.runPlaygroundSearch()">
+                  </div>
+                </div>
+                <div class="form-group" style="width: 130px;">
+                  <label for="playground-user-id">User ID</label>
+                  <input type="text" id="playground-user-id" value="user-1">
+                </div>
+                <div class="form-group" style="width: 150px;">
+                  <label for="playground-source-type">Source Filter</label>
+                  <select id="playground-source-type">
+                    <option value="all">All Sources</option>
+                    <option value="memories">Memories Only</option>
+                    <option value="files">Documents Only</option>
+                    <option value="conversations">Conversations Only</option>
+                  </select>
+                </div>
+                <div class="form-group" style="width: 90px;">
+                  <label for="playground-limit">Limit</label>
+                  <input type="number" id="playground-limit" min="1" max="50" value="8">
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                  <button id="playground-search-btn" class="btn btn-primary" onclick="app.runPlaygroundSearch()">
+                    <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    Search
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="playground-status-bar" class="playground-status-bar" style="display: none;">
+            <div class="status-left">
+              <span id="playground-mode-badge" class="badge badge-running">Hybrid RRF</span>
+              <span id="playground-stats-text" class="text-secondary">0 results retrieved</span>
+            </div>
+            <div class="status-right">
+              <button class="btn btn-secondary btn-sm" onclick="app.copyPlaygroundContext()">📋 Copy Prompt Context</button>
+            </div>
+          </div>
+
+          <div id="playground-results-container" class="playground-grid" style="display: none;">
+            <!-- Left: Match Cards -->
+            <div class="playground-col">
+              <div class="card-header" style="margin-bottom: 12px;">
+                <h3>Retrieved Passages & Memories</h3>
+              </div>
+              <div id="playground-matches-list" class="playground-matches-list"></div>
+            </div>
+
+            <!-- Right: Rendered LLM Block & Profile Snapshot -->
+            <div class="playground-col">
+              <div class="card-header" style="margin-bottom: 12px;">
+                <h3>Simulated LLM Prompt Context</h3>
+              </div>
+              <div class="card playground-preview-card">
+                <pre><code id="playground-rendered-preview"></code></pre>
+              </div>
+            </div>
+          </div>
+        </section>
       </main>
     </div>
 
@@ -514,6 +589,38 @@
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" onclick="app.closePurgeModal()">Cancel</button>
           <button type="button" id="confirm-purge-btn" class="btn btn-danger" disabled onclick="app.executePurge()">Permanently Purge Data</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Memory Consolidation -->
+    <div id="consolidation-modal" class="modal-overlay" style="display: none;">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h2>⚡ Memory Consolidation</h2>
+            <p class="text-muted">Reconcile evolving statements and auto-supersede conflicting facts</p>
+          </div>
+          <button class="modal-close" onclick="app.closeConsolidationModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="text-secondary" style="font-size: 13px; line-height: 1.5; margin-bottom: 16px;">
+            Consolidation uses the background task model to compare active memory statements, identify direct contradictions or version updates (e.g. switching programming languages or operating systems), and mark older records as <code>superseded</code>.
+          </p>
+          <div class="form-group">
+            <label for="consolidation-user-id">Target User ID (Leave blank for all users)</label>
+            <input type="text" id="consolidation-user-id" placeholder="Optional: user-1">
+          </div>
+          <div id="consolidation-results-box" style="display: none; margin-top: 16px;">
+            <div class="card" style="padding: 14px; background: var(--bg-sidebar);">
+              <h4 id="consolidation-results-title" style="margin-bottom: 8px; font-size: 13px;"></h4>
+              <div id="consolidation-results-list" style="font-size: 12px; max-height: 200px; overflow-y: auto;"></div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="app.closeConsolidationModal()">Close</button>
+          <button type="button" id="start-consolidation-btn" class="btn btn-primary" onclick="app.executeConsolidation()">Run Consolidation</button>
         </div>
       </div>
     </div>

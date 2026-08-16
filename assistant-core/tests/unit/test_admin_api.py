@@ -11,6 +11,7 @@ from assistant_core.auth.admin import create_admin_session_token
 from assistant_core.config import Settings
 from assistant_core.jobs.models import Job
 from assistant_core.main import create_app
+from assistant_core.memory.models import ChatProfileSnapshot, MemoryRecord
 
 
 class _FakeResult:
@@ -37,7 +38,7 @@ class _FakeResult:
         return self._scalar or (self._rows[0] if self._rows else None)
 
     def all(self) -> list[Any]:
-        return self._rows
+        return self._scalars if self._scalars else self._rows
 
     def scalars(self) -> "_FakeResult":
         return self
@@ -374,3 +375,81 @@ def test_admin_batch_delete_and_purge() -> None:
     assert "memories" in good_purge_res.json()["deleted"]
     assert "file_documents" in good_purge_res.json()["deleted"]
     assert "completed_turns" in good_purge_res.json()["deleted"]
+
+
+def test_admin_consolidation_and_playground() -> None:
+    secret = "admin-secret-at-least-32-chars-long"
+    settings = Settings(
+        hmac_secret=secret,
+        task_model_base_url="http://mock-llm.local",
+        task_model_model="gpt-4o-mini",
+    )
+    app = create_app(settings)
+
+    fake_record = MemoryRecord(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        key="editor",
+        category="preference",
+        statement="User prefers Neovim",
+        state="active",
+        created_at=datetime.now(UTC),
+    )
+
+    snapshot_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+
+    session = _FakeSession(
+        [
+            # For POST /v1/admin/memories/consolidate (1 query returning list of records for user)
+            _FakeResult(scalars_list=[fake_record]),
+            # For POST /v1/admin/playground/search:
+            # 1. search_explicit_memory
+            _FakeResult(scalars_list=[fake_record]),
+            # 2. search_conversation_context
+            _FakeResult(rows=[]),
+            # 3. search_file_passages
+            _FakeResult(rows=[]),
+            # 4. get_or_create_profile: User identity upsert
+            _FakeResult(scalar=user_id),
+            # 5. get_or_create_profile: existing snapshot query
+            _FakeResult(
+                scalar=ChatProfileSnapshot(
+                    id=snapshot_id,
+                    user_id=user_id,
+                    native_chat_id="playground-preview",
+                    rendered_text="<user_profile>\n- User prefers Neovim\n</user_profile>",
+                )
+            ),
+        ]
+    )
+    app.state.session_factory = lambda: session
+    client = _get_authed_client(app, secret)
+
+    # 1. Trigger consolidation for user-1
+    c_res = client.post(
+        "/v1/admin/memories/consolidate",
+        json={"native_user_id": "user-1"},
+    )
+    assert c_res.status_code == 200
+    assert c_res.json()["status"] == "success"
+    assert c_res.json()["consolidated_users"] == 1
+
+    # 2. Playground search
+    p_res = client.post(
+        "/v1/admin/playground/search",
+        json={
+            "native_user_id": "user-1",
+            "query": "Neovim preference",
+            "limit": 5,
+            "source_type": "all",
+        },
+    )
+    assert p_res.status_code == 200
+    p_data = p_res.json()
+    assert p_data["native_user_id"] == "user-1"
+    assert p_data["total_results"] == 1
+    assert p_data["results"][0]["source_type"] == "memory"
+    assert "Neovim" in p_data["results"][0]["statement"]
+    assert "<user_profile>" in p_data["rendered_llm_block"]
+    assert "<retrieved_context>" in p_data["rendered_llm_block"]

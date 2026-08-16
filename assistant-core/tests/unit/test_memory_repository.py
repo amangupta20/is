@@ -222,3 +222,79 @@ def test_search_and_read_require_live_completed_turn_evidence() -> None:
     assert len(compiled) == 2
     assert sql.count("completed_turn.tombstoned_at IS NULL") == 2
     assert "EXISTS" in str(compiled[0])
+
+
+def test_consolidate_user_memories() -> None:
+    """Consolidation applies supersession to older contradictory active memories."""
+    from assistant_core.memory.consolidator import MemoryConsolidationDecision
+    from assistant_core.memory.models import MemoryRecord
+    from assistant_core.memory.repository import consolidate_user_memories
+
+    id_old = uuid.uuid4()
+    id_new = uuid.uuid4()
+
+    record_old = MemoryRecord(
+        id=id_old,
+        user_id=uuid.uuid4(),
+        key="os",
+        category="fact",
+        statement="User runs Ubuntu",
+        state="active",
+        created_at=datetime(2026, 8, 10, tzinfo=UTC),
+    )
+    record_new = MemoryRecord(
+        id=id_new,
+        user_id=uuid.uuid4(),
+        key="os",
+        category="fact",
+        statement="User runs Arch Linux",
+        state="active",
+        created_at=datetime(2026, 8, 12, tzinfo=UTC),
+    )
+
+    class MockConsolidator:
+        def consolidate(self, memories: list[object]) -> list[MemoryConsolidationDecision]:
+            return [
+                MemoryConsolidationDecision(
+                    superseded_id=id_old,
+                    superseded_by_id=id_new,
+                    reason="User switched Linux distributions",
+                )
+            ]
+
+    class FakeScalarResult:
+        def __init__(self, items: list[MemoryRecord]) -> None:
+            self._items = items
+
+        def scalars(self) -> "FakeScalarResult":
+            return self
+
+        def all(self) -> list[MemoryRecord]:
+            return self._items
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.statements: list[object] = []
+            self.first_call = True
+
+        async def execute(self, statement: object) -> FakeScalarResult:
+            self.statements.append(statement)
+            if self.first_call:
+                self.first_call = False
+                return FakeScalarResult([record_old, record_new])
+            return FakeScalarResult([])
+
+    session = FakeSession()
+
+    async def run_test() -> None:
+        applied = await consolidate_user_memories(
+            session,  # type: ignore[arg-type]
+            native_user_id="user-1",
+            consolidator=MockConsolidator(),  # type: ignore[arg-type]
+        )
+        assert len(applied) == 1
+        assert applied[0]["superseded_id"] == str(id_old)
+        assert applied[0]["superseding_statement"] == "User runs Arch Linux"
+        assert record_old.state == "superseded"
+
+    anyio.run(run_test)

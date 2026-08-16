@@ -2,6 +2,7 @@
 
 import re
 import uuid
+from typing import Any
 
 from sqlalchemy import exists, func, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -9,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from assistant_core.identity.models import UserIdentity
+from assistant_core.memory.consolidator import TaskModelMemoryConsolidator
 from assistant_core.memory.models import MemoryEvidence, MemoryRecord
 from assistant_core.memory.schemas import ExplicitMemoryCandidate
 from assistant_core.turns.models import CompletedTurn
@@ -201,4 +203,77 @@ async def apply_explicit_candidates(
             )
         await _insert_evidence(session, record, turn, candidate.evidence_quote)
         applied.append(record)
+    return applied
+
+
+async def consolidate_user_memories(
+    session: AsyncSession,
+    *,
+    native_user_id: str,
+    consolidator: TaskModelMemoryConsolidator,
+) -> list[dict[str, Any]]:
+    """Find and apply supersession decisions across active memories for a native user."""
+    statement = (
+        select(MemoryRecord)
+        .join(UserIdentity, MemoryRecord.user_id == UserIdentity.id)
+        .where(
+            UserIdentity.native_user_id == native_user_id,
+            MemoryRecord.kind == "explicit",
+            MemoryRecord.state == "active",
+        )
+        .order_by(MemoryRecord.created_at.asc())
+    )
+    records = list((await session.execute(statement)).scalars().all())
+    if len(records) <= 1:
+        return []
+
+    memory_dicts = [
+        {
+            "id": r.id,
+            "key": r.key,
+            "category": r.category,
+            "statement": r.statement,
+            "created_at": r.created_at.isoformat() if r.created_at else "",
+        }
+        for r in records
+    ]
+
+    decisions = consolidator.consolidate(memory_dicts)
+    if not decisions:
+        return []
+
+    record_by_id = {r.id: r for r in records}
+    applied: list[dict[str, Any]] = []
+
+    for d in decisions:
+        superseded = record_by_id.get(d.superseded_id)
+        superseding = record_by_id.get(d.superseded_by_id)
+
+        if not superseded or not superseding:
+            continue
+        if superseded.id == superseding.id:
+            continue
+        if superseded.state != "active" or superseding.state != "active":
+            continue
+
+        await session.execute(
+            update(MemoryRecord)
+            .where(MemoryRecord.id == superseded.id)
+            .values(
+                state="superseded",
+                superseded_at=func.now(),
+                superseded_by_id=superseding.id,
+            )
+        )
+        superseded.state = "superseded"
+        applied.append(
+            {
+                "superseded_id": str(superseded.id),
+                "superseded_statement": superseded.statement,
+                "superseded_by_id": str(superseding.id),
+                "superseding_statement": superseding.statement,
+                "reason": d.reason,
+            }
+        )
+
     return applied

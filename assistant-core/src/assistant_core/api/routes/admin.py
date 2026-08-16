@@ -1,8 +1,8 @@
-"""Management and observability admin routes."""
-
+import asyncio
 import hashlib
 import uuid
 from datetime import UTC, datetime
+from time import perf_counter
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -17,13 +17,25 @@ from assistant_core.auth.admin import (
     require_admin_session,
     verify_admin_credentials,
 )
+from assistant_core.conversation.embedder import (
+    ConversationEmbeddingError,
+    EmbeddingConfigurationError,
+    get_conversation_embedder,
+)
 from assistant_core.conversation.models import ConversationReference, ConversationSegment
+from assistant_core.conversation.repository import search_conversation_context
 from assistant_core.events.models import EventInbox
 from assistant_core.files.models import FileDocument, FileReference, FileSegment
-from assistant_core.files.repository import tombstone_file_references
+from assistant_core.files.repository import search_file_passages, tombstone_file_references
 from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
+from assistant_core.jobs.worker import get_memory_consolidator
 from assistant_core.memory.models import ChatProfileSnapshot, MemoryEvidence, MemoryRecord
+from assistant_core.memory.profile import get_or_create_profile
+from assistant_core.memory.repository import (
+    consolidate_user_memories,
+    search_explicit_memory,
+)
 from assistant_core.turns.models import CompletedTurn
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
@@ -36,6 +48,19 @@ router = APIRouter(prefix="/v1/admin", tags=["admin"])
 
 class AdminLoginRequest(BaseModel):
     token: str = Field(min_length=1, max_length=500)
+
+
+class ConsolidateMemoriesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    native_user_id: str | None = None
+
+
+class PlaygroundSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    native_user_id: str = Field(default="user-1", min_length=1, max_length=200)
+    query: str = Field(min_length=1, max_length=1000)
+    limit: int = Field(default=10, ge=1, le=50)
+    source_type: Literal["all", "memories", "files", "conversations"] = "all"
 
 
 class AdminLoginResponse(BaseModel):
@@ -832,4 +857,186 @@ async def purge_system_data(body: PurgeSystemRequest, request: Request) -> dict[
         "status": "purged",
         "scope": scope,
         "deleted": deleted_counts,
+    }
+
+
+async def _embed_query(request: Request, query: str) -> list[float] | None:
+    """Embed a query, failing open to lexical-only search if embeddings are unavailable."""
+    try:
+        embedder = get_conversation_embedder(request.app.state.settings)
+        return await asyncio.to_thread(embedder.embed_one, query)
+    except (EmbeddingConfigurationError, ConversationEmbeddingError):
+        return None
+
+
+@router.post("/memories/consolidate", dependencies=[Depends(require_admin_session)])
+async def trigger_memory_consolidation(
+    body: ConsolidateMemoriesRequest, request: Request
+) -> dict[str, Any]:
+    """Trigger conflict resolution and memory consolidation for one or all users."""
+    consolidator = get_memory_consolidator(request.app.state.settings)
+    applied_all: list[dict[str, Any]] = []
+    users: list[str] = []
+
+    async with request.app.state.session_factory() as session:
+        if body.native_user_id:
+            users = [body.native_user_id]
+        else:
+            user_stmt = select(UserIdentity.native_user_id).distinct()
+            users = list((await session.execute(user_stmt)).scalars().all())
+
+        for u in users:
+            applied = await consolidate_user_memories(
+                session, native_user_id=u, consolidator=consolidator
+            )
+            applied_all.extend(applied)
+
+        await session.commit()
+
+    return {
+        "status": "success",
+        "consolidated_users": len(users),
+        "total_superseded": len(applied_all),
+        "details": applied_all,
+    }
+
+
+@router.post("/playground/search", dependencies=[Depends(require_admin_session)])
+async def playground_search(body: PlaygroundSearchRequest, request: Request) -> dict[str, Any]:
+    """Execute hybrid or filtered search for dashboard inspection and prompt preview."""
+    started_at = perf_counter()
+    query_embedding = await _embed_query(request, body.query)
+    mode = "hybrid" if query_embedding is not None else "lexical"
+
+    async with request.app.state.session_factory() as session:
+        memory_records = []
+        if body.source_type in ("all", "memories"):
+            memory_records = await search_explicit_memory(
+                session,
+                native_user_id=body.native_user_id,
+                query=body.query,
+                limit=body.limit,
+            )
+
+        conversation_hits = []
+        if body.source_type in ("all", "conversations"):
+            conversation_hits = await search_conversation_context(
+                session,
+                native_user_id=body.native_user_id,
+                query=body.query,
+                query_embedding=query_embedding,
+                limit=body.limit,
+            )
+
+        file_hits = []
+        if body.source_type in ("all", "files"):
+            file_hits = await search_file_passages(
+                session,
+                native_user_id=body.native_user_id,
+                query_text=body.query,
+                query_embedding=query_embedding,
+                limit=body.limit,
+            )
+
+        profile_snapshot = await get_or_create_profile(
+            session,
+            native_user_id=body.native_user_id,
+            native_chat_id="playground-preview",
+        )
+
+    ranked: list[dict[str, Any]] = []
+    rrf_k = 60
+
+    for rank, m in enumerate(memory_records, start=1):
+        rrf_score = 1.0 / (rrf_k + rank)
+        ranked.append(
+            {
+                "source_id": str(m.id),
+                "source_type": "memory",
+                "category": m.category,
+                "statement": m.statement,
+                "preview": m.statement[:240] + ("…" if len(m.statement) > 240 else ""),
+                "rrf_score": round(rrf_score, 6),
+                "lexical_rank": rank,
+                "vector_score": None,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+                "metadata": {"key": m.key, "kind": m.kind},
+            }
+        )
+
+    for h in conversation_hits:
+        ranked.append(
+            {
+                "source_id": str(h.source_id),
+                "source_type": "conversation",
+                "category": "conversation_turn",
+                "role": h.role,
+                "statement": h.content,
+                "preview": h.content[:240] + ("…" if len(h.content) > 240 else ""),
+                "rrf_score": round(h.score, 6),
+                "lexical_rank": None,
+                "vector_score": None,
+                "created_at": h.occurred_at.isoformat() if h.occurred_at else None,
+                "metadata": {
+                    "native_chat_id": h.native_chat_id,
+                    "native_message_id": h.native_message_id,
+                },
+            }
+        )
+
+    for f in file_hits:
+        ranked.append(
+            {
+                "source_id": str(f.reference_id),
+                "source_type": "file",
+                "category": "file_passage",
+                "statement": f.content,
+                "preview": f.content[:240] + ("…" if len(f.content) > 240 else ""),
+                "rrf_score": round(f.score, 6),
+                "lexical_rank": f.lexical_rank,
+                "vector_score": f.semantic_rank,
+                "created_at": None,
+                "metadata": {
+                    "filename": f.filename,
+                    "native_file_id": f.native_file_id,
+                    "chunk_ordinal": f.chunk_ordinal,
+                    "header_path": f.header_path,
+                },
+            }
+        )
+
+    ranked.sort(key=lambda item: -item["rrf_score"])
+    selected = ranked[: body.limit]
+    duration_ms = round((perf_counter() - started_at) * 1000, 2)
+
+    context_lines = []
+    if profile_snapshot and profile_snapshot.rendered_text:
+        context_lines.append(profile_snapshot.rendered_text)
+    if selected:
+        context_lines.append("\n<retrieved_context>")
+        for idx, item in enumerate(selected, start=1):
+            if item["source_type"] == "memory":
+                context_lines.append(f"- [Memory #{idx}] ({item['category']}): {item['statement']}")
+            elif item["source_type"] == "file":
+                meta = item["metadata"]
+                context_lines.append(
+                    f"- [Document #{idx}] ({meta.get('filename')}, chunk {meta.get('chunk_ordinal')}): {item['statement']}"
+                )
+            elif item["source_type"] == "conversation":
+                context_lines.append(
+                    f"- [Prior Turn #{idx}] ({item.get('role', 'user')}): {item['statement']}"
+                )
+        context_lines.append("</retrieved_context>")
+
+    rendered_llm_block = "\n".join(context_lines)
+
+    return {
+        "mode": mode,
+        "duration_ms": duration_ms,
+        "query": body.query,
+        "native_user_id": body.native_user_id,
+        "total_results": len(selected),
+        "results": selected,
+        "profile_rendered": profile_snapshot.rendered_text if profile_snapshot else "",
+        "rendered_llm_block": rendered_llm_block,
     }

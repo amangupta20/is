@@ -1046,6 +1046,134 @@ select:focus {
 }
 
 /* --------------------------------------------------------------------------
+   Search Playground
+   -------------------------------------------------------------------------- */
+.playground-search-card {
+  padding: 20px 24px;
+  margin-bottom: 24px;
+}
+
+.playground-search-box {
+  width: 100%;
+}
+
+.playground-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px 20px;
+  margin-bottom: 20px;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.status-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.playground-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  animation: fadeIn 0.15s ease-out;
+}
+
+@media (max-width: 1200px) {
+  .playground-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.playground-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.playground-matches-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.playground-match-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  box-shadow: var(--shadow-sm);
+  transition: var(--transition);
+}
+
+.playground-match-card:hover {
+  border-color: var(--border-focus);
+}
+
+.playground-match-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.playground-match-rank {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.rrf-chip {
+  background: hsla(217, 91%, 60%, 0.15);
+  color: hsl(217, 91%, 75%);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.playground-match-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+.playground-match-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.playground-preview-card {
+  padding: 18px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.playground-preview-card pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+/* --------------------------------------------------------------------------
    Responsive Breakpoints
    -------------------------------------------------------------------------- */
 @media (max-width: 900px) {

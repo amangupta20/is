@@ -40,15 +40,23 @@ from assistant_core.files.repository import (
     store_file_segment_embedding,
     tombstone_file_references,
 )
+from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
 from assistant_core.jobs.repository import claim_next_job, complete_job, fail_job
+from assistant_core.memory.consolidator import (
+    MemoryConsolidationError,
+    TaskModelMemoryConsolidator,
+)
 from assistant_core.memory.extractor import (
     MEMORY_EXTRACTION_FAILED_ERROR,
     CompletedTurnData,
     MemoryExtractionError,
     TaskModelMemoryExtractor,
 )
-from assistant_core.memory.repository import apply_explicit_candidates
+from assistant_core.memory.repository import (
+    apply_explicit_candidates,
+    consolidate_user_memories,
+)
 from assistant_core.turns.models import CompletedTurn
 from assistant_core.turns.repository import (
     INVALID_TURN_PAYLOAD_ERROR,
@@ -58,6 +66,7 @@ from assistant_core.turns.repository import (
 )
 
 UNSUPPORTED_KIND_ERROR = "unsupported_job_kind"
+MEMORY_CONSOLIDATION_FAILED_ERROR = "memory_consolidation_failed"
 CLAIMED_JOB_MISSING_ERROR = "claimed_job_missing"
 INVALID_JOB_CLAIM_ERROR = "invalid_job_claim"
 TASK_MODEL_CONFIGURATION_ERROR = "task_model_configuration_error"
@@ -105,6 +114,19 @@ def get_memory_extractor(settings: Settings | None = None) -> TaskModelMemoryExt
     base_url, model = _task_model_configuration(resolved_settings)
     api_key = resolved_settings.task_model_api_key
     return TaskModelMemoryExtractor(
+        base_url=base_url,
+        api_key=api_key.get_secret_value() if api_key is not None else None,
+        model=model,
+        timeout_seconds=resolved_settings.task_model_timeout_seconds,
+    )
+
+
+def get_memory_consolidator(settings: Settings | None = None) -> TaskModelMemoryConsolidator:
+    """Build the task-model memory consolidator."""
+    resolved_settings = settings or get_settings()
+    base_url, model = _task_model_configuration(resolved_settings)
+    api_key = resolved_settings.task_model_api_key
+    return TaskModelMemoryConsolidator(
         base_url=base_url,
         api_key=api_key.get_secret_value() if api_key is not None else None,
         model=model,
@@ -258,7 +280,41 @@ async def _handle_extract_memory(session: AsyncSession, payload: dict[str, JsonV
     fresh_turn = await session.get(CompletedTurn, turn_id)
     if fresh_turn is None or fresh_turn.tombstoned_at is not None:
         raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
-    await apply_explicit_candidates(session, fresh_turn, candidates)
+    applied = await apply_explicit_candidates(session, fresh_turn, candidates)
+
+    if applied:
+        user = await session.get(UserIdentity, fresh_turn.user_id)
+        if user is not None:
+            await session.execute(
+                insert(Job)
+                .values(
+                    id=uuid.uuid4(),
+                    identity_key=f"consolidate:{user.native_user_id}",
+                    kind="consolidate_memories",
+                    status="queued",
+                    payload={"native_user_id": user.native_user_id},
+                    attempts=0,
+                )
+                .on_conflict_do_nothing(index_elements=[Job.identity_key])
+            )
+
+
+async def _handle_consolidate_memories(
+    session: AsyncSession, payload: dict[str, JsonValue]
+) -> None:
+    """Consolidate active memories for a user and record supersessions."""
+    native_user_id = payload.get("native_user_id")
+    if not isinstance(native_user_id, str) or not native_user_id.strip():
+        return
+    consolidator = get_memory_consolidator()
+    applied = await consolidate_user_memories(
+        session, native_user_id=native_user_id, consolidator=consolidator
+    )
+    LOGGER.info(
+        "memories_consolidated",
+        native_user_id=native_user_id,
+        superseded_count=len(applied),
+    )
 
 
 async def _handle_index_conversation(session: AsyncSession, payload: dict[str, JsonValue]) -> None:
@@ -431,6 +487,8 @@ async def handle(
         await _handle_process_event(session, payload)
     elif kind == "extract_memory":
         await _handle_extract_memory(session, payload)
+    elif kind == "consolidate_memories":
+        await _handle_consolidate_memories(session, payload)
     elif kind == "index_conversation":
         await _handle_index_conversation(session, payload)
     elif kind == "index_file":
@@ -468,6 +526,8 @@ async def process_one(session: AsyncSession) -> bool:
         error_code = INVALID_TURN_PAYLOAD_ERROR
     except MemoryExtractionError:
         error_code = MEMORY_EXTRACTION_FAILED_ERROR
+    except MemoryConsolidationError:
+        error_code = MEMORY_CONSOLIDATION_FAILED_ERROR
     except (ConversationEmbeddingError, EmbeddingConfigurationError):
         error_code = CONVERSATION_EMBEDDING_FAILED_ERROR
     except OpenWebUIFileFetchError as exc:
