@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -84,8 +85,9 @@ class ArtifactVersion(Base):
         nullable=False,
     )
     version_num: Mapped[int] = mapped_column(Integer, nullable=False)
+    binary_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    storage_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    storage_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
     change_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")

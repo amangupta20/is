@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import shutil
 import uuid
 from datetime import UTC, datetime
 from time import perf_counter
@@ -15,7 +14,6 @@ from sqlalchemy.orm import selectinload
 from assistant_core.artifacts.models import Artifact, ArtifactVersion, OnlyOfficeSession
 from assistant_core.artifacts.onlyoffice import OnlyOfficeManager
 from assistant_core.artifacts.repository import ArtifactRepository
-from assistant_core.artifacts.storage import LocalStorageBackend
 from assistant_core.auth.admin import (
     DEFAULT_SESSION_TTL_SECONDS,
     SESSION_COOKIE_NAME,
@@ -877,13 +875,6 @@ async def purge_system_data(body: PurgeSystemRequest, request: Request) -> dict[
             deleted_counts["artifact_versions"] = ver_count
             deleted_counts["onlyoffice_sessions"] = sess_count
 
-            # Clean disk files
-            storage = LocalStorageBackend(base_dir=request.app.state.settings.artifacts_dir)
-            if hasattr(storage, "base_dir") and storage.base_dir.exists():
-                for item in storage.base_dir.iterdir():
-                    if item.is_dir():
-                        shutil.rmtree(item, ignore_errors=True)
-
         if scope in ("jobs", "all"):
             job_count = (await session.execute(sa_delete(Job))).rowcount or 0
             inbox_count = (await session.execute(sa_delete(EventInbox))).rowcount or 0
@@ -981,10 +972,9 @@ async def delete_admin_artifact(artifact_id: uuid.UUID, request: Request) -> dic
 @router.post("/artifacts/{artifact_id}/onlyoffice/session", dependencies=[Depends(require_admin_session)])
 async def create_admin_onlyoffice_session(artifact_id: uuid.UUID, request: Request) -> dict[str, Any]:
     """Create an OnlyOffice editor session from the admin dashboard."""
-    storage = LocalStorageBackend(base_dir=request.app.state.settings.artifacts_dir)
     settings = request.app.state.settings
     async with request.app.state.session_factory() as session:
-        repo = ArtifactRepository(session, storage)
+        repo = ArtifactRepository(session)
         art = await repo.get_artifact(artifact_id)
         if not art or art.tombstoned_at is not None:
             raise HTTPException(status_code=404, detail="Artifact not found")

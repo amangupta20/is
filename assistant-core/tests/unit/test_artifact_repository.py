@@ -81,7 +81,9 @@ async def test_artifact_repository_create_and_revise(tmp_path: Path) -> None:
     assert art.title == "Q3 Model"
     assert art.current_version_num == 1
     assert ver1.version_num == 1
-    assert Path(ver1.storage_path).exists()
+    assert len(ver1.binary_data) > 0
+    if ver1.storage_path:
+        assert Path(ver1.storage_path).exists()
 
     # 2. Test Revise
     art.versions = [ver1]
@@ -99,4 +101,6 @@ async def test_artifact_repository_create_and_revise(tmp_path: Path) -> None:
     art_v2, ver2 = await repo_revise.add_version(art.id, rev_req)
     assert art_v2.current_version_num == 2
     assert ver2.version_num == 2
-    assert Path(ver2.storage_path).exists()
+    assert len(ver2.binary_data) > 0
+    if ver2.storage_path:
+        assert Path(ver2.storage_path).exists()

@@ -1,5 +1,6 @@
 """Repository layer for managing versioned artifacts in PostgreSQL and storage."""
 
+import hashlib
 import re
 import uuid
 from datetime import UTC, datetime
@@ -34,9 +35,9 @@ MIME_MAP = {
 }
 
 
-def _slugify(text: str) -> str:
-    """Generate a clean URL-friendly slug."""
-    s = text.lower().strip()
+def _slugify(title: str) -> str:
+    """Sanitize title into URL/filesystem friendly slug."""
+    s = title.lower().strip()
     s = re.sub(r"[^\w\s-]", "", s)
     s = re.sub(r"[\s_-]+", "-", s)
     return s.strip("-") or "artifact"
@@ -45,7 +46,7 @@ def _slugify(text: str) -> str:
 class ArtifactRepository:
     """Repository managing artifact lifecycles and version chains."""
 
-    def __init__(self, session: AsyncSession, storage: LocalStorageBackend) -> None:
+    def __init__(self, session: AsyncSession, storage: LocalStorageBackend | None = None) -> None:
         self.session = session
         self.storage = storage
 
@@ -78,16 +79,19 @@ class ArtifactRepository:
             title=request.title,
         )
 
-        # 2. Persist to storage
-        storage_path, content_sha256, file_size = self.storage.save(
-            user_id=user.id,
-            artifact_id=artifact_id,
-            version_num=1,
-            ext=request.artifact_type,
-            data=data,
-        )
+        content_sha256 = hashlib.sha256(data).hexdigest()
+        file_size = len(data)
+        storage_path = None
+        if self.storage is not None:
+            storage_path, _, _ = self.storage.save(
+                user_id=user.id,
+                artifact_id=artifact_id,
+                version_num=1,
+                ext=request.artifact_type,
+                data=data,
+            )
 
-        # 3. Create database records
+        # 2. Create database records
         now = datetime.now(UTC)
         artifact = Artifact(
             id=artifact_id,
@@ -105,6 +109,7 @@ class ArtifactRepository:
             id=uuid.uuid4(),
             artifact_id=artifact_id,
             version_num=1,
+            binary_data=data,
             content_sha256=content_sha256,
             storage_path=storage_path,
             file_size_bytes=file_size,
@@ -145,21 +150,25 @@ class ArtifactRepository:
             title=artifact.title,
         )
 
-        # 2. Persist binary
-        storage_path, content_sha256, file_size = self.storage.save(
-            user_id=user.id,
-            artifact_id=artifact_id,
-            version_num=next_version_num,
-            ext=artifact.artifact_type,
-            data=data,
-        )
+        content_sha256 = hashlib.sha256(data).hexdigest()
+        file_size = len(data)
+        storage_path = None
+        if self.storage is not None:
+            storage_path, _, _ = self.storage.save(
+                user_id=user.id,
+                artifact_id=artifact_id,
+                version_num=next_version_num,
+                ext=artifact.artifact_type,
+                data=data,
+            )
 
-        # 3. Create version record
+        # 2. Create version record
         now = datetime.now(UTC)
         version = ArtifactVersion(
             id=uuid.uuid4(),
             artifact_id=artifact_id,
             version_num=next_version_num,
+            binary_data=data,
             content_sha256=content_sha256,
             storage_path=storage_path,
             file_size_bytes=file_size,
@@ -191,19 +200,24 @@ class ArtifactRepository:
 
         next_version_num = artifact.current_version_num + 1
 
-        storage_path, content_sha256, file_size = self.storage.save(
-            user_id=user_id,
-            artifact_id=artifact_id,
-            version_num=next_version_num,
-            ext=artifact.artifact_type,
-            data=raw_data,
-        )
+        content_sha256 = hashlib.sha256(raw_data).hexdigest()
+        file_size = len(raw_data)
+        storage_path = None
+        if self.storage is not None:
+            storage_path, _, _ = self.storage.save(
+                user_id=user_id,
+                artifact_id=artifact_id,
+                version_num=next_version_num,
+                ext=artifact.artifact_type,
+                data=raw_data,
+            )
 
         now = datetime.now(UTC)
         version = ArtifactVersion(
             id=uuid.uuid4(),
             artifact_id=artifact_id,
             version_num=next_version_num,
+            binary_data=raw_data,
             content_sha256=content_sha256,
             storage_path=storage_path,
             file_size_bytes=file_size,
@@ -229,7 +243,11 @@ class ArtifactRepository:
         return res.scalar_one_or_none()
 
     async def list_user_artifacts(
-        self, native_user_id: str, limit: int = 50, offset: int = 0
+        self,
+        native_user_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        artifact_type: str | None = None,
     ) -> list[Artifact]:
         """List active artifacts for a user."""
         user = await self.get_or_create_user(native_user_id)
@@ -241,32 +259,34 @@ class ArtifactRepository:
             .limit(limit)
             .offset(offset)
         )
+        if artifact_type:
+            stmt = stmt.where(Artifact.artifact_type == artifact_type)
+
         res = await self.session.execute(stmt)
         return list(res.scalars().all())
 
-    async def tombstone_artifact(
-        self, artifact_id: uuid.UUID, native_user_id: str
-    ) -> bool:
-        """Soft delete an artifact."""
+    async def tombstone_artifact(self, artifact_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        """Soft-delete an artifact."""
         artifact = await self.get_artifact(artifact_id)
         if not artifact or artifact.tombstoned_at is not None:
             return False
-        user = await self.get_or_create_user(native_user_id)
-        if artifact.user_id != user.id:
-            return False
+
+        if artifact.user_id != user_id:
+            raise PermissionError("User does not own this artifact")
+
         artifact.tombstoned_at = datetime.now(UTC)
         await self.session.flush()
         return True
 
-    async def purge_user_artifacts(self, native_user_id: str) -> int:
-        """Hard delete all artifacts and files for a user."""
+    async def delete_user_artifacts(self, native_user_id: str) -> int:
+        """Permanently delete all artifacts and their versions for a user."""
         user = await self.get_or_create_user(native_user_id)
-        stmt = select(Artifact.id).where(Artifact.user_id == user.id)
-        res = await self.session.execute(stmt)
-        art_ids = list(res.scalars().all())
 
-        for art_id in art_ids:
-            self.storage.delete_artifact_tree(user_id=user.id, artifact_id=art_id)
+        if self.storage is not None:
+            art_stmt = select(Artifact.id).where(Artifact.user_id == user.id)
+            art_ids = (await self.session.execute(art_stmt)).scalars().all()
+            for art_id in art_ids:
+                self.storage.delete_artifact_tree(user_id=user.id, artifact_id=art_id)
 
         del_stmt = delete(Artifact).where(Artifact.user_id == user.id)
         del_res = await self.session.execute(del_stmt)

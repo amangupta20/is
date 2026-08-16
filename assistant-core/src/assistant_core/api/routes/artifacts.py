@@ -1,12 +1,10 @@
 """API endpoints for managing and generating versioned documents and spreadsheets."""
 
-import os
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 
 from assistant_core.api.dependencies import require_adapter_signature
 from assistant_core.artifacts.models import Artifact
@@ -18,14 +16,11 @@ from assistant_core.artifacts.schemas import (
     CreateArtifactRequest,
     ReviseArtifactRequest,
 )
-from assistant_core.artifacts.storage import LocalStorageBackend
 
 router = APIRouter(prefix="/v1/artifacts", tags=["artifacts"])
 
 
 def _serialize_artifact(art: Artifact, native_user_id: str, base_url: str) -> ArtifactResponse:
-    """Convert Artifact ORM model to ArtifactResponse schema."""
-    now_iso = datetime.now(UTC).isoformat()
     versions = [
         ArtifactVersionResponse(
             version_num=v.version_num,
@@ -33,13 +28,10 @@ def _serialize_artifact(art: Artifact, native_user_id: str, base_url: str) -> Ar
             file_size_bytes=v.file_size_bytes,
             mime_type=v.mime_type,
             change_summary=v.change_summary,
-            created_at=v.created_at.isoformat() if v.created_at else now_iso,
+            created_at=(v.created_at or datetime.now(UTC)).isoformat(),
         )
         for v in art.versions
     ]
-
-    download_url = f"{base_url.rstrip('/')}/v1/artifacts/{art.id}/download"
-
     return ArtifactResponse(
         id=str(art.id),
         native_user_id=native_user_id,
@@ -47,10 +39,10 @@ def _serialize_artifact(art: Artifact, native_user_id: str, base_url: str) -> Ar
         slug=art.slug,
         artifact_type=art.artifact_type,
         current_version_num=art.current_version_num,
-        created_at=art.created_at.isoformat() if art.created_at else now_iso,
-        updated_at=art.updated_at.isoformat() if art.updated_at else now_iso,
+        created_at=(art.created_at or datetime.now(UTC)).isoformat(),
+        updated_at=(art.updated_at or datetime.now(UTC)).isoformat(),
         versions=versions,
-        download_url=download_url,
+        download_url=f"{base_url.rstrip('/')}/v1/artifacts/{art.id}/download",
     )
 
 
@@ -61,9 +53,8 @@ async def create_artifact(
     _: None = Depends(require_adapter_signature),
 ) -> ArtifactResponse:
     """Generate a new versioned document or spreadsheet."""
-    storage = LocalStorageBackend(base_dir=request.app.state.settings.artifacts_dir)
     async with request.app.state.session_factory() as session:
-        repo = ArtifactRepository(session, storage)
+        repo = ArtifactRepository(session)
         try:
             artifact, _version = await repo.create_artifact(request_data)
             await session.commit()
@@ -77,37 +68,20 @@ async def create_artifact(
             ) from exc
 
 
-@router.get("", response_model=list[ArtifactResponse])
-async def list_artifacts(
-    request: Request,
-    native_user_id: str = Query(..., description="Open WebUI User ID"),
-    limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    _: None = Depends(require_adapter_signature),
-) -> list[ArtifactResponse]:
-    """List all active artifacts for a user."""
-    storage = LocalStorageBackend(base_dir=request.app.state.settings.artifacts_dir)
-    async with request.app.state.session_factory() as session:
-        repo = ArtifactRepository(session, storage)
-        arts = await repo.list_user_artifacts(native_user_id, limit=limit, offset=offset)
-        base_url = str(request.base_url)
-        return [_serialize_artifact(a, native_user_id, base_url) for a in arts]
-
-
 @router.get("/{artifact_id}", response_model=ArtifactResponse)
 async def get_artifact_details(
     artifact_id: uuid.UUID,
+    native_user_id: Annotated[str, Query()],
     request: Request,
-    native_user_id: str = Query(..., description="Open WebUI User ID"),
     _: None = Depends(require_adapter_signature),
 ) -> ArtifactResponse:
-    """Get metadata and complete version history of an artifact."""
-    storage = LocalStorageBackend(base_dir=request.app.state.settings.artifacts_dir)
+    """Fetch artifact metadata and all version history."""
     async with request.app.state.session_factory() as session:
-        repo = ArtifactRepository(session, storage)
+        repo = ArtifactRepository(session)
         art = await repo.get_artifact(artifact_id)
         if not art or art.tombstoned_at is not None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
+
         base_url = str(request.base_url)
         return _serialize_artifact(art, native_user_id, base_url)
 
@@ -116,12 +90,11 @@ async def get_artifact_details(
 async def download_artifact(
     artifact_id: uuid.UUID,
     request: Request,
-    v: int | None = Query(None, description="Optional version number (defaults to latest)"),
-) -> FileResponse:
-    """Download the binary file for an artifact."""
-    storage = LocalStorageBackend(base_dir=request.app.state.settings.artifacts_dir)
+    v: Annotated[int | None, Query(description="Specific version number; defaults to current")] = None,
+) -> Response:
+    """Download the binary file for an artifact directly from PostgreSQL."""
     async with request.app.state.session_factory() as session:
-        repo = ArtifactRepository(session, storage)
+        repo = ArtifactRepository(session)
         art = await repo.get_artifact(artifact_id)
         if not art or art.tombstoned_at is not None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
@@ -131,15 +104,12 @@ async def download_artifact(
         if not target_v:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {target_version_num} not found")
 
-        if not os.path.isfile(target_v.storage_path):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Binary file missing on disk")
-
         ext = art.artifact_type
         filename = f"{art.slug}-v{target_v.version_num}.{ext}"
-        return FileResponse(
-            path=target_v.storage_path,
+        return Response(
+            content=target_v.binary_data,
             media_type=target_v.mime_type,
-            filename=filename,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
 
@@ -148,20 +118,19 @@ async def get_raw_version_binary(
     artifact_id: uuid.UUID,
     version_num: int,
     request: Request,
-) -> FileResponse:
-    """Raw endpoint for OnlyOffice Document Server to fetch the file."""
-    storage = LocalStorageBackend(base_dir=request.app.state.settings.artifacts_dir)
+) -> Response:
+    """Raw endpoint for OnlyOffice Document Server to fetch the file from PostgreSQL."""
     async with request.app.state.session_factory() as session:
-        repo = ArtifactRepository(session, storage)
+        repo = ArtifactRepository(session)
         art = await repo.get_artifact(artifact_id)
         if not art or art.tombstoned_at is not None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
 
         target_v = next((ver for ver in art.versions if ver.version_num == version_num), None)
-        if not target_v or not os.path.isfile(target_v.storage_path):
+        if not target_v:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
 
-        return FileResponse(path=target_v.storage_path, media_type=target_v.mime_type)
+        return Response(content=target_v.binary_data, media_type=target_v.mime_type)
 
 
 @router.post("/{artifact_id}/revise", response_model=ArtifactResponse)
@@ -172,9 +141,8 @@ async def revise_artifact(
     _: None = Depends(require_adapter_signature),
 ) -> ArtifactResponse:
     """Append a new version N+1 to an existing artifact."""
-    storage = LocalStorageBackend(base_dir=request.app.state.settings.artifacts_dir)
     async with request.app.state.session_factory() as session:
-        repo = ArtifactRepository(session, storage)
+        repo = ArtifactRepository(session)
         try:
             artifact, _version = await repo.add_version(artifact_id, request_data)
             await session.commit()
@@ -189,17 +157,22 @@ async def revise_artifact(
 
 
 @router.post("/{artifact_id}/onlyoffice/session")
-async def create_onlyoffice_session(
+async def open_onlyoffice_session(
     artifact_id: uuid.UUID,
     request: Request,
-    native_user_id: str = Query(..., description="Open WebUI User ID"),
+    native_user_id: Annotated[str, Query()],
     _: None = Depends(require_adapter_signature),
 ) -> dict[str, Any]:
-    """Generate OnlyOffice Document Server config for web editing."""
-    storage = LocalStorageBackend(base_dir=request.app.state.settings.artifacts_dir)
+    """Create an OnlyOffice editor session configuration."""
     settings = request.app.state.settings
+    if not settings.onlyoffice_url:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="OnlyOffice Document Server is not configured (ASSISTANT_ONLYOFFICE_URL)",
+        )
+
     async with request.app.state.session_factory() as session:
-        repo = ArtifactRepository(session, storage)
+        repo = ArtifactRepository(session)
         art = await repo.get_artifact(artifact_id)
         if not art or art.tombstoned_at is not None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
@@ -223,18 +196,17 @@ async def create_onlyoffice_session(
         }
 
 
-@router.post("/{artifact_id}/onlyoffice/callback")
-async def onlyoffice_callback(
-    artifact_id: uuid.UUID,
+@router.post("/onlyoffice/callback")
+async def handle_onlyoffice_callback(
     payload: dict[str, Any],
     request: Request,
-    key: str = Query(..., description="Session Key"),
+    artifact_id: Annotated[uuid.UUID, Query()],
+    key: Annotated[str, Query()],
 ) -> dict[str, Any]:
-    """Save webhook from OnlyOffice Document Server."""
-    storage = LocalStorageBackend(base_dir=request.app.state.settings.artifacts_dir)
+    """Callback webhook invoked by OnlyOffice Document Server upon save/close."""
     settings = request.app.state.settings
     async with request.app.state.session_factory() as session:
-        repo = ArtifactRepository(session, storage)
+        repo = ArtifactRepository(session)
         manager = OnlyOfficeManager(session, repo, settings)
         res = await manager.handle_callback(artifact_id=artifact_id, session_key=key, payload=payload)
         await session.commit()
@@ -245,14 +217,14 @@ async def onlyoffice_callback(
 async def delete_artifact(
     artifact_id: uuid.UUID,
     request: Request,
-    native_user_id: str = Query(..., description="Open WebUI User ID"),
+    native_user_id: Annotated[str, Query(description="Open WebUI User ID")],
     _: None = Depends(require_adapter_signature),
 ) -> dict[str, str]:
     """Soft delete an artifact."""
-    storage = LocalStorageBackend(base_dir=request.app.state.settings.artifacts_dir)
     async with request.app.state.session_factory() as session:
-        repo = ArtifactRepository(session, storage)
-        success = await repo.tombstone_artifact(artifact_id, native_user_id)
+        repo = ArtifactRepository(session)
+        user = await repo.get_or_create_user(native_user_id)
+        success = await repo.tombstone_artifact(artifact_id, user.id)
         if not success:
             await session.rollback()
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found or unauthorized")

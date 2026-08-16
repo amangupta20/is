@@ -499,6 +499,7 @@ def test_admin_artifacts_list_and_purge(tmp_path: Path) -> None:
         id=uuid.uuid4(),
         artifact_id=art_id,
         version_num=1,
+        binary_data=b"xlsx data",
         content_sha256="abc",
         storage_path=str(tmp_path / "v1.xlsx"),
         file_size_bytes=2048,

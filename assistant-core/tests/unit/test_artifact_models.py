@@ -28,6 +28,7 @@ def test_artifact_models_instantiation() -> None:
         id=uuid.uuid4(),
         artifact_id=art_id,
         version_num=1,
+        binary_data=b"test xlsx binary",
         content_sha256="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         storage_path="/data/artifacts/user-1/art-1/v1.xlsx",
         file_size_bytes=45120,
@@ -36,6 +37,7 @@ def test_artifact_models_instantiation() -> None:
         created_by_turn_id=turn_id,
     )
     assert version.artifact_id == art_id
+    assert version.binary_data == b"test xlsx binary"
     assert version.version_num == 1
     assert version.file_size_bytes == 45120
 
