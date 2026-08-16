@@ -1,15 +1,18 @@
 """Unit tests for XLSX, DOCX, and PPTX artifact generators."""
 
+import base64
 import io
 
 import openpyxl
 from docx import Document
+from PIL import Image
 from pptx import Presentation
 
 from assistant_core.artifacts.generators.docx_gen import DocxGenerator
 from assistant_core.artifacts.generators.pptx_gen import PptxGenerator
 from assistant_core.artifacts.generators.xlsx_gen import XlsxGenerator
 from assistant_core.artifacts.schemas import (
+    ChartSeries,
     DocumentSectionSpec,
     DocumentSpec,
     PresentationSpec,
@@ -17,6 +20,7 @@ from assistant_core.artifacts.schemas import (
     SlideSpec,
     StatCard,
     TableSpec,
+    TimelineStep,
     WorkbookSpec,
 )
 
@@ -135,3 +139,81 @@ def test_pptx_generator_creates_valid_presentation() -> None:
     # Load back with python-pptx
     prs = Presentation(io.BytesIO(data))
     assert len(prs.slides) == 5  # 1 Title + 4 Content slides
+
+
+def test_docx_generator_with_image_and_themes() -> None:
+    # Create dummy PNG base64
+    img = Image.new("RGB", (60, 60), color="blue")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    b64_img = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    spec = DocumentSpec(
+        title="Visual Document Test",
+        subtitle="Testing Embedded Figures",
+        theme="emerald",
+        sections=[
+            DocumentSectionSpec(
+                heading="Architecture Diagram",
+                paragraphs=["This section contains an embedded architecture diagram."],
+                image_base64=b64_img,
+                image_caption="Figure 1: High Level Architecture",
+            )
+        ],
+    )
+    data = DocxGenerator.generate(spec)
+    assert isinstance(data, bytes)
+    assert len(data) > 0
+
+    doc = Document(io.BytesIO(data))
+    assert any("Architecture Diagram" in p.text for p in doc.paragraphs)
+    assert any("Figure 1: High Level Architecture" in p.text for p in doc.paragraphs)
+
+
+def test_pptx_generator_with_images_charts_and_timeline() -> None:
+    img = Image.new("RGB", (80, 80), color="green")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    b64_img = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    spec = PresentationSpec(
+        title="Visual PPTX Suite",
+        theme="navy",
+        slides=[
+            SlideSpec(
+                title="System Overview",
+                layout="image_right",
+                bullets=["Microservices architecture", "Real-time streaming"],
+                image_base64=b64_img,
+            ),
+            SlideSpec(
+                title="Hero Graphic",
+                layout="full_image",
+                image_base64=b64_img,
+                image_caption="High-Resolution Topology",
+            ),
+            SlideSpec(
+                title="Performance Breakdown",
+                layout="chart",
+                chart_type="column",
+                chart_categories=["Q1", "Q2", "Q3", "Q4"],
+                chart_series=[ChartSeries(name="Throughput", values=[100, 220, 310, 450])],
+            ),
+            SlideSpec(
+                title="Execution Roadmap",
+                layout="timeline",
+                timeline_steps=[
+                    TimelineStep(step="Phase 1", title="Alpha", description="Core prototype"),
+                    TimelineStep(step="Phase 2", title="Beta", description="User onboarding"),
+                    TimelineStep(step="Phase 3", title="GA", description="Production launch"),
+                ],
+            ),
+        ],
+    )
+    data = PptxGenerator.generate(spec)
+    assert isinstance(data, bytes)
+    assert len(data) > 0
+
+    prs = Presentation(io.BytesIO(data))
+    assert len(prs.slides) == 5  # 1 Title + 4 Slides
+

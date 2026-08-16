@@ -243,11 +243,13 @@ class Tools:
         title: str,
         sections_json: str,
         subtitle: str = "",
+        theme: str = "slate",
         __user__: dict | None = None,
         __request__: object | None = None,
     ) -> str:
-        """Create a styled Word document (.docx) with typography, callouts, and data tables.
-        sections_json must be a JSON array of sections: [{"heading": "Section 1", "level": 1, "paragraphs": ["text..."], "bullets": ["item..."], "callout": "note..."}]
+        """Create a styled Word document (.docx) with typography, callouts, images, and data tables.
+        sections_json: JSON array of sections: [{"heading": "Sec 1", "level": 1, "paragraphs": ["..."], "bullets": ["..."], "callout": "...", "image_url": "https://...", "image_caption": "Figure 1", "table": {"headers": ["A", "B"], "rows": [["1", "2"]]}}]
+        theme: Color theme preset ('slate', 'navy', 'emerald', 'crimson', 'dark').
         """
         try:
             native_user_id = self._optional_id(__user__, "id") or "unknown"
@@ -259,6 +261,7 @@ class Tools:
                 "document_spec": {
                     "title": title.strip(),
                     "subtitle": subtitle.strip() or None,
+                    "theme": theme if theme in ("slate", "navy", "emerald", "crimson", "dark") else "slate",
                     "sections": sections_data if isinstance(sections_data, list) else [sections_data],
                 },
                 "change_summary": "Generated document",
@@ -284,11 +287,21 @@ class Tools:
         title: str,
         slides_json: str,
         subtitle: str = "",
+        theme: str = "slate",
         __user__: dict | None = None,
         __request__: object | None = None,
     ) -> str:
-        """Create a 16:9 widescreen PowerPoint presentation (.pptx) deck.
-        slides_json must be a JSON array of slides: [{"title": "Slide Title", "layout": "bullets", "bullets": ["..."]}]
+        """Create a 16:9 widescreen PowerPoint presentation (.pptx) deck with images, native charts, and milestone timelines.
+        slides_json: JSON array of slides. Layout options:
+          - 'bullets': {"title": "...", "bullets": ["..."]}
+          - 'cards': {"title": "...", "cards": [{"title": "KPI", "value": "$1.2M", "description": "..."}]}
+          - 'comparison': {"title": "...", "left_column": ["..."], "right_column": ["..."]}
+          - 'quote': {"title": "...", "quote": "...", "author": "..."}
+          - 'image_right' / 'image_left': {"title": "...", "bullets": ["..."], "image_url": "https://...", "image_caption": "..."}
+          - 'full_image': {"title": "...", "image_url": "https://...", "image_caption": "..."}
+          - 'chart': {"title": "...", "chart_type": "column"|"bar"|"line"|"pie", "chart_categories": ["Q1", "Q2"], "chart_series": [{"name": "Sales", "values": [10, 20]}]}
+          - 'timeline': {"title": "...", "timeline_steps": [{"step": "Phase 1", "title": "Discovery", "description": "..."}]}
+        theme: Color theme preset ('slate', 'navy', 'emerald', 'crimson', 'dark').
         """
         try:
             native_user_id = self._optional_id(__user__, "id") or "unknown"
@@ -300,6 +313,7 @@ class Tools:
                 "presentation_spec": {
                     "title": title.strip(),
                     "subtitle": subtitle.strip() or None,
+                    "theme": theme if theme in ("slate", "navy", "emerald", "crimson", "dark") else "slate",
                     "slides": slides_data if isinstance(slides_data, list) else [slides_data],
                 },
                 "change_summary": "Generated presentation",

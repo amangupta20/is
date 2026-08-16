@@ -46,6 +46,9 @@ class DocumentSectionSpec(BaseModel):
     bullets: list[str] = Field(default_factory=list)
     callout: str | None = None
     table: TableSpec | None = None
+    image_url: str | None = None
+    image_base64: str | None = None
+    image_caption: str | None = None
 
 
 class DocumentSpec(BaseModel):
@@ -54,13 +57,25 @@ class DocumentSpec(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     subtitle: str | None = None
     author: str | None = None
+    theme: Literal["slate", "navy", "emerald", "crimson", "dark"] = "slate"
     sections: list[DocumentSectionSpec] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
 # Presentation / PPTX Schemas
 # ---------------------------------------------------------------------------
-SlideLayout = Literal["title", "bullets", "cards", "comparison", "quote"]
+SlideLayout = Literal[
+    "title",
+    "bullets",
+    "cards",
+    "comparison",
+    "quote",
+    "image_left",
+    "image_right",
+    "full_image",
+    "chart",
+    "timeline",
+]
 
 
 class StatCard(BaseModel):
@@ -68,6 +83,21 @@ class StatCard(BaseModel):
 
     title: str
     value: str
+    description: str | None = None
+
+
+class ChartSeries(BaseModel):
+    """One data series in a native presentation chart."""
+
+    name: str
+    values: list[float | int] = Field(default_factory=list)
+
+
+class TimelineStep(BaseModel):
+    """One chronological milestone step in a presentation timeline."""
+
+    step: str
+    title: str
     description: str | None = None
 
 
@@ -83,6 +113,13 @@ class SlideSpec(BaseModel):
     right_column: list[str] = Field(default_factory=list)
     quote: str | None = None
     author: str | None = None
+    image_url: str | None = None
+    image_base64: str | None = None
+    image_caption: str | None = None
+    chart_type: Literal["column", "bar", "line", "pie"] | None = None
+    chart_categories: list[str] = Field(default_factory=list)
+    chart_series: list[ChartSeries] = Field(default_factory=list)
+    timeline_steps: list[TimelineStep] = Field(default_factory=list)
 
 
 class PresentationSpec(BaseModel):
@@ -90,6 +127,7 @@ class PresentationSpec(BaseModel):
 
     title: str = Field(min_length=1, max_length=255)
     subtitle: str | None = None
+    theme: Literal["slate", "navy", "emerald", "crimson", "dark"] = "slate"
     slides: list[SlideSpec] = Field(default_factory=list)
 
 
