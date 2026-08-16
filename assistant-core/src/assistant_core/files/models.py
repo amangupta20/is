@@ -130,3 +130,46 @@ class FileReference(Base):
     tombstoned_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class FileDocument(Base):
+    """Full extracted document stored independently of chunk passages."""
+
+    __tablename__ = "file_document"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "native_file_id",
+            name="uq_file_document_user_file",
+        ),
+        Index(
+            "ix_file_document_user_file_active",
+            "user_id",
+            "native_file_id",
+            postgresql_where=text("tombstoned_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("assistant_core.user_identity.id"),
+        nullable=False,
+        index=True,
+    )
+    native_file_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(200), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    total_chunks: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_characters: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    tombstoned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+

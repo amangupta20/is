@@ -25,6 +25,9 @@ class FakeResult:
     def one_or_none(self) -> Any:
         return self._scalar
 
+    def first(self) -> Any:
+        return self._scalar or (self._rows[0] if self._rows else None)
+
     def scalars(self) -> "FakeResult":
         return self
 
@@ -52,6 +55,7 @@ def test_materialize_file_passages_inserts_and_reuses() -> None:
     seg_id = uuid.uuid4()
     session = FakeSession(
         [
+            FakeResult(),  # document insert
             FakeResult(scalar=seg_id),  # segment insert returning segment_id
             FakeResult(),  # reference insert
         ]
@@ -82,6 +86,7 @@ def test_tombstone_file_references() -> None:
 
     session = FakeSession(
         [
+            FakeResult(),  # document update
             FakeResult(rows=[uuid.uuid4(), uuid.uuid4()]),  # returning 2 references tombstoned
         ]
     )
@@ -175,11 +180,15 @@ def test_get_full_file_content() -> None:
     from assistant_core.files.repository import get_full_file_content
 
     user_id = uuid.uuid4()
-    rows = [
-        ("file-xyz", "specs.md", "text/markdown", 0, "# Overview\nSystem specs."),
-        ("file-xyz", "specs.md", "text/markdown", 1, "## Details\nPostgreSQL pgvector storage."),
-    ]
-    session = FakeSession([FakeResult(rows=rows)])
+    row = (
+        "file-xyz",
+        "specs.md",
+        "text/markdown",
+        2,
+        60,
+        "# Overview\nSystem specs.\n\n## Details\nPostgreSQL pgvector storage.",
+    )
+    session = FakeSession([FakeResult(scalar=row)])
 
     async def exercise() -> object:
         return await get_full_file_content(
@@ -193,6 +202,7 @@ def test_get_full_file_content() -> None:
     assert res.native_file_id == "file-xyz"
     assert res.filename == "specs.md"
     assert res.total_chunks == 2
+    assert res.total_characters == 60
     assert "# Overview" in res.content
     assert "## Details" in res.content
 

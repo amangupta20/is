@@ -1,5 +1,4 @@
-"""Repository for file segment and reference persistence and querying."""
-
+import hashlib
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -9,7 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assistant_core.files.chunking import CHUNKING_VERSION, chunk_markdown
-from assistant_core.files.models import FileReference, FileSegment
+from assistant_core.files.models import FileDocument, FileReference, FileSegment
 from assistant_core.files.schemas import (
     FileHit,
     FileMaterializationResult,
@@ -31,7 +30,7 @@ async def materialize_file_passages(
     mime_type: str,
     markdown_text: str,
 ) -> FileMaterializationResult:
-    """Chunk markdown and persist deduplicated segments and references."""
+    """Chunk markdown, store full un-chunked document, and persist deduplicated segments."""
     chunks = chunk_markdown(markdown_text)
     if not chunks:
         return FileMaterializationResult(
@@ -41,6 +40,37 @@ async def materialize_file_passages(
             reused_segments=0,
             missing_embedding_segment_ids=(),
         )
+
+    # Persist or update the un-chunked full document
+    doc_sha = hashlib.sha256(markdown_text.encode("utf-8")).hexdigest()
+    doc_stmt = (
+        insert(FileDocument)
+        .values(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            native_file_id=native_file_id,
+            filename=filename,
+            mime_type=mime_type,
+            content=markdown_text,
+            content_sha256=doc_sha,
+            total_chunks=len(chunks),
+            total_characters=len(markdown_text),
+            tombstoned_at=None,
+        )
+        .on_conflict_do_update(
+            constraint="uq_file_document_user_file",
+            set_={
+                "filename": filename,
+                "mime_type": mime_type,
+                "content": markdown_text,
+                "content_sha256": doc_sha,
+                "total_chunks": len(chunks),
+                "total_characters": len(markdown_text),
+                "tombstoned_at": None,
+            },
+        )
+    )
+    await session.execute(doc_stmt)
 
     missing_embedding_ids: list[str] = []
     inserted_segments = 0
@@ -126,8 +156,19 @@ async def tombstone_file_references(
     user_id: uuid.UUID,
     native_file_id: str,
 ) -> int:
-    """Tombstone all active references for a deleted native file."""
+    """Tombstone all active references and document for a deleted native file."""
     now = datetime.now(UTC)
+    doc_stmt = (
+        update(FileDocument)
+        .where(
+            FileDocument.user_id == user_id,
+            FileDocument.native_file_id == native_file_id,
+            FileDocument.tombstoned_at.is_(None),
+        )
+        .values(tombstoned_at=now)
+    )
+    await session.execute(doc_stmt)
+
     stmt = (
         update(FileReference)
         .where(
@@ -397,49 +438,40 @@ async def get_full_file_content(
     native_user_id: str | None = None,
     user_id: uuid.UUID | None = None,
 ) -> FullFileContent | None:
-    """Retrieve and reconstruct full document content in chunk order."""
+    """Retrieve the full un-chunked document content directly from FileDocument."""
     user_filters = []
     if user_id is not None:
-        user_filters.append(FileReference.user_id == user_id)
+        user_filters.append(FileDocument.user_id == user_id)
     elif native_user_id is not None:
         user_filters.append(UserIdentity.native_user_id == native_user_id)
 
-    stmt = (
-        select(
-            FileReference.native_file_id,
-            FileReference.filename,
-            FileReference.mime_type,
-            FileReference.chunk_ordinal,
-            FileSegment.content,
-        )
-        .join(FileSegment, FileReference.segment_id == FileSegment.id)
+    stmt = select(
+        FileDocument.native_file_id,
+        FileDocument.filename,
+        FileDocument.mime_type,
+        FileDocument.total_chunks,
+        FileDocument.total_characters,
+        FileDocument.content,
     )
     if native_user_id is not None and user_id is None:
-        stmt = stmt.join(UserIdentity, UserIdentity.id == FileReference.user_id)
-    stmt = (
-        stmt.where(
-            *user_filters,
-            FileReference.tombstoned_at.is_(None),
-            (FileReference.native_file_id == file_id_or_name)
-            | (FileReference.filename == file_id_or_name),
-        )
-        .order_by(FileReference.chunk_ordinal.asc())
+        stmt = stmt.join(UserIdentity, UserIdentity.id == FileDocument.user_id)
+    stmt = stmt.where(
+        *user_filters,
+        FileDocument.tombstoned_at.is_(None),
+        (FileDocument.native_file_id == file_id_or_name)
+        | (FileDocument.filename == file_id_or_name),
     )
-    rows = (await session.execute(stmt)).all()
-    if not rows:
+    row = (await session.execute(stmt)).first()
+    if not row:
         return None
 
-    native_file_id, filename, mime_type, _, _ = rows[0]
-    ordered_chunks = [str(row[4]) for row in rows]
-    combined_content = "\n\n".join(ordered_chunks)
-
     return FullFileContent(
-        native_file_id=native_file_id,
-        filename=filename,
-        mime_type=mime_type,
-        total_chunks=len(rows),
-        total_characters=len(combined_content),
-        content=combined_content,
+        native_file_id=row[0],
+        filename=row[1],
+        mime_type=row[2],
+        total_chunks=row[3],
+        total_characters=row[4],
+        content=row[5],
     )
 
 
