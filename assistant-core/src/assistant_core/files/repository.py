@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -14,6 +15,7 @@ from assistant_core.files.schemas import (
     FileMaterializationResult,
     FilePassageContext,
 )
+from assistant_core.jobs.models import Job
 
 RRF_K = 60
 
@@ -361,3 +363,166 @@ async def read_file_passage_context(
         previous_content=prev_content,
         next_content=next_content,
     )
+
+
+async def get_file_stats(
+    session: AsyncSession, user_id: uuid.UUID
+) -> dict[str, Any]:
+    """Return aggregated file index and queue stats for an owner."""
+    total_files = (
+        await session.execute(
+            select(func.count(func.distinct(FileReference.native_file_id))).where(
+                FileReference.user_id == user_id
+            )
+        )
+    ).scalar_one()
+
+    active_files = (
+        await session.execute(
+            select(func.count(func.distinct(FileReference.native_file_id))).where(
+                FileReference.user_id == user_id,
+                FileReference.tombstoned_at.is_(None),
+            )
+        )
+    ).scalar_one()
+
+    tombstoned_files = (
+        await session.execute(
+            select(func.count(func.distinct(FileReference.native_file_id))).where(
+                FileReference.user_id == user_id,
+                FileReference.tombstoned_at.is_not(None),
+            )
+        )
+    ).scalar_one()
+
+    total_segments = (
+        await session.execute(
+            select(func.count(FileSegment.id)).where(FileSegment.user_id == user_id)
+        )
+    ).scalar_one()
+
+    embedded_segments = (
+        await session.execute(
+            select(func.count(FileSegment.id)).where(
+                FileSegment.user_id == user_id,
+                FileSegment.embedding.is_not(None),
+            )
+        )
+    ).scalar_one()
+
+    total_references = (
+        await session.execute(
+            select(func.count(FileReference.id)).where(FileReference.user_id == user_id)
+        )
+    ).scalar_one()
+
+    last_indexed_at = (
+        await session.execute(
+            select(func.max(FileReference.created_at)).where(
+                FileReference.user_id == user_id
+            )
+        )
+    ).scalar_one_or_none()
+
+    queued_jobs = (
+        await session.execute(
+            select(func.count()).select_from(Job).where(Job.status == "queued")
+        )
+    ).scalar_one()
+
+    dead_jobs = (
+        await session.execute(
+            select(func.count()).select_from(Job).where(Job.status == "dead")
+        )
+    ).scalar_one()
+
+    reused_segments = max(0, total_references - total_segments)
+
+    return {
+        "total_files": total_files,
+        "active_files": active_files,
+        "tombstoned_files": tombstoned_files,
+        "total_segments": total_segments,
+        "embedded_segments": embedded_segments,
+        "lexical_segments": total_segments - embedded_segments,
+        "reused_segments": reused_segments,
+        "queued_jobs": queued_jobs,
+        "dead_jobs": dead_jobs,
+        "last_indexed_at": last_indexed_at,
+    }
+
+
+async def get_recent_files(
+    session: AsyncSession, user_id: uuid.UUID, limit: int = 10
+) -> list[dict[str, Any]]:
+    """Return recently indexed files with their metadata and chunk counts."""
+    stmt = (
+        select(
+            FileReference.native_file_id,
+            FileReference.filename,
+            FileReference.mime_type,
+            func.min(FileReference.created_at).label("created_at"),
+            func.max(FileReference.tombstoned_at).label("tombstoned_at"),
+            func.count(FileReference.id).label("chunk_count"),
+        )
+        .where(FileReference.user_id == user_id)
+        .group_by(
+            FileReference.native_file_id,
+            FileReference.filename,
+            FileReference.mime_type,
+        )
+        .order_by(func.min(FileReference.created_at).desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).all()
+    results = []
+    for r in rows:
+        fid, fname, mime, created, tombstoned, count = r
+        status = "tombstoned" if tombstoned is not None else "indexed"
+        results.append(
+            {
+                "native_file_id": fid,
+                "filename": fname,
+                "mime_type": mime,
+                "chunk_count": count,
+                "created_at": created,
+                "tombstoned_at": tombstoned,
+                "status": status,
+            }
+        )
+    return results
+
+
+async def get_dead_jobs(
+    session: AsyncSession, limit: int = 10
+) -> list[dict[str, Any]]:
+    """Return recent dead jobs with failure details."""
+    stmt = (
+        select(
+            Job.id,
+            Job.kind,
+            Job.identity_key,
+            Job.attempts,
+            Job.last_error_code,
+            Job.available_at,
+            Job.claimed_at,
+        )
+        .where(Job.status == "dead")
+        .order_by(Job.available_at.desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [
+        {
+            "job_id": str(r[0]),
+            "kind": r[1],
+            "identity_key": r[2],
+            "attempts": r[3],
+            "last_error": r[4],
+            "available_at": r[5],
+            "claimed_at": r[6],
+        }
+        for r in rows
+    ]
+
+
