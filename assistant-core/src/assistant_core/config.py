@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     context_timeout_seconds: float = 1.5
     open_webui_url: str = Field(default="http://open-webui:8080", min_length=1, max_length=2_048)
     open_webui_api_key: SecretStr | None = None
+    public_base_url: str | None = Field(default=None, min_length=1, max_length=2_048)
     file_indexing_timeout_seconds: float = Field(default=30, ge=1, le=300)
     task_model_base_url: str | None = Field(default=None, min_length=1, max_length=2_048)
     task_model_api_key: SecretStr | None = None
@@ -42,6 +43,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "open_webui_url",
+        "public_base_url",
         "task_model_base_url",
         "task_model_model",
         "embedding_base_url",

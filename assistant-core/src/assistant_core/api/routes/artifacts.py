@@ -21,7 +21,13 @@ from assistant_core.artifacts.schemas import (
 router = APIRouter(prefix="/v1/artifacts", tags=["artifacts"])
 
 
-def _serialize_artifact(art: Artifact, native_user_id: str, base_url: str, include_binary: bool = True) -> ArtifactResponse:
+def _serialize_artifact(
+    art: Artifact,
+    native_user_id: str,
+    base_url: str,
+    include_binary: bool = True,
+    public_base_url: str | None = None,
+) -> ArtifactResponse:
     versions = [
         ArtifactVersionResponse(
             version_num=v.version_num,
@@ -39,6 +45,8 @@ def _serialize_artifact(art: Artifact, native_user_id: str, base_url: str, inclu
     if include_binary and target_v and target_v.binary_data:
         base64_data = base64.b64encode(target_v.binary_data).decode("ascii")
 
+    effective_base = public_base_url.rstrip("/") if public_base_url else base_url.rstrip("/")
+
     return ArtifactResponse(
         id=str(art.id),
         native_user_id=native_user_id,
@@ -49,7 +57,7 @@ def _serialize_artifact(art: Artifact, native_user_id: str, base_url: str, inclu
         created_at=(art.created_at or datetime.now(UTC)).isoformat(),
         updated_at=(art.updated_at or datetime.now(UTC)).isoformat(),
         versions=versions,
-        download_url=f"{base_url.rstrip('/')}/v1/artifacts/{art.id}/download",
+        download_url=f"{effective_base}/v1/artifacts/{art.id}/download",
         base64_data=base64_data,
         mime_type=mime_type,
     )
@@ -68,7 +76,8 @@ async def create_artifact(
             artifact, _version = await repo.create_artifact(request_data)
             await session.commit()
             base_url = str(request.base_url)
-            return _serialize_artifact(artifact, request_data.native_user_id, base_url)
+            public_base = getattr(getattr(request.app.state, "settings", None), "public_base_url", None)
+            return _serialize_artifact(artifact, request_data.native_user_id, base_url, public_base_url=public_base)
         except Exception as exc:
             await session.rollback()
             raise HTTPException(
@@ -80,19 +89,20 @@ async def create_artifact(
 @router.get("/{artifact_id}", response_model=ArtifactResponse)
 async def get_artifact_details(
     artifact_id: uuid.UUID,
-    native_user_id: Annotated[str, Query()],
     request: Request,
+    native_user_id: Annotated[str, Query(description="Native User ID requesting the artifact")],
     _: None = Depends(require_adapter_signature),
 ) -> ArtifactResponse:
-    """Fetch artifact metadata and all version history."""
+    """Get metadata and revision history for an artifact."""
     async with request.app.state.session_factory() as session:
         repo = ArtifactRepository(session)
-        art = await repo.get_artifact(artifact_id)
-        if not art or art.tombstoned_at is not None:
+        artifact = await repo.get_artifact(artifact_id)
+        if not artifact:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
 
         base_url = str(request.base_url)
-        return _serialize_artifact(art, native_user_id, base_url)
+        public_base = getattr(getattr(request.app.state, "settings", None), "public_base_url", None)
+        return _serialize_artifact(artifact, native_user_id, base_url, public_base_url=public_base)
 
 
 @router.get("/{artifact_id}/download")
@@ -156,7 +166,8 @@ async def revise_artifact(
             artifact, _version = await repo.add_version(artifact_id, request_data)
             await session.commit()
             base_url = str(request.base_url)
-            return _serialize_artifact(artifact, request_data.native_user_id, base_url)
+            public_base = getattr(getattr(request.app.state, "settings", None), "public_base_url", None)
+            return _serialize_artifact(artifact, request_data.native_user_id, base_url, public_base_url=public_base)
         except Exception as exc:
             await session.rollback()
             raise HTTPException(

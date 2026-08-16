@@ -116,19 +116,27 @@ class Tools:
         if not token or not self.valves.open_webui_url:
             return None
 
-        try:
-            url = f"{self.valves.open_webui_url.rstrip('/')}/api/v1/files/"
-            headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-            files = {"file": (filename, file_bytes, mime_type)}
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                res = await client.post(url, headers=headers, files=files)
-                if res.status_code == 200:
-                    data = res.json()
-                    file_id = data.get("id")
-                    if file_id:
-                        return f"/api/v1/files/{file_id}/content"
-        except Exception:  # noqa: S110, BLE001
-            pass
+        base = self.valves.open_webui_url.rstrip("/")
+        urls_to_try = [f"{base}/api/v1/files/", f"{base}/api/v1/files"]
+        if "localhost" in base:
+            urls_to_try.append("http://127.0.0.1:8080/api/v1/files/")
+
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        files = {"file": (filename, file_bytes, mime_type)}
+
+        for url in urls_to_try:
+            try:
+                async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                    res = await client.post(url, headers=headers, files=files)
+                    if res.status_code in (200, 201):
+                        data = res.json()
+                        file_id = data.get("id") or (
+                            data.get("file", {}).get("id") if isinstance(data.get("file"), dict) else None
+                        )
+                        if file_id:
+                            return f"/api/v1/files/{file_id}/content"
+            except Exception:  # noqa: S110, BLE001
+                pass
         return None
 
     async def _format_result(

@@ -72,7 +72,7 @@ def test_create_spreadsheet_tool_with_openwebui_upload(monkeypatch: pytest.Monke
     monkeypatch.setattr(
         module.httpx,
         "AsyncClient",
-        lambda timeout: _RecordingClient(capture, timeout, mock_resp),
+        lambda *args, **kwargs: _RecordingClient(capture, kwargs.get("timeout", 10.0), mock_resp),
     )
 
     sheets_json = json.dumps([{"name": "Summary", "headers": ["A", "B"], "rows": [[1, 2]]}])
@@ -108,7 +108,7 @@ def test_create_document_tool_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         module.httpx,
         "AsyncClient",
-        lambda timeout: _RecordingClient(capture, timeout, mock_resp),
+        lambda *args, **kwargs: _RecordingClient(capture, kwargs.get("timeout", 10.0), mock_resp),
     )
 
     sections_json = json.dumps([{"heading": "Executive Summary", "paragraphs": ["All systems normal."]}])
@@ -145,7 +145,7 @@ def test_create_document_tool_with_public_assistant_url(monkeypatch: pytest.Monk
     monkeypatch.setattr(
         module.httpx,
         "AsyncClient",
-        lambda timeout: _RecordingClient(capture, timeout, mock_resp),
+        lambda *args, **kwargs: _RecordingClient(capture, kwargs.get("timeout", 10.0), mock_resp),
     )
 
     sections_json = json.dumps([{"heading": "Executive Summary", "paragraphs": ["All systems normal."]}])
@@ -180,7 +180,7 @@ def test_create_presentation_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         module.httpx,
         "AsyncClient",
-        lambda timeout: _RecordingClient(capture, timeout, mock_resp),
+        lambda *args, **kwargs: _RecordingClient(capture, kwargs.get("timeout", 10.0), mock_resp),
     )
 
     slides_json = json.dumps([{"title": "Overview", "bullets": ["Point 1", "Point 2"]}])
