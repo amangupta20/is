@@ -109,3 +109,22 @@ ASSISTANT_EMBEDDING_DIMENSION=1536
 | Static Code Analysis (Ruff) | 0 errors | ✅ Clean | `c0d9f45` |
 | Type Verification (Mypy) | 0 errors in 55 files | ✅ Clean | `c0d9f45` |
 | Wheel Package Build | 61 assets bundled | ✅ Validated | `c0d9f45` |
+
+---
+
+## 5. Next Feature Expansion Roadmap
+
+### 5.1 🗂️ Project & Folder Context Scoping (Prioritized Retrieval)
+- Detect active Open WebUI chat folder / project metadata.
+- Boost relevance scores for memories, conversation turns, and files belonging to the active project while keeping general user preferences intact.
+
+### 5.2 ⏳ Temporal Memory & Auto-Expiring Ephemeral Facts
+- Add `valid_until` / `expires_at` metadata to `memory_record`.
+- Extraction task model tags time-bound context (e.g. interviews, trips, short-term deadlines) and automatically demotes or expires them after the target timeframe passes.
+
+### 5.3 🧠 Topic Episodes & Session Summarization
+- Inactivity threshold (e.g. 1 hour) or on-demand tool trigger to compile multi-turn chats into structured Topic Episodes (decisions made, architecture choices, open loops).
+- Hierarchical retrieval: search hits high-density Episode summaries first, then drills down to turn-by-turn passages.
+
+### 5.4 🎛️ Persona & Dynamic Directives Manager in Dashboard
+- Dashboard UI tab to configure system prompt directives, tone presets, and retrieval formatting rules live without redeploying code.
