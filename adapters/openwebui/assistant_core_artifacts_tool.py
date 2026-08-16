@@ -60,15 +60,7 @@ class Tools:
         return None if identifier is None else str(identifier)
 
     def _extract_openwebui_token(self, user: dict | None, request: object | None) -> str:
-        """Extract user or admin token to authorize Open WebUI file uploads."""
-        if self.valves.open_webui_api_key:
-            return self.valves.open_webui_api_key.strip()
-
-        if isinstance(user, Mapping):
-            for k in ("token", "api_key", "jwt"):
-                if user.get(k):
-                    return str(user[k]).strip()
-
+        """Extract user session token first so files are owned by the active user, falling back to admin key."""
         if request is not None:
             headers = getattr(request, "headers", None)
             if isinstance(headers, Mapping):
@@ -78,6 +70,14 @@ class Tools:
             cookies = getattr(request, "cookies", None)
             if isinstance(cookies, Mapping) and cookies.get("token"):
                 return str(cookies["token"]).strip()
+
+        if isinstance(user, Mapping):
+            for k in ("token", "api_key", "jwt"):
+                if user.get(k):
+                    return str(user[k]).strip()
+
+        if self.valves.open_webui_api_key:
+            return self.valves.open_webui_api_key.strip()
 
         return ""
 
