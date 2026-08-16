@@ -208,6 +208,7 @@ class DashboardApp {
       files: { title: 'Documents', sub: 'Inspect indexed files, full markdown texts, and chunk segment trees.' },
       conversations: { title: 'Conversations', sub: 'Search and inspect indexed conversation turns.' },
       jobs: { title: 'Worker Jobs', sub: 'Monitor asynchronous indexing and re-queue dead jobs.' },
+      artifacts: { title: 'Artifacts', sub: 'Inspect and launch web editing for generated spreadsheets and documents.' },
       playground: { title: 'Search Playground', sub: 'Interactive hybrid RRF retrieval tester and prompt context preview.' },
     };
 
@@ -234,6 +235,9 @@ class DashboardApp {
       case 'jobs':
         this.loadJobs();
         break;
+      case 'artifacts':
+        this.loadArtifacts();
+        break;
       case 'playground':
         break;
     }
@@ -247,13 +251,19 @@ class DashboardApp {
       const data = await this.api('/v1/admin/overview');
 
       document.getElementById('stat-memories').innerText = data.memories.active;
-      document.getElementById('stat-memories-sub').innerText = `${data.memories.total} total stored (${data.memories.tombstoned} tombstoned)`;
+      document.getElementById('stat-memories-sub').innerText = `${data.memories.total} total stored (${data.memories.archived} archived)`;
 
       document.getElementById('stat-files').innerText = data.files.active;
       document.getElementById('stat-files-sub').innerText = `${data.files.total_characters.toLocaleString()} chars across ${data.files.total} docs`;
 
       document.getElementById('stat-segments').innerText = data.files.total_segments;
       document.getElementById('stat-segments-sub').innerText = `${data.files.deduplicated_references} deduplicated chunk references`;
+
+      if (data.artifacts) {
+        document.getElementById('stat-artifacts').innerText = data.artifacts.active;
+        document.getElementById('stat-artifacts-sub').innerText = `${data.artifacts.total_versions} total versions recorded`;
+        document.getElementById('badge-artifacts').innerText = data.artifacts.active;
+      }
 
       document.getElementById('stat-jobs').innerText = `${data.jobs.queued} queued`;
       document.getElementById('stat-jobs-sub').innerText = `${data.jobs.dead} dead / failed jobs`;
@@ -998,6 +1008,153 @@ class DashboardApp {
     if (this.currentPlaygroundContext) {
       navigator.clipboard.writeText(this.currentPlaygroundContext);
       this.showToast('Prompt context copied to clipboard', 'success');
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // Artifacts Tab
+  // ------------------------------------------------------------------------
+  async loadArtifacts(search = '') {
+    const grid = document.getElementById('artifacts-grid');
+    grid.innerHTML = '<div class="loading-state">Loading artifacts...</div>';
+
+    try {
+      const data = await this.api('/v1/admin/artifacts?limit=100');
+      this.artifactsList = data.artifacts || [];
+      this.renderArtifacts();
+    } catch {
+      grid.innerHTML = '<div class="empty-state">Failed to load artifacts.</div>';
+    }
+  }
+
+  setArtifactTypeFilter(type) {
+    this.currentArtifactTypeFilter = type;
+    document.querySelectorAll('[data-artifact-type]').forEach((pill) => {
+      pill.classList.toggle('active', pill.getAttribute('data-artifact-type') === type);
+    });
+    this.renderArtifacts();
+  }
+
+  filterArtifacts() {
+    this.renderArtifacts();
+  }
+
+  renderArtifacts() {
+    const grid = document.getElementById('artifacts-grid');
+    if (!this.artifactsList || this.artifactsList.length === 0) {
+      grid.innerHTML = '<div class="empty-state">No generated artifacts found. Create documents or spreadsheets from chat!</div>';
+      return;
+    }
+
+    const query = (document.getElementById('artifacts-search-input')?.value || '').toLowerCase().trim();
+    const typeFilter = this.currentArtifactTypeFilter || 'all';
+
+    const filtered = this.artifactsList.filter((art) => {
+      const matchesType = typeFilter === 'all' || art.artifact_type.toLowerCase() === typeFilter.toLowerCase();
+      const matchesQuery = !query || art.title.toLowerCase().includes(query) || art.slug.toLowerCase().includes(query) || art.native_user_id.toLowerCase().includes(query);
+      return matchesType && matchesQuery;
+    });
+
+    if (filtered.length === 0) {
+      grid.innerHTML = '<div class="empty-state">No matching artifacts found.</div>';
+      return;
+    }
+
+    const icons = {
+      xlsx: '📊',
+      docx: '📄',
+      pptx: '📽️',
+      pdf: '📑',
+      markdown: '📝',
+    };
+
+    grid.innerHTML = filtered
+      .map((art) => {
+        const icon = icons[art.artifact_type] || '📄';
+        const typeBadge = `<span class="badge badge-category badge-${art.artifact_type}">${art.artifact_type.toUpperCase()}</span>`;
+        const sizeKb = art.versions?.[0]?.file_size_bytes ? `${Math.round(art.versions[0].file_size_bytes / 1024)} KB` : '';
+
+        return `
+        <div class="card artifact-card" id="artifact-card-${art.id}">
+          <div class="artifact-card-header">
+            <div class="artifact-icon-wrap">${icon}</div>
+            <div class="artifact-header-text">
+              <h4 class="artifact-title">${this.escapeHtml(art.title)}</h4>
+              <div class="artifact-meta">
+                ${typeBadge}
+                <span class="badge badge-version">v${art.current_version_num}</span>
+                <span class="text-secondary">${sizeKb}</span>
+                <span class="text-secondary">• ${this.formatDate(art.updated_at)}</span>
+              </div>
+            </div>
+          </div>
+          
+          <div class="artifact-body">
+            <div class="artifact-slug"><code>${this.escapeHtml(art.slug)}</code> • User: <code>${this.escapeHtml(art.native_user_id)}</code></div>
+            ${art.versions?.[0]?.change_summary ? `<p class="artifact-summary"><em>"${this.escapeHtml(art.versions[0].change_summary)}"</em></p>` : ''}
+          </div>
+
+          <div class="artifact-actions">
+            <a href="${art.download_url}" class="btn btn-secondary btn-sm" download>
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Download
+            </a>
+            <button class="btn btn-primary btn-sm" onclick="app.launchOnlyOffice('${art.id}')">
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+              Edit Online
+            </button>
+            <button class="btn btn-danger-ghost btn-sm" onclick="app.deleteArtifact('${art.id}')" title="Delete Artifact">
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+          </div>
+        </div>
+      `;
+      })
+      .join('');
+  }
+
+  async launchOnlyOffice(artifactId) {
+    try {
+      const data = await this.api(`/v1/admin/artifacts/${artifactId}/onlyoffice/session`, { method: 'POST' });
+      if (!data.onlyoffice_url) {
+        this.showToast('OnlyOffice Document Server is not configured (ASSISTANT_ONLYOFFICE_URL). You can still download the file!', 'info');
+        return;
+      }
+      const ooUrl = `${data.onlyoffice_url.replace(/\/$/, '')}/web-apps/apps/api/documents/api.js`;
+      const editorWin = window.open('', '_blank');
+      if (editorWin) {
+        editorWin.document.write(`
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <title>OnlyOffice Editor</title>
+              <script src="${ooUrl}"></script>
+              <style>html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #111; }</style>
+            </head>
+            <body>
+              <div id="placeholder" style="height: 100%;"></div>
+              <script>
+                const config = ${JSON.stringify(data.config)};
+                new DocsAPI.DocEditor("placeholder", config);
+              </script>
+            </body>
+          </html>
+        `);
+      }
+    } catch (err) {
+      this.showToast(`Failed to launch OnlyOffice: ${err.message}`, 'error');
+    }
+  }
+
+  async deleteArtifact(artifactId) {
+    if (!confirm('Are you sure you want to delete this artifact?')) return;
+    try {
+      await this.api(`/v1/admin/artifacts/${artifactId}`, { method: 'DELETE' });
+      this.showToast('Artifact deleted', 'success');
+      this.loadArtifacts();
+      this.loadOverview();
+    } catch (err) {
+      this.showToast(`Delete failed: ${err.message}`, 'error');
     }
   }
 

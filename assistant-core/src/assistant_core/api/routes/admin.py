@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import shutil
 import uuid
 from datetime import UTC, datetime
 from time import perf_counter
@@ -9,7 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import desc, func, or_, select, update
+from sqlalchemy.orm import selectinload
 
+from assistant_core.artifacts.models import Artifact, ArtifactVersion, OnlyOfficeSession
+from assistant_core.artifacts.onlyoffice import OnlyOfficeManager
+from assistant_core.artifacts.repository import ArtifactRepository
+from assistant_core.artifacts.storage import LocalStorageBackend
 from assistant_core.auth.admin import (
     DEFAULT_SESSION_TTL_SECONDS,
     SESSION_COOKIE_NAME,
@@ -101,7 +107,7 @@ class BatchDeleteFilesRequest(BaseModel):
 class PurgeSystemRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     confirmation: str
-    scope: Literal["all", "memories", "files", "conversations", "jobs"] = "all"
+    scope: Literal["all", "memories", "files", "conversations", "jobs", "artifacts"] = "all"
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +221,16 @@ async def get_overview_telemetry(request: Request) -> dict[str, Any]:
             await session.execute(select(func.count(ConversationSegment.id)))
         ).scalar_one()
 
+        # Artifacts
+        active_artifacts = (
+            await session.execute(
+                select(func.count(Artifact.id)).where(Artifact.tombstoned_at.is_(None))
+            )
+        ).scalar_one()
+        total_artifact_versions = (
+            await session.execute(select(func.count(ArtifactVersion.id)))
+        ).scalar_one()
+
         # Jobs
         job_counts = dict(
             (
@@ -240,6 +256,10 @@ async def get_overview_telemetry(request: Request) -> dict[str, Any]:
             "conversations": {
                 "active_turns": total_turns,
                 "indexed_passages": total_conv_segments,
+            },
+            "artifacts": {
+                "active": active_artifacts,
+                "total_versions": total_artifact_versions,
             },
             "jobs": {
                 "queued": job_counts.get("queued", 0),
@@ -849,6 +869,21 @@ async def purge_system_data(body: PurgeSystemRequest, request: Request) -> dict[
             deleted_counts["conversation_segments"] = conv_seg_count
             deleted_counts["completed_turns"] = turn_count
 
+        if scope in ("artifacts", "all"):
+            ver_count = (await session.execute(sa_delete(ArtifactVersion))).rowcount or 0
+            sess_count = (await session.execute(sa_delete(OnlyOfficeSession))).rowcount or 0
+            art_count = (await session.execute(sa_delete(Artifact))).rowcount or 0
+            deleted_counts["artifacts"] = art_count
+            deleted_counts["artifact_versions"] = ver_count
+            deleted_counts["onlyoffice_sessions"] = sess_count
+
+            # Clean disk files
+            storage = LocalStorageBackend(base_dir=request.app.state.settings.artifacts_dir)
+            if hasattr(storage, "base_dir") and storage.base_dir.exists():
+                for item in storage.base_dir.iterdir():
+                    if item.is_dir():
+                        shutil.rmtree(item, ignore_errors=True)
+
         if scope in ("jobs", "all"):
             job_count = (await session.execute(sa_delete(Job))).rowcount or 0
             inbox_count = (await session.execute(sa_delete(EventInbox))).rowcount or 0
@@ -862,6 +897,119 @@ async def purge_system_data(body: PurgeSystemRequest, request: Request) -> dict[
         "scope": scope,
         "deleted": deleted_counts,
     }
+
+
+# ---------------------------------------------------------------------------
+# Admin Artifact Management Routes
+# ---------------------------------------------------------------------------
+
+
+@router.get("/artifacts", dependencies=[Depends(require_admin_session)])
+async def list_admin_artifacts(
+    request: Request,
+    user_id: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """List all artifacts across the system or for a specific user."""
+    async with request.app.state.session_factory() as session:
+        query = (
+            select(Artifact, UserIdentity.native_user_id)
+            .join(UserIdentity, UserIdentity.id == Artifact.user_id)
+            .where(Artifact.tombstoned_at.is_(None))
+            .options(selectinload(Artifact.versions))
+            .order_by(desc(Artifact.updated_at))
+        )
+        if user_id:
+            query = query.where(UserIdentity.native_user_id == user_id)
+
+        total_stmt = (
+            select(func.count(Artifact.id))
+            .join(UserIdentity, UserIdentity.id == Artifact.user_id)
+            .where(Artifact.tombstoned_at.is_(None))
+        )
+        if user_id:
+            total_stmt = total_stmt.where(UserIdentity.native_user_id == user_id)
+
+        total = (await session.execute(total_stmt)).scalar_one()
+        rows = (await session.execute(query.limit(limit).offset(offset))).all()
+
+        base_url = str(request.base_url)
+        items = []
+        for art, native_uid in rows:
+            versions = [
+                {
+                    "version_num": v.version_num,
+                    "content_sha256": v.content_sha256,
+                    "file_size_bytes": v.file_size_bytes,
+                    "mime_type": v.mime_type,
+                    "change_summary": v.change_summary,
+                    "created_at": v.created_at.isoformat() if v.created_at else "",
+                }
+                for v in art.versions
+            ]
+            items.append(
+                {
+                    "id": str(art.id),
+                    "native_user_id": native_uid,
+                    "title": art.title,
+                    "slug": art.slug,
+                    "artifact_type": art.artifact_type,
+                    "current_version_num": art.current_version_num,
+                    "created_at": art.created_at.isoformat() if art.created_at else "",
+                    "updated_at": art.updated_at.isoformat() if art.updated_at else "",
+                    "versions": versions,
+                    "download_url": f"{base_url.rstrip('/')}/v1/artifacts/{art.id}/download",
+                }
+            )
+
+        return {"total": total, "artifacts": items}
+
+
+@router.delete("/artifacts/{artifact_id}", dependencies=[Depends(require_admin_session)])
+async def delete_admin_artifact(artifact_id: uuid.UUID, request: Request) -> dict[str, Any]:
+    """Soft delete an artifact from the admin dashboard."""
+    async with request.app.state.session_factory() as session:
+        stmt = update(Artifact).where(Artifact.id == artifact_id).values(tombstoned_at=datetime.now(UTC))
+        res = await session.execute(stmt)
+        await session.commit()
+        if not res.rowcount:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        return {"status": "deleted", "artifact_id": str(artifact_id)}
+
+
+@router.post("/artifacts/{artifact_id}/onlyoffice/session", dependencies=[Depends(require_admin_session)])
+async def create_admin_onlyoffice_session(artifact_id: uuid.UUID, request: Request) -> dict[str, Any]:
+    """Create an OnlyOffice editor session from the admin dashboard."""
+    storage = LocalStorageBackend(base_dir=request.app.state.settings.artifacts_dir)
+    settings = request.app.state.settings
+    async with request.app.state.session_factory() as session:
+        repo = ArtifactRepository(session, storage)
+        art = await repo.get_artifact(artifact_id)
+        if not art or art.tombstoned_at is not None:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+
+        target_v = next((v for v in art.versions if v.version_num == art.current_version_num), None)
+        if not target_v:
+            raise HTTPException(status_code=404, detail="Active version not found")
+
+        # Get native user id
+        user_stmt = select(UserIdentity.native_user_id).where(UserIdentity.id == art.user_id)
+        native_user_id = (await session.execute(user_stmt)).scalar_one()
+
+        manager = OnlyOfficeManager(session, repo, settings)
+        base_url = str(request.base_url)
+        config = await manager.create_editor_session(
+            artifact=art,
+            current_version=target_v,
+            native_user_id=native_user_id,
+            base_service_url=base_url,
+        )
+        await session.commit()
+        return {
+            "onlyoffice_url": settings.onlyoffice_url,
+            "config": config,
+        }
 
 
 async def _embed_query(request: Request, query: str) -> list[float] | None:

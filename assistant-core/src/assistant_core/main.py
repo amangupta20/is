@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from assistant_core.api.routes.admin import router as admin_router
+from assistant_core.api.routes.artifacts import router as artifacts_router
 from assistant_core.api.routes.context import router as context_router
 from assistant_core.api.routes.events import router as events_router
 from assistant_core.api.routes.health import router as health_router
@@ -44,6 +45,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine, app.state.session_factory = create_database(resolved_settings.database_url)
     setup_observability(app, resolved_settings)
     app.include_router(admin_router)
+    app.include_router(artifacts_router)
     app.include_router(context_router)
     app.include_router(events_router)
     app.include_router(health_router)

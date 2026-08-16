@@ -2,11 +2,13 @@
 
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Self
 
 import pytest
 from starlette.testclient import TestClient
 
+from assistant_core.artifacts.models import Artifact, ArtifactVersion
 from assistant_core.auth.admin import create_admin_session_token
 from assistant_core.config import Settings
 from assistant_core.jobs.models import Job
@@ -125,6 +127,8 @@ def test_admin_overview_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
             _FakeResult(scalar=50),  # total references
             _FakeResult(scalar=80),  # active turns
             _FakeResult(scalar=120),  # indexed passages
+            _FakeResult(scalar=4),  # active artifacts
+            _FakeResult(scalar=9),  # total artifact versions
             _FakeResult(rows=[("queued", 2), ("dead", 1)]),  # job counts
         ]
     )
@@ -137,6 +141,8 @@ def test_admin_overview_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
     assert data["memories"]["active"] == 12
     assert data["files"]["active"] == 5
     assert data["files"]["total_characters"] == 25000
+    assert data["artifacts"]["active"] == 4
+    assert data["artifacts"]["total_versions"] == 9
     assert data["jobs"]["queued"] == 2
     assert data["jobs"]["dead"] == 1
 
@@ -471,4 +477,66 @@ def test_admin_consolidation_unconfigured_error() -> None:
     )
     assert res.status_code == 400
     assert "Task model is not configured" in res.json()["detail"]
+
+
+def test_admin_artifacts_list_and_purge(tmp_path: Path) -> None:
+    secret = "admin-secret-at-least-32-chars-long"
+    settings = Settings(hmac_secret=secret, artifacts_dir=str(tmp_path))
+    app = create_app(settings)
+    client = _get_authed_client(app, secret)
+
+    art_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    art = Artifact(
+        id=art_id,
+        user_id=user_id,
+        title="Q3 Model",
+        slug="q3-model",
+        artifact_type="xlsx",
+        current_version_num=1,
+    )
+    ver = ArtifactVersion(
+        id=uuid.uuid4(),
+        artifact_id=art_id,
+        version_num=1,
+        content_sha256="abc",
+        storage_path=str(tmp_path / "v1.xlsx"),
+        file_size_bytes=2048,
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        change_summary="Initial",
+    )
+    art.versions = [ver]
+
+    session = _FakeSession(
+        [
+            _FakeResult(scalar=1),  # count
+            _FakeResult(rows=[(art, "user-1")]),  # rows
+        ]
+    )
+    app.state.session_factory = lambda: session
+
+    # 1. List Artifacts
+    res = client.get("/v1/admin/artifacts")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total"] == 1
+    assert len(data["artifacts"]) == 1
+    assert data["artifacts"][0]["title"] == "Q3 Model"
+
+    # 2. Purge with artifacts scope
+    purge_session = _FakeSession(
+        [
+            _FakeResult(rowcount=1),  # artifact_versions deleted
+            _FakeResult(rowcount=0),  # onlyoffice_sessions deleted
+            _FakeResult(rowcount=1),  # artifacts deleted
+        ]
+    )
+    app.state.session_factory = lambda: purge_session
+    p_res = client.post(
+        "/v1/admin/system/purge",
+        json={"confirmation": "PURGE", "scope": "artifacts"},
+    )
+    assert p_res.status_code == 200
+    assert p_res.json()["deleted"]["artifacts"] == 1
+    assert p_res.json()["deleted"]["artifact_versions"] == 1
 

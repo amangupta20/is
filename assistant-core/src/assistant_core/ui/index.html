@@ -70,6 +70,11 @@
             <span>Worker Jobs</span>
             <span id="badge-dead-jobs" class="nav-badge badge-danger" style="display: none;">0 dead</span>
           </button>
+          <button class="nav-item" data-tab="artifacts">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            <span>Artifacts</span>
+            <span id="badge-artifacts" class="nav-badge">0</span>
+          </button>
           <button class="nav-item" data-tab="playground">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
             <span>Search Playground</span>
@@ -136,6 +141,14 @@
                 <span class="stat-label">Passage Segments</span>
                 <span id="stat-segments" class="stat-value">0</span>
                 <span class="stat-hint" id="stat-segments-sub">0 deduplicated refs</span>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon icon-purple">📄</div>
+              <div class="stat-content">
+                <span class="stat-label">Artifacts & Sheets</span>
+                <span id="stat-artifacts" class="stat-value">0</span>
+                <span class="stat-hint" id="stat-artifacts-sub">0 total versions</span>
               </div>
             </div>
             <div class="stat-card">
@@ -386,6 +399,28 @@
             </div>
             <div id="jobs-pagination" class="pagination-bar"></div>
           </div>
+        </section>
+
+        <!-- Tab: Artifacts -->
+        <section id="tab-artifacts" class="tab-pane">
+          <div class="filter-bar">
+            <div class="search-box">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" id="artifacts-search-input" placeholder="Search generated documents, spreadsheets, presentations..." oninput="app.filterArtifacts()">
+            </div>
+            <div class="filter-pills">
+              <button class="pill active" data-artifact-type="all" onclick="app.setArtifactTypeFilter('all')">All</button>
+              <button class="pill" data-artifact-type="xlsx" onclick="app.setArtifactTypeFilter('xlsx')">XLSX</button>
+              <button class="pill" data-artifact-type="docx" onclick="app.setArtifactTypeFilter('docx')">DOCX</button>
+              <button class="pill" data-artifact-type="pptx" onclick="app.setArtifactTypeFilter('pptx')">PPTX</button>
+              <button class="pill" data-artifact-type="pdf" onclick="app.setArtifactTypeFilter('pdf')">PDF</button>
+            </div>
+          </div>
+
+          <div id="artifacts-grid" class="cards-grid">
+            <div class="loading-state">Loading artifacts...</div>
+          </div>
+          <div id="artifacts-pagination" class="pagination-bar"></div>
         </section>
 
         <!-- Tab: Playground -->

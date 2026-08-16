@@ -1174,6 +1174,96 @@ select:focus {
 }
 
 /* --------------------------------------------------------------------------
+   Artifact Cards & Badges
+   -------------------------------------------------------------------------- */
+.artifact-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 18px;
+  gap: 14px;
+}
+
+.artifact-card-header {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.artifact-icon-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.artifact-header-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.artifact-title {
+  margin: 0 0 6px 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.artifact-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.artifact-body {
+  font-size: 13px;
+}
+
+.artifact-slug {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.artifact-slug code {
+  color: var(--primary);
+  background: var(--bg-surface);
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+}
+
+.artifact-summary {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.artifact-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.badge-xlsx { background: hsla(142, 71%, 45%, 0.15); color: hsl(142, 71%, 60%); }
+.badge-docx { background: hsla(217, 91%, 60%, 0.15); color: hsl(217, 91%, 75%); }
+.badge-pptx { background: hsla(15, 90%, 55%, 0.15); color: hsl(15, 90%, 65%); }
+.badge-pdf { background: hsla(0, 84%, 60%, 0.15); color: hsl(0, 84%, 70%); }
+.badge-version { background: var(--bg-surface); border: 1px solid var(--border-subtle); color: var(--text-primary); }
+
+/* --------------------------------------------------------------------------
    Responsive Breakpoints
    -------------------------------------------------------------------------- */
 @media (max-width: 900px) {

@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     embedding_model: str | None = Field(default=None, min_length=1, max_length=200)
     embedding_dimension: int = Field(default=1536, ge=1536, le=1536)
     embedding_timeout_seconds: float = Field(default=15, ge=1, le=120)
+    artifacts_dir: str = Field(default="/data/artifacts", min_length=1, max_length=1024)
+    onlyoffice_url: str | None = Field(default=None, min_length=1, max_length=2_048)
+    onlyoffice_jwt_secret: SecretStr | None = None
     log_level: str = "INFO"
     otlp_endpoint: str | None = None
 
@@ -43,6 +46,7 @@ class Settings(BaseSettings):
         "task_model_model",
         "embedding_base_url",
         "embedding_model",
+        "onlyoffice_url",
         "otlp_endpoint",
         mode="before",
     )
@@ -56,6 +60,7 @@ class Settings(BaseSettings):
         "open_webui_api_key",
         "task_model_api_key",
         "embedding_api_key",
+        "onlyoffice_jwt_secret",
         "admin_token",
         mode="before",
     )
