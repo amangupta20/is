@@ -9,6 +9,10 @@ class DashboardApp {
     this.authenticated = false;
     this.currentFileContent = '';
     this.debounceTimers = {};
+    this.selectedMemories = new Set();
+    this.selectedFiles = new Set();
+    this.selectedConvs = new Set();
+    this.batchDeleteType = null;
 
     this.init();
   }
@@ -268,6 +272,201 @@ class DashboardApp {
   }
 
   // ------------------------------------------------------------------------
+  // Selection & Bulk Actions
+  // ------------------------------------------------------------------------
+  getSelection(type) {
+    if (type === 'memories') return this.selectedMemories;
+    if (type === 'files') return this.selectedFiles;
+    if (type === 'convs') return this.selectedConvs;
+    return new Set();
+  }
+
+  toggleRowSelection(type, id, checked) {
+    const selection = this.getSelection(type);
+    if (checked) {
+      selection.add(id);
+    } else {
+      selection.delete(id);
+    }
+    this.updateBulkBar(type);
+  }
+
+  toggleSelectAll(type, checked) {
+    const selection = this.getSelection(type);
+    const checkboxes = document.querySelectorAll(`#${type === 'convs' ? 'conversations' : type}-table-body .row-checkbox`);
+    checkboxes.forEach((cb) => {
+      cb.checked = checked;
+      if (checked) {
+        selection.add(cb.value);
+      } else {
+        selection.delete(cb.value);
+      }
+    });
+    this.updateBulkBar(type);
+  }
+
+  clearSelection(type) {
+    const selection = this.getSelection(type);
+    selection.clear();
+    const selectAll = document.getElementById(`${type}-select-all`);
+    if (selectAll) selectAll.checked = false;
+    const checkboxes = document.querySelectorAll(`#${type === 'convs' ? 'conversations' : type}-table-body .row-checkbox`);
+    checkboxes.forEach((cb) => (cb.checked = false));
+    this.updateBulkBar(type);
+  }
+
+  updateBulkBar(type) {
+    const selection = this.getSelection(type);
+    const bulkBar = document.getElementById(`${type}-bulk-bar`);
+    const countEl = document.getElementById(`${type}-selected-count`);
+    const selectAll = document.getElementById(`${type}-select-all`);
+
+    if (bulkBar && countEl) {
+      countEl.innerText = selection.size;
+      bulkBar.style.display = selection.size > 0 ? 'flex' : 'none';
+    }
+
+    const checkboxes = document.querySelectorAll(`#${type === 'convs' ? 'conversations' : type}-table-body .row-checkbox`);
+    if (selectAll && checkboxes.length > 0) {
+      selectAll.checked = Array.from(checkboxes).every((cb) => cb.checked);
+    }
+  }
+
+  openBatchDeleteModal(type) {
+    const selection = this.getSelection(type);
+    if (selection.size === 0) return;
+
+    this.batchDeleteType = type;
+    const titles = {
+      memories: 'Memories',
+      files: 'Documents',
+      convs: 'Conversations',
+    };
+    document.getElementById('batch-delete-modal-title').innerText = `Delete ${titles[type] || 'Items'}`;
+    document.getElementById('batch-delete-modal-msg').innerText = `Are you sure you want to permanently delete ${selection.size} selected ${type}? This action cannot be undone.`;
+    document.getElementById('batch-delete-modal').style.display = 'flex';
+  }
+
+  closeBatchDeleteModal() {
+    document.getElementById('batch-delete-modal').style.display = 'none';
+    this.batchDeleteType = null;
+  }
+
+  async executeBatchDelete() {
+    const type = this.batchDeleteType;
+    if (!type) return;
+    const selection = this.getSelection(type);
+    const items = Array.from(selection);
+    if (items.length === 0) return;
+
+    const btn = document.getElementById('confirm-batch-delete-btn');
+    btn.disabled = true;
+    btn.innerText = 'Deleting...';
+
+    try {
+      if (type === 'memories') {
+        await this.api('/v1/admin/memories/batch-delete', {
+          method: 'POST',
+          body: JSON.stringify({ ids: items }),
+        });
+        this.showToast(`Deleted ${items.length} memories`, 'success');
+        this.clearSelection('memories');
+        this.loadMemories();
+      } else if (type === 'files') {
+        await this.api('/v1/admin/files/batch-delete', {
+          method: 'POST',
+          body: JSON.stringify({ native_file_ids: items }),
+        });
+        this.showToast(`Deleted ${items.length} documents`, 'success');
+        this.clearSelection('files');
+        this.loadFiles();
+      } else if (type === 'convs') {
+        await this.api('/v1/admin/conversations/batch-delete', {
+          method: 'POST',
+          body: JSON.stringify({ ids: items }),
+        });
+        this.showToast(`Deleted ${items.length} conversation turns`, 'success');
+        this.clearSelection('convs');
+        this.loadConversations();
+      }
+
+      this.closeBatchDeleteModal();
+      this.loadOverview();
+    } catch {
+      // Handled in api()
+    } finally {
+      btn.disabled = false;
+      btn.innerText = 'Delete Permanently';
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // Double-Confirmation System Purge
+  // ------------------------------------------------------------------------
+  openPurgeModal() {
+    document.getElementById('purge-scope-input').value = 'all';
+    document.getElementById('purge-confirm-input').value = '';
+    document.getElementById('confirm-purge-btn').disabled = true;
+    this.updatePurgeScopeText();
+    document.getElementById('purge-modal').style.display = 'flex';
+  }
+
+  closePurgeModal() {
+    document.getElementById('purge-modal').style.display = 'none';
+  }
+
+  updatePurgeScopeText() {
+    const scope = document.getElementById('purge-scope-input').value;
+    const explanations = {
+      all: 'You are about to permanently erase all indexed personal memories, files, chunk embeddings, conversation histories, and event logs from the database.',
+      memories: 'You are about to permanently erase all user explicit memories, evidence provenance, and profile snapshots.',
+      files: 'You are about to permanently erase all uploaded document records, unchunked texts, chunk segments, and 1536d embeddings.',
+      conversations: 'You are about to permanently erase all recorded completed conversation turns, message links, and passage embeddings.',
+      jobs: 'You are about to wipe all background worker job records and incoming event logs.',
+    };
+    document.getElementById('purge-scope-explanation').innerText = explanations[scope] || explanations.all;
+  }
+
+  onPurgeInput(val) {
+    const btn = document.getElementById('confirm-purge-btn');
+    btn.disabled = val.trim().toUpperCase() !== 'PURGE';
+  }
+
+  async executePurge() {
+    const scope = document.getElementById('purge-scope-input').value;
+    const confirmation = document.getElementById('purge-confirm-input').value.trim();
+    if (confirmation.toUpperCase() !== 'PURGE') return;
+
+    const btn = document.getElementById('confirm-purge-btn');
+    btn.disabled = true;
+    btn.innerText = 'Purging Database...';
+
+    try {
+      const res = await this.api('/v1/admin/system/purge', {
+        method: 'POST',
+        body: JSON.stringify({ confirmation, scope }),
+      });
+
+      this.showToast(`System purge completed for scope: ${res.scope}`, 'success');
+      this.closePurgeModal();
+
+      // Clear all local selection caches
+      this.selectedMemories.clear();
+      this.selectedFiles.clear();
+      this.selectedConvs.clear();
+
+      // Refresh everything
+      this.loadOverview();
+      this.loadCurrentTab();
+    } catch {
+      // Handled in api()
+    } finally {
+      btn.disabled = false;
+      btn.innerText = 'Permanently Purge Data';
+    }
+  }
+
+  // ------------------------------------------------------------------------
   // Memories Tab
   // ------------------------------------------------------------------------
   async loadMemories(searchQuery = null) {
@@ -276,7 +475,7 @@ class DashboardApp {
     const status = document.getElementById('memories-status-filter').value;
 
     const tbody = document.getElementById('memories-table-body');
-    tbody.innerHTML = '<tr><td colspan="7" class="loading-cell">Loading memories...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="loading-cell">Loading memories...</td></tr>';
 
     try {
       const params = new URLSearchParams({
@@ -289,7 +488,8 @@ class DashboardApp {
       const data = await this.api(`/v1/admin/memories?${params.toString()}`);
 
       if (!data.items || data.items.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="loading-cell">No memories found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="loading-cell">No memories found.</td></tr>';
+        this.updateBulkBar('memories');
         return;
       }
 
@@ -297,6 +497,9 @@ class DashboardApp {
         .map(
           (m) => `
         <tr>
+          <td class="checkbox-cell">
+            <input type="checkbox" class="row-checkbox" value="${m.id}" ${this.selectedMemories.has(m.id) ? 'checked' : ''} onchange="app.toggleRowSelection('memories', '${m.id}', this.checked)">
+          </td>
           <td><strong>${this.escapeHtml(m.statement)}</strong></td>
           <td><span class="badge badge-${m.category}">${m.category}</span></td>
           <td><code>${this.escapeHtml(m.native_user_id)}</code></td>
@@ -319,8 +522,10 @@ class DashboardApp {
       `
         )
         .join('');
+
+      this.updateBulkBar('memories');
     } catch {
-      tbody.innerHTML = '<tr><td colspan="7" class="loading-cell text-danger">Failed to load memories.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="loading-cell text-danger">Failed to load memories.</td></tr>';
     }
   }
 
@@ -362,14 +567,12 @@ class DashboardApp {
 
     try {
       if (id) {
-        // Update existing
         await this.api(`/v1/admin/memories/${id}`, {
           method: 'PATCH',
           body: JSON.stringify({ statement, category }),
         });
         this.showToast('Memory updated', 'success');
       } else {
-        // Create new
         await this.api('/v1/admin/memories', {
           method: 'POST',
           body: JSON.stringify({
@@ -408,7 +611,7 @@ class DashboardApp {
     const status = document.getElementById('files-status-filter').value;
 
     const tbody = document.getElementById('files-table-body');
-    tbody.innerHTML = '<tr><td colspan="8" class="loading-cell">Loading documents...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="loading-cell">Loading documents...</td></tr>';
 
     try {
       const params = new URLSearchParams({
@@ -420,7 +623,8 @@ class DashboardApp {
       const data = await this.api(`/v1/admin/files?${params.toString()}`);
 
       if (!data.items || data.items.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="loading-cell">No documents found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="loading-cell">No documents found.</td></tr>';
+        this.updateBulkBar('files');
         return;
       }
 
@@ -428,6 +632,9 @@ class DashboardApp {
         .map(
           (f) => `
         <tr>
+          <td class="checkbox-cell">
+            <input type="checkbox" class="row-checkbox" value="${f.native_file_id}" ${this.selectedFiles.has(f.native_file_id) ? 'checked' : ''} onchange="app.toggleRowSelection('files', '${f.native_file_id}', this.checked)">
+          </td>
           <td><strong>${this.escapeHtml(f.filename)}</strong><br><code class="text-muted" style="font-size: 11px;">${f.native_file_id}</code></td>
           <td><span class="badge">${f.mime_type || 'unknown'}</span></td>
           <td><code>${this.escapeHtml(f.native_user_id)}</code></td>
@@ -451,8 +658,10 @@ class DashboardApp {
       `
         )
         .join('');
+
+      this.updateBulkBar('files');
     } catch {
-      tbody.innerHTML = '<tr><td colspan="8" class="loading-cell text-danger">Failed to load documents.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="loading-cell text-danger">Failed to load documents.</td></tr>';
     }
   }
 
@@ -529,7 +738,7 @@ class DashboardApp {
   async loadConversations(searchQuery = null) {
     const query = searchQuery !== null ? searchQuery : document.getElementById('conversations-search').value;
     const tbody = document.getElementById('conversations-table-body');
-    tbody.innerHTML = '<tr><td colspan="5" class="loading-cell">Loading conversations...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="loading-cell">Loading conversations...</td></tr>';
 
     try {
       const params = new URLSearchParams({
@@ -540,7 +749,8 @@ class DashboardApp {
       const data = await this.api(`/v1/admin/conversations?${params.toString()}`);
 
       if (!data.items || data.items.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="loading-cell">No conversations found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="loading-cell">No conversations found.</td></tr>';
+        this.updateBulkBar('convs');
         return;
       }
 
@@ -548,8 +758,11 @@ class DashboardApp {
         .map(
           (c) => `
         <tr>
-          <td><div style="max-width: 320px; word-break: break-word;">${this.escapeHtml(c.user_content)}</div></td>
-          <td><div style="max-width: 380px; word-break: break-word; color: var(--text-muted);">${this.escapeHtml(c.assistant_content)}</div></td>
+          <td class="checkbox-cell">
+            <input type="checkbox" class="row-checkbox" value="${c.id}" ${this.selectedConvs.has(c.id) ? 'checked' : ''} onchange="app.toggleRowSelection('convs', '${c.id}', this.checked)">
+          </td>
+          <td><div style="max-width: 300px; word-break: break-word;">${this.escapeHtml(c.user_content)}</div></td>
+          <td><div style="max-width: 340px; word-break: break-word; color: var(--text-muted);">${this.escapeHtml(c.assistant_content)}</div></td>
           <td><code>${this.escapeHtml(c.native_chat_id || 'unknown')}</code></td>
           <td><code>${this.escapeHtml(c.native_user_id)}</code></td>
           <td><small class="text-muted">${this.formatDate(c.occurred_at)}</small></td>
@@ -557,8 +770,10 @@ class DashboardApp {
       `
         )
         .join('');
+
+      this.updateBulkBar('convs');
     } catch {
-      tbody.innerHTML = '<tr><td colspan="5" class="loading-cell text-danger">Failed to load conversations.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" class="loading-cell text-danger">Failed to load conversations.</td></tr>';
     }
   }
 

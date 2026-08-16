@@ -20,10 +20,12 @@ class _FakeResult:
         scalar: Any = None,
         rows: list[Any] | None = None,
         scalars_list: list[Any] | None = None,
+        rowcount: int = 1,
     ) -> None:
         self._scalar = scalar
         self._rows = rows or []
         self._scalars = scalars_list or []
+        self.rowcount = rowcount
 
     def scalar_one(self) -> Any:
         return self._scalar
@@ -288,3 +290,87 @@ def test_dashboard_ui_served() -> None:
         css_res = client.get("/static/styles.css")
         assert css_res.status_code == 200
 
+
+def test_admin_batch_delete_and_purge() -> None:
+    secret = "admin-secret-at-least-32-chars-long"
+    settings = Settings(hmac_secret=secret)
+    app = create_app(settings)
+
+    session = _FakeSession(
+        [
+            # 1. Batch delete memories: 3 queries (evidence delete, self-ref update, records delete)
+            _FakeResult(rowcount=2),
+            _FakeResult(rowcount=0),
+            _FakeResult(rowcount=2),
+            # 2. Batch delete files: 3 queries (references delete, documents delete, orphan segments delete)
+            _FakeResult(rowcount=3),
+            _FakeResult(rowcount=1),
+            _FakeResult(rowcount=3),
+            # 3. Batch delete conversations: 4 queries (evidence delete, conv refs delete, turns delete, orphan segments delete)
+            _FakeResult(rowcount=1),
+            _FakeResult(rowcount=2),
+            _FakeResult(rowcount=2),
+            _FakeResult(rowcount=2),
+            # 4. System purge all: evidence, self-ref, records, snapshots, file refs, file docs, file segs, conv refs, conv segs, turns, jobs, events
+            _FakeResult(rowcount=5),
+            _FakeResult(rowcount=0),
+            _FakeResult(rowcount=5),
+            _FakeResult(rowcount=1),
+            _FakeResult(rowcount=10),
+            _FakeResult(rowcount=2),
+            _FakeResult(rowcount=8),
+            _FakeResult(rowcount=12),
+            _FakeResult(rowcount=12),
+            _FakeResult(rowcount=6),
+            _FakeResult(rowcount=4),
+            _FakeResult(rowcount=10),
+        ]
+    )
+    app.state.session_factory = lambda: session
+    client = _get_authed_client(app, secret)
+
+    # 1. Batch delete memories
+    m_res = client.post(
+        "/v1/admin/memories/batch-delete",
+        json={"ids": [str(uuid.uuid4()), str(uuid.uuid4())]},
+    )
+    assert m_res.status_code == 200
+    assert m_res.json()["status"] == "deleted"
+    assert m_res.json()["count"] == 2
+
+    # 2. Batch delete files
+    f_res = client.post(
+        "/v1/admin/files/batch-delete",
+        json={"native_file_ids": ["doc-1", "doc-2"]},
+    )
+    assert f_res.status_code == 200
+    assert f_res.json()["status"] == "deleted"
+    assert f_res.json()["count"] == 1
+
+    # 3. Batch delete conversations
+    c_res = client.post(
+        "/v1/admin/conversations/batch-delete",
+        json={"ids": [str(uuid.uuid4())]},
+    )
+    assert c_res.status_code == 200
+    assert c_res.json()["status"] == "deleted"
+    assert c_res.json()["count"] == 2
+
+    # 4. System purge with wrong confirmation (rejected)
+    bad_purge_res = client.post(
+        "/v1/admin/system/purge",
+        json={"confirmation": "wrong", "scope": "all"},
+    )
+    assert bad_purge_res.status_code == 400
+
+    # 5. System purge with valid confirmation
+    good_purge_res = client.post(
+        "/v1/admin/system/purge",
+        json={"confirmation": "PURGE", "scope": "all"},
+    )
+    assert good_purge_res.status_code == 200
+    assert good_purge_res.json()["status"] == "purged"
+    assert good_purge_res.json()["scope"] == "all"
+    assert "memories" in good_purge_res.json()["deleted"]
+    assert "file_documents" in good_purge_res.json()["deleted"]
+    assert "completed_turns" in good_purge_res.json()["deleted"]

@@ -805,4 +805,3 @@ def test_outlet_captures_attached_file_ids(monkeypatch: pytest.MonkeyPatch) -> N
     payload = delivered_payload.get("payload")
     assert isinstance(payload, dict)
     assert payload.get("attached_file_ids") == ["file-top-level-1", "file-msg-level-2"]
-

@@ -99,6 +99,10 @@
               <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
               Refresh
             </button>
+            <button id="purge-btn" class="btn btn-danger btn-sm" onclick="app.openPurgeModal()">
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+              Purge Data
+            </button>
             <div id="tab-specific-actions"></div>
           </div>
         </header>
@@ -167,6 +171,13 @@
                     <span>Review failed jobs and retry</span>
                   </div>
                 </button>
+                <button class="action-card danger-action-card" onclick="app.openPurgeModal()">
+                  <div class="action-icon">⚠️</div>
+                  <div class="action-text">
+                    <strong>Danger Zone / Purge</strong>
+                    <span>Wipe test data with double-confirmation</span>
+                  </div>
+                </button>
               </div>
             </div>
           </div>
@@ -174,6 +185,21 @@
 
         <!-- Tab: Memories -->
         <section id="tab-memories" class="tab-pane">
+          <!-- Bulk Action Bar -->
+          <div id="memories-bulk-bar" class="bulk-action-bar" style="display: none;">
+            <div class="bulk-action-info">
+              <span class="badge badge-fact" id="memories-selected-count">0</span>
+              <span>memories selected</span>
+            </div>
+            <div class="bulk-action-buttons">
+              <button class="btn btn-secondary btn-sm" onclick="app.clearSelection('memories')">Deselect All</button>
+              <button class="btn btn-danger btn-sm" onclick="app.openBatchDeleteModal('memories')">
+                <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                Delete Selected
+              </button>
+            </div>
+          </div>
+
           <div class="table-controls">
             <div class="search-box">
               <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -201,6 +227,7 @@
               <table class="data-table">
                 <thead>
                   <tr>
+                    <th class="checkbox-cell"><input type="checkbox" id="memories-select-all" onchange="app.toggleSelectAll('memories', this.checked)"></th>
                     <th>Statement</th>
                     <th>Category</th>
                     <th>User</th>
@@ -211,7 +238,7 @@
                   </tr>
                 </thead>
                 <tbody id="memories-table-body">
-                  <tr><td colspan="7" class="loading-cell">Loading memories...</td></tr>
+                  <tr><td colspan="8" class="loading-cell">Loading memories...</td></tr>
                 </tbody>
               </table>
             </div>
@@ -221,6 +248,21 @@
 
         <!-- Tab: Documents -->
         <section id="tab-files" class="tab-pane">
+          <!-- Bulk Action Bar -->
+          <div id="files-bulk-bar" class="bulk-action-bar" style="display: none;">
+            <div class="bulk-action-info">
+              <span class="badge badge-preference" id="files-selected-count">0</span>
+              <span>documents selected</span>
+            </div>
+            <div class="bulk-action-buttons">
+              <button class="btn btn-secondary btn-sm" onclick="app.clearSelection('files')">Deselect All</button>
+              <button class="btn btn-danger btn-sm" onclick="app.openBatchDeleteModal('files')">
+                <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                Delete Selected
+              </button>
+            </div>
+          </div>
+
           <div class="table-controls">
             <div class="search-box">
               <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -240,6 +282,7 @@
               <table class="data-table">
                 <thead>
                   <tr>
+                    <th class="checkbox-cell"><input type="checkbox" id="files-select-all" onchange="app.toggleSelectAll('files', this.checked)"></th>
                     <th>Filename</th>
                     <th>MIME Type</th>
                     <th>User</th>
@@ -251,7 +294,7 @@
                   </tr>
                 </thead>
                 <tbody id="files-table-body">
-                  <tr><td colspan="8" class="loading-cell">Loading documents...</td></tr>
+                  <tr><td colspan="9" class="loading-cell">Loading documents...</td></tr>
                 </tbody>
               </table>
             </div>
@@ -261,6 +304,21 @@
 
         <!-- Tab: Conversations -->
         <section id="tab-conversations" class="tab-pane">
+          <!-- Bulk Action Bar -->
+          <div id="convs-bulk-bar" class="bulk-action-bar" style="display: none;">
+            <div class="bulk-action-info">
+              <span class="badge badge-constraint" id="convs-selected-count">0</span>
+              <span>turns selected</span>
+            </div>
+            <div class="bulk-action-buttons">
+              <button class="btn btn-secondary btn-sm" onclick="app.clearSelection('convs')">Deselect All</button>
+              <button class="btn btn-danger btn-sm" onclick="app.openBatchDeleteModal('convs')">
+                <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                Delete Selected
+              </button>
+            </div>
+          </div>
+
           <div class="table-controls">
             <div class="search-box">
               <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -272,6 +330,7 @@
               <table class="data-table">
                 <thead>
                   <tr>
+                    <th class="checkbox-cell"><input type="checkbox" id="convs-select-all" onchange="app.toggleSelectAll('convs', this.checked)"></th>
                     <th>User Prompt</th>
                     <th>Assistant Response</th>
                     <th>Chat ID</th>
@@ -280,7 +339,7 @@
                   </tr>
                 </thead>
                 <tbody id="conversations-table-body">
-                  <tr><td colspan="5" class="loading-cell">Loading conversations...</td></tr>
+                  <tr><td colspan="6" class="loading-cell">Loading conversations...</td></tr>
                 </tbody>
               </table>
             </div>
@@ -397,6 +456,64 @@
         <div class="modal-footer">
           <button class="btn btn-secondary" onclick="app.copyFileContent()">Copy Text</button>
           <button class="btn btn-secondary" onclick="app.closeFileModal()">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Batch Delete Confirmation -->
+    <div id="batch-delete-modal" class="modal-overlay" style="display: none;">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h2 id="batch-delete-modal-title">Confirm Deletion</h2>
+          <button class="modal-close" onclick="app.closeBatchDeleteModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p id="batch-delete-modal-msg" class="text-secondary">Are you sure you want to delete the selected items?</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="app.closeBatchDeleteModal()">Cancel</button>
+          <button type="button" id="confirm-batch-delete-btn" class="btn btn-danger" onclick="app.executeBatchDelete()">Delete Permanently</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Double-Confirmation System Purge -->
+    <div id="purge-modal" class="modal-overlay" style="display: none;">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h2 class="text-danger" style="color: var(--danger);">⚠️ System Data Purge</h2>
+            <p class="text-muted">Permanent data erasure with double confirmation</p>
+          </div>
+          <button class="modal-close" onclick="app.closePurgeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="purge-warning-card">
+            <div class="purge-warning-title">🚨 Irreversible Action</div>
+            <div class="purge-warning-text" id="purge-scope-explanation">
+              You are about to permanently erase all indexed personal memories, files, chunk embeddings, and conversation histories from the database.
+            </div>
+          </div>
+
+          <div class="form-group purge-scope-select">
+            <label for="purge-scope-input">Select Purge Scope</label>
+            <select id="purge-scope-input" onchange="app.updatePurgeScopeText()">
+              <option value="all">Complete Clean Slate (All Tables)</option>
+              <option value="memories">Memories & Evidence Only</option>
+              <option value="files">Documents, Segments & Embeddings Only</option>
+              <option value="conversations">Conversation Recall Turns & Segments Only</option>
+              <option value="jobs">Worker Job Queue & Event Inbox Only</option>
+            </select>
+          </div>
+
+          <div class="form-group confirmation-input-box">
+            <label for="purge-confirm-input">To confirm, type <code>PURGE</code> in the box below:</label>
+            <input type="text" id="purge-confirm-input" placeholder="Type PURGE here..." oninput="app.onPurgeInput(this.value)" autocomplete="off">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="app.closePurgeModal()">Cancel</button>
+          <button type="button" id="confirm-purge-btn" class="btn btn-danger" disabled onclick="app.executePurge()">Permanently Purge Data</button>
         </div>
       </div>
     </div>

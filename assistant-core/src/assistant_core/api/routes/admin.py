@@ -7,7 +7,8 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import desc, func, or_, select, update
 
 from assistant_core.auth.admin import (
     DEFAULT_SESSION_TTL_SECONDS,
@@ -16,12 +17,13 @@ from assistant_core.auth.admin import (
     require_admin_session,
     verify_admin_credentials,
 )
-from assistant_core.conversation.models import ConversationSegment
+from assistant_core.conversation.models import ConversationReference, ConversationSegment
+from assistant_core.events.models import EventInbox
 from assistant_core.files.models import FileDocument, FileReference, FileSegment
 from assistant_core.files.repository import tombstone_file_references
 from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
-from assistant_core.memory.models import MemoryEvidence, MemoryRecord
+from assistant_core.memory.models import ChatProfileSnapshot, MemoryEvidence, MemoryRecord
 from assistant_core.turns.models import CompletedTurn
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
@@ -55,6 +57,22 @@ class UpdateMemoryRequest(BaseModel):
     statement: str | None = Field(default=None, min_length=1, max_length=2000)
     category: str | None = Field(default=None, min_length=1, max_length=100)
     state: Literal["active", "tombstoned"] | None = None
+
+
+class BatchDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=1000)
+
+
+class BatchDeleteFilesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    native_file_ids: list[str] = Field(min_length=1, max_length=1000)
+
+
+class PurgeSystemRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmation: str
+    scope: Literal["all", "memories", "files", "conversations", "jobs"] = "all"
 
 
 # ---------------------------------------------------------------------------
@@ -694,3 +712,124 @@ async def retry_job(job_id: uuid.UUID, request: Request) -> dict[str, Any]:
 
         await session.commit()
         return {"status": "requeued", "job_id": str(job.id)}
+
+
+# ---------------------------------------------------------------------------
+# Batch Operations & System Purge
+# ---------------------------------------------------------------------------
+
+
+@router.post("/memories/batch-delete", dependencies=[Depends(require_admin_session)])
+async def batch_delete_memories(body: BatchDeleteRequest, request: Request) -> dict[str, Any]:
+    """Permanently delete a batch of memory records and their evidence."""
+    async with request.app.state.session_factory() as session:
+        await session.execute(
+            sa_delete(MemoryEvidence).where(MemoryEvidence.memory_record_id.in_(body.ids))
+        )
+        await session.execute(
+            update(MemoryRecord)
+            .where(MemoryRecord.superseded_by_id.in_(body.ids))
+            .values(superseded_by_id=None)
+        )
+        res = await session.execute(sa_delete(MemoryRecord).where(MemoryRecord.id.in_(body.ids)))
+        deleted_count = res.rowcount or 0
+        await session.commit()
+        return {"status": "deleted", "count": deleted_count}
+
+
+@router.post("/files/batch-delete", dependencies=[Depends(require_admin_session)])
+async def batch_delete_files(body: BatchDeleteFilesRequest, request: Request) -> dict[str, Any]:
+    """Permanently delete a batch of file documents and their references."""
+    async with request.app.state.session_factory() as session:
+        await session.execute(
+            sa_delete(FileReference).where(FileReference.native_file_id.in_(body.native_file_ids))
+        )
+        res = await session.execute(
+            sa_delete(FileDocument).where(FileDocument.native_file_id.in_(body.native_file_ids))
+        )
+        orphan_stmt = sa_delete(FileSegment).where(
+            ~FileSegment.id.in_(select(FileReference.segment_id))
+        )
+        await session.execute(orphan_stmt)
+
+        deleted_count = res.rowcount or 0
+        await session.commit()
+        return {"status": "deleted", "count": deleted_count}
+
+
+@router.post("/conversations/batch-delete", dependencies=[Depends(require_admin_session)])
+async def batch_delete_conversations(body: BatchDeleteRequest, request: Request) -> dict[str, Any]:
+    """Permanently delete a batch of conversation turns and their references."""
+    async with request.app.state.session_factory() as session:
+        await session.execute(
+            sa_delete(MemoryEvidence).where(MemoryEvidence.completed_turn_id.in_(body.ids))
+        )
+        await session.execute(
+            sa_delete(ConversationReference).where(
+                ConversationReference.completed_turn_id.in_(body.ids)
+            )
+        )
+        res = await session.execute(sa_delete(CompletedTurn).where(CompletedTurn.id.in_(body.ids)))
+        orphan_stmt = sa_delete(ConversationSegment).where(
+            ~ConversationSegment.id.in_(select(ConversationReference.segment_id))
+        )
+        await session.execute(orphan_stmt)
+
+        deleted_count = res.rowcount or 0
+        await session.commit()
+        return {"status": "deleted", "count": deleted_count}
+
+
+@router.post("/system/purge", dependencies=[Depends(require_admin_session)])
+async def purge_system_data(body: PurgeSystemRequest, request: Request) -> dict[str, Any]:
+    """Permanently purge data across assistant-core with confirmation validation."""
+    if body.confirmation.strip().upper() != "PURGE":
+        raise HTTPException(
+            status_code=400,
+            detail="Confirmation phrase mismatch. You must provide confirmation='PURGE' to execute.",
+        )
+
+    scope = body.scope
+    deleted_counts: dict[str, int] = {}
+
+    async with request.app.state.session_factory() as session:
+        if scope in ("memories", "all"):
+            ev_count = (await session.execute(sa_delete(MemoryEvidence))).rowcount or 0
+            await session.execute(update(MemoryRecord).values(superseded_by_id=None))
+            rec_count = (await session.execute(sa_delete(MemoryRecord))).rowcount or 0
+            snap_count = (await session.execute(sa_delete(ChatProfileSnapshot))).rowcount or 0
+            deleted_counts["memories"] = rec_count
+            deleted_counts["evidence"] = ev_count
+            deleted_counts["snapshots"] = snap_count
+
+        if scope in ("files", "all"):
+            ref_count = (await session.execute(sa_delete(FileReference))).rowcount or 0
+            doc_count = (await session.execute(sa_delete(FileDocument))).rowcount or 0
+            seg_count = (await session.execute(sa_delete(FileSegment))).rowcount or 0
+            deleted_counts["file_references"] = ref_count
+            deleted_counts["file_documents"] = doc_count
+            deleted_counts["file_segments"] = seg_count
+
+        if scope in ("conversations", "all"):
+            if scope == "conversations":
+                await session.execute(sa_delete(MemoryEvidence))
+            conv_ref_count = (await session.execute(sa_delete(ConversationReference))).rowcount or 0
+            conv_seg_count = (await session.execute(sa_delete(ConversationSegment))).rowcount or 0
+            turn_count = (await session.execute(sa_delete(CompletedTurn))).rowcount or 0
+            deleted_counts["conversation_references"] = conv_ref_count
+            deleted_counts["conversation_segments"] = conv_seg_count
+            deleted_counts["completed_turns"] = turn_count
+
+        if scope in ("jobs", "all"):
+            job_count = (await session.execute(sa_delete(Job))).rowcount or 0
+            inbox_count = (await session.execute(sa_delete(EventInbox))).rowcount or 0
+            deleted_counts["jobs"] = job_count
+            deleted_counts["events"] = inbox_count
+
+        await session.commit()
+
+    return {
+        "status": "purged",
+        "scope": scope,
+        "deleted": deleted_counts,
+    }

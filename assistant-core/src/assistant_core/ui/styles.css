@@ -927,6 +927,125 @@ select:focus {
 }
 
 /* --------------------------------------------------------------------------
+   Danger Zone, Bulk Selection & Purge Modal
+   -------------------------------------------------------------------------- */
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: hsl(0, 84%, 55%);
+}
+
+.btn-danger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+}
+
+.danger-action-card {
+  border-color: hsla(0, 84%, 60%, 0.3) !important;
+}
+
+.danger-action-card:hover {
+  border-color: var(--danger) !important;
+  background: hsla(0, 84%, 60%, 0.05) !important;
+}
+
+.bulk-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: hsla(217, 91%, 60%, 0.12);
+  border: 1px solid hsla(217, 91%, 60%, 0.35);
+  border-radius: var(--radius-md);
+  padding: 10px 18px;
+  margin-bottom: 16px;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.bulk-action-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.bulk-action-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox-cell {
+  width: 38px;
+  text-align: center;
+  padding-right: 0 !important;
+}
+
+.data-table input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.purge-warning-card {
+  background: hsla(0, 84%, 60%, 0.08);
+  border: 1px solid hsla(0, 84%, 60%, 0.25);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.purge-warning-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+
+.purge-warning-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.purge-scope-select {
+  margin-bottom: 16px;
+}
+
+.confirmation-input-box {
+  margin-top: 16px;
+}
+
+.confirmation-input-box label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.confirmation-input-box code {
+  background: hsla(0, 84%, 60%, 0.15);
+  color: var(--danger);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+/* --------------------------------------------------------------------------
    Responsive Breakpoints
    -------------------------------------------------------------------------- */
 @media (max-width: 900px) {
@@ -949,3 +1068,4 @@ select:focus {
     padding: 24px 20px;
   }
 }
+
