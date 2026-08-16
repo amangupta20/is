@@ -1,6 +1,6 @@
 """
-title: Assistant Core Status
-version: 0.1.0
+title: Assistant Core Tools & Diagnostics
+version: 0.2.0
 requirements: httpx
 """
 
@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 
 class Tools:
-    """Explicit tools for the optional Assistant Core companion."""
+    """Explicit tools and observability diagnostics for Assistant Core."""
 
     _UNAVAILABLE = (
         "Assistant Core is unavailable. Ordinary chat can continue without custom context."
@@ -130,7 +130,7 @@ class Tools:
         __user__: dict | None = None,
         __metadata__: dict | None = None,
     ) -> str:
-        """Search durable memory and past conversation evidence before personal claims."""
+        """Search durable memory, past conversation evidence, and uploaded document passages."""
         try:
             payload = self._context_payload(__user__, __metadata__)
             payload.update({"query": query.strip(), "limit": limit})
@@ -143,43 +143,38 @@ class Tools:
                 return self._UNAVAILABLE
             lines: list[str] = []
             for result in results:
-                if not isinstance(result, dict) or set(result) != {
-                    "source_id",
-                    "source_type",
-                    "category",
-                    "role",
-                    "preview",
-                    "source_native_chat_id",
-                    "source_native_message_id",
-                }:
+                if not isinstance(result, dict):
                     return self._UNAVAILABLE
-                if any(
-                    type(result[key]) is not str
-                    for key in ("source_id", "source_type", "category", "preview")
-                ):
+                source_type = result.get("source_type")
+                source_id = result.get("source_id")
+                category = result.get("category")
+                preview = result.get("preview")
+                role = result.get("role")
+                chat_id = result.get("source_native_chat_id")
+                message_id = result.get("source_native_message_id")
+                filename = result.get("filename")
+                header_path = result.get("header_path")
+                chunk_ordinal = result.get("chunk_ordinal")
+
+                if not isinstance(source_id, str) or not isinstance(preview, str):
                     return self._UNAVAILABLE
-                source_type = result["source_type"]
-                role = result["role"]
-                chat_id = result["source_native_chat_id"]
-                message_id = result["source_native_message_id"]
+
                 if source_type == "memory":
-                    if role is not None or chat_id is not None or message_id is not None:
-                        return self._UNAVAILABLE
-                    label = f"memory/{result['category']}"
+                    label = f"memory/{category}"
                     provenance = ""
                 elif source_type == "conversation":
-                    if (
-                        role not in {"user", "assistant"}
-                        or type(chat_id) is not str
-                        or type(message_id) is not str
-                    ):
-                        return self._UNAVAILABLE
                     label = f"conversation/{role} evidence"
                     provenance = f" (chat {chat_id}, message {message_id})"
+                elif source_type == "file":
+                    fname = filename or "document"
+                    hpath = f" § {header_path}" if header_path else ""
+                    label = f"file/{fname}{hpath}"
+                    provenance = f" [chunk {chunk_ordinal}]"
                 else:
                     return self._UNAVAILABLE
+
                 lines.append(
-                    f"- [{label}] {result['source_id']}: {result['preview']}{provenance}"
+                    f"- [{label}] {source_id}: {preview}{provenance}"
                 )
             if not lines:
                 return "No matching personal context found."
@@ -192,87 +187,78 @@ class Tools:
         memory_source_id: str,
         __user__: dict | None = None,
     ) -> str:
-        """Expand one memory or conversation source with bounded provenance."""
+        """Expand one memory, conversation passage, or file chunk with bounded provenance."""
         try:
             payload = {
                 "native_user_id": self._optional_id(__user__, "id") or "unknown",
                 "memory_source_id": memory_source_id,
             }
             response = await self._signed_json_post("/v1/personal-context/read", payload)
-            expected = {
-                "source_id",
-                "source_type",
-                "content",
-                "category",
-                "role",
-                "evidence_quote",
-                "source_native_chat_id",
-                "source_native_message_id",
-                "neighbors",
-                "full_source_available",
-            }
-            if not isinstance(response, dict) or set(response) != expected:
+            if not isinstance(response, dict):
                 return self._UNAVAILABLE
-            text_fields = (
-                "source_id",
-                "source_type",
-                "content",
-                "category",
-                "source_native_chat_id",
-                "source_native_message_id",
-            )
-            if (
-                any(type(response[field]) is not str for field in text_fields)
-                or type(response["full_source_available"]) is not bool
-                or type(response["neighbors"]) is not list
-            ):
+
+            source_type = response.get("source_type")
+            source_id = response.get("source_id")
+            content = response.get("content")
+            category = response.get("category")
+            role = response.get("role")
+            evidence_quote = response.get("evidence_quote")
+
+            if not isinstance(source_id, str) or not isinstance(content, str):
                 return self._UNAVAILABLE
-            source_type = response["source_type"]
-            role = response["role"]
-            evidence_quote = response["evidence_quote"]
+
             if source_type == "memory":
-                if role is not None or type(evidence_quote) is not str:
-                    return self._UNAVAILABLE
-            elif source_type == "conversation":
-                if role not in {"user", "assistant"} or evidence_quote is not None:
-                    return self._UNAVAILABLE
-            else:
-                return self._UNAVAILABLE
-            neighbor_lines: list[str] = []
-            for neighbor in response["neighbors"]:
-                if not isinstance(neighbor, dict) or set(neighbor) != {
-                    "role",
-                    "content",
-                    "source_native_chat_id",
-                    "source_native_message_id",
-                } or any(type(value) is not str for value in neighbor.values()):
-                    return self._UNAVAILABLE
-                if neighbor["role"] not in {"user", "assistant"}:
-                    return self._UNAVAILABLE
-                neighbor_lines.append(
-                    f"- {neighbor['role']} ({neighbor['source_native_message_id']}): "
-                    f"{neighbor['content']}"
+                role_line = f"Role: {role}\n" if role is not None else ""
+                evidence_line = (
+                    f"Evidence: \"{evidence_quote}\"\n" if evidence_quote is not None else ""
                 )
-            source_label = "memory" if source_type == "memory" else "conversation"
-            role_line = f"Role: {role}\n" if role is not None else ""
-            evidence_line = (
-                f"Evidence: \"{evidence_quote}\"\n" if evidence_quote is not None else ""
-            )
-            neighbor_text = (
-                "\n".join(neighbor_lines) if neighbor_lines else "none"
-            )
-            return (
-                f"Personal {source_label} source {response['source_id']}:\n"
-                f"Content: {response['content']}\n"
-                f"Category: {response['category']}\n"
-                f"{role_line}"
-                f"{evidence_line}"
-                f"Source chat: {response['source_native_chat_id']}\n"
-                f"Source message: {response['source_native_message_id']}\n"
-                f"Neighboring context: {neighbor_text}\n"
-                "Full-source expansion available: "
-                f"{'yes' if response['full_source_available'] else 'no'}"
-            )
+                return (
+                    f"Personal memory source {source_id}:\n"
+                    f"Content: {content}\n"
+                    f"Category: {category}\n"
+                    f"{role_line}"
+                    f"{evidence_line}"
+                    f"Source chat: {response.get('source_native_chat_id')}\n"
+                    f"Source message: {response.get('source_native_message_id')}\n"
+                    "Neighboring context: none\n"
+                    "Full-source expansion available: "
+                    f"{'yes' if response.get('full_source_available') else 'no'}"
+                )
+            if source_type == "conversation":
+                neighbor_lines: list[str] = []
+                for neighbor in response.get("neighbors", []):
+                    if isinstance(neighbor, dict):
+                        neighbor_lines.append(
+                            f"- {neighbor.get('role')} ({neighbor.get('source_native_message_id')}): "
+                            f"{neighbor.get('content')}"
+                        )
+                neighbor_text = "\n".join(neighbor_lines) if neighbor_lines else "none"
+                return (
+                    f"Personal conversation source {source_id}:\n"
+                    f"Content: {content}\n"
+                    f"Category: {category}\n"
+                    f"Role: {role}\n"
+                    f"Source chat: {response.get('source_native_chat_id')}\n"
+                    f"Source message: {response.get('source_native_message_id')}\n"
+                    f"Neighboring context: {neighbor_text}\n"
+                    "Full-source expansion available: "
+                    f"{'yes' if response.get('full_source_available') else 'no'}"
+                )
+            if source_type == "file":
+                fname = response.get("filename") or "document"
+                hpath = response.get("header_path") or "none"
+                ordinal = response.get("chunk_ordinal", 0)
+                prev = response.get("previous_chunk") or "none"
+                nxt = response.get("next_chunk") or "none"
+                return (
+                    f"Personal file source {source_id}:\n"
+                    f"File: {fname}\n"
+                    f"Section: {hpath} (chunk {ordinal})\n"
+                    f"Content:\n{content}\n\n"
+                    f"Previous chunk:\n{prev}\n\n"
+                    f"Next chunk:\n{nxt}"
+                )
+            return self._UNAVAILABLE
         except Exception:  # noqa: BLE001 - optional memory read must fail open.
             return self._UNAVAILABLE
 
@@ -291,25 +277,7 @@ class Tools:
 
         try:
             path = "/v1/status"
-            request_body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-            timestamp = str(int(time.time()))
-            digest = hashlib.sha256(request_body).hexdigest()
-            canonical = f"POST\n{path}\n{timestamp}\n{digest}".encode()
-            signature = hmac.new(
-                self.valves.hmac_secret.encode(), canonical, hashlib.sha256
-            ).hexdigest()
-            async with httpx.AsyncClient(timeout=self.valves.timeout_seconds) as client:
-                response = await client.post(
-                    f"{self.valves.assistant_core_url.rstrip('/')}{path}",
-                    content=request_body,
-                    headers={
-                        "content-type": "application/json",
-                        "x-assistant-timestamp": timestamp,
-                        "x-assistant-signature": signature,
-                    },
-                )
-            response.raise_for_status()
-            status_payload: Any = response.json()
+            status_payload = await self._signed_json_post(path, payload)
             if not isinstance(status_payload, dict) or set(status_payload) != {
                 "status",
                 "queued_jobs",
@@ -406,12 +374,86 @@ class Tools:
             last = data.get("last_indexed_at")
             last_str = str(last) if last else "never"
             return (
-                f"Index stats: segments {data['total_segments']} "
+                f"Conversation Index stats: segments {data['total_segments']} "
                 f"(embedded {data['embedded_segments']}, lexical {data['lexical_segments']}), "
                 f"references {data['total_references']} "
                 f"(active {data['active_references']}, tombstoned {data['tombstoned_references']}), "
                 f"jobs queued {data['queued_jobs']} dead {data['dead_jobs']}, "
                 f"last indexed {last_str}."
             )
+        except Exception:  # noqa: BLE001
+            return self._UNAVAILABLE
+
+    async def show_file_index_status(
+        self,
+        __user__: dict | None = None,
+        __metadata__: dict | None = None,
+    ) -> str:
+        """Show aggregate file indexing counters, active documents, and recent files."""
+        native_user_id = self._optional_id(__user__, "id") or "unknown"
+        payload = {
+            "native_user_id": native_user_id,
+            "native_chat_id": self._optional_id(__metadata__, "chat_id"),
+            "native_message_id": self._optional_id(__metadata__, "message_id"),
+        }
+        try:
+            stats = await self._signed_json_post("/v1/inspection/files/stats", payload)
+            if not isinstance(stats, dict):
+                return self._UNAVAILABLE
+
+            recent_payload = {
+                "native_user_id": native_user_id,
+                "limit": 5,
+            }
+            recent = await self._signed_json_post("/v1/inspection/files/recent", recent_payload)
+            files_list = recent.get("files", []) if isinstance(recent, dict) else []
+
+            lines = [
+                f"📁 File Index Stats: {stats.get('total_files', 0)} files ({stats.get('active_files', 0)} active, {stats.get('tombstoned_files', 0)} deleted)",
+                f"📊 Segments: {stats.get('total_segments', 0)} total ({stats.get('embedded_segments', 0)} embedded, {stats.get('reused_segments', 0)} deduplicated)",
+                f"⚙️ Background Queue: {stats.get('queued_jobs', 0)} queued, {stats.get('dead_jobs', 0)} dead",
+            ]
+            if files_list:
+                lines.append("\nRecent files:")
+                for f in files_list:
+                    if isinstance(f, dict):
+                        lines.append(
+                            f"- {f.get('filename')} ({f.get('chunk_count')} chunks, status: {f.get('status')})"
+                        )
+            else:
+                lines.append("\nNo files indexed yet.")
+            return "\n".join(lines)
+        except Exception:  # noqa: BLE001
+            return self._UNAVAILABLE
+
+    async def show_failed_indexing_jobs(
+        self,
+        __user__: dict | None = None,
+        __metadata__: dict | None = None,
+    ) -> str:
+        """Show dead/failed background indexing jobs with error codes and attempt counts."""
+        native_user_id = self._optional_id(__user__, "id") or "unknown"
+        payload = {
+            "native_user_id": native_user_id,
+            "native_chat_id": self._optional_id(__metadata__, "chat_id"),
+            "native_message_id": self._optional_id(__metadata__, "message_id"),
+        }
+        try:
+            data = await self._signed_json_post("/v1/inspection/jobs/dead", payload)
+            if not isinstance(data, dict) or "dead_jobs" not in data:
+                return self._UNAVAILABLE
+            dead_jobs = data["dead_jobs"]
+            if not isinstance(dead_jobs, list):
+                return self._UNAVAILABLE
+            if not dead_jobs:
+                return "✅ No failed/dead background jobs. All indexing jobs have completed successfully."
+            lines = [f"⚠️ Found {len(dead_jobs)} failed background jobs:"]
+            for job in dead_jobs:
+                if isinstance(job, dict):
+                    lines.append(
+                        f"- Job {job.get('job_id')[:8]}… [{job.get('kind')}]: "
+                        f"attempts={job.get('attempts')}, error={job.get('last_error') or 'unknown'}"
+                    )
+            return "\n".join(lines)
         except Exception:  # noqa: BLE001
             return self._UNAVAILABLE

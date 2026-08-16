@@ -140,6 +140,7 @@ def test_read_file_passage_context() -> None:
 
     row = (
         ref_id,
+        user_id,
         "test-file-1",
         "doc.docx",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

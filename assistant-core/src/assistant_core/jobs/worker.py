@@ -151,7 +151,7 @@ async def _handle_process_event(
             )
         return
 
-    if event.event_type in {"file.created.v1", "file.created", "file.attached.v1"}:
+    if event.event_type in {"file.created.v1", "file.created", "file.attached.v1", "file.uploaded"}:
         file_id = event.payload.get("file_id") if isinstance(event.payload, dict) else None
         if file_id and isinstance(file_id, str):
             await session.execute(

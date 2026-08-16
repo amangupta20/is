@@ -298,3 +298,72 @@ def test_tool_valves_are_json_persistable_and_password_marked() -> None:
         module.Tools.Valves(timeout_seconds=0.09)
     with pytest.raises(ValidationError):
         module.Tools.Valves(timeout_seconds=10.01)
+
+
+def test_show_file_index_status_and_failed_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+    responses = {
+        "/v1/inspection/files/stats": {
+            "total_files": 3,
+            "active_files": 2,
+            "tombstoned_files": 1,
+            "total_segments": 15,
+            "embedded_segments": 15,
+            "lexical_segments": 0,
+            "reused_segments": 2,
+            "queued_jobs": 0,
+            "dead_jobs": 0,
+            "last_indexed_at": "2026-08-16T12:00:00Z",
+        },
+        "/v1/inspection/files/recent": {
+            "files": [
+                {
+                    "native_file_id": "file-1",
+                    "filename": "specs.pdf",
+                    "mime_type": "application/pdf",
+                    "chunk_count": 8,
+                    "created_at": "2026-08-16T12:00:00Z",
+                    "tombstoned_at": None,
+                    "status": "indexed",
+                }
+            ]
+        },
+        "/v1/inspection/jobs/dead": {
+            "dead_jobs": [
+                {
+                    "job_id": "00000000-0000-0000-0000-000000000099",
+                    "kind": "index_file",
+                    "identity_key": "file:test-doc:markdown-v1",
+                    "attempts": 8,
+                    "last_error": "file_fetch_failed_404",
+                    "available_at": "2026-08-16T12:00:00Z",
+                    "claimed_at": "2026-08-16T12:05:00Z",
+                }
+            ]
+        },
+    }
+
+    class _RoutingClient:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, url: str, **_kwargs: Any) -> _Response:
+            path = "/" + url.split("/", 3)[3]
+            return _Response(responses[path])
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda *, timeout: _RoutingClient())
+    tool = module.Tools()
+    tool.valves.hmac_secret = "tool-test-secret"
+    user = {"id": "user-1"}
+
+    status_out = asyncio.run(tool.show_file_index_status(__user__=user))
+    assert "File Index Stats: 3 files (2 active, 1 deleted)" in status_out
+    assert "specs.pdf (8 chunks, status: indexed)" in status_out
+
+    dead_out = asyncio.run(tool.show_failed_indexing_jobs(__user__=user))
+    assert "Found 1 failed background jobs:" in dead_out
+    assert "file_fetch_failed_404" in dead_out
+

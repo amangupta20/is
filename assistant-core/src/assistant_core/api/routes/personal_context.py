@@ -1,4 +1,4 @@
-"""Signed hybrid personal-memory and conversation-context routes."""
+"""Signed hybrid personal-memory, conversation-context, and file-passage routes."""
 
 import asyncio
 import uuid
@@ -18,6 +18,10 @@ from assistant_core.conversation.embedder import (
 from assistant_core.conversation.repository import (
     read_conversation_context,
     search_conversation_context,
+)
+from assistant_core.files.repository import (
+    read_file_passage_context,
+    search_file_passages,
 )
 from assistant_core.memory.repository import read_explicit_memory, search_explicit_memory
 
@@ -63,12 +67,15 @@ class PersonalContextPreview(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_id: uuid.UUID
-    source_type: Literal["memory", "conversation"]
+    source_type: Literal["memory", "conversation", "file"]
     category: str
     role: Literal["user", "assistant"] | None
     preview: str
     source_native_chat_id: str | None
     source_native_message_id: str | None
+    filename: str | None = None
+    header_path: str | None = None
+    chunk_ordinal: int | None = None
 
 
 class PersonalContextSearchResponse(BaseModel):
@@ -101,20 +108,25 @@ class PersonalContextNeighbor(BaseModel):
 
 
 class PersonalContextReadResponse(BaseModel):
-    """One source-linked memory or conversation passage."""
+    """One source-linked memory, conversation passage, or file chunk."""
 
     model_config = ConfigDict(extra="forbid")
 
     source_id: uuid.UUID
-    source_type: Literal["memory", "conversation"]
+    source_type: Literal["memory", "conversation", "file"]
     content: str
     category: str
     role: Literal["user", "assistant"] | None
     evidence_quote: str | None
-    source_native_chat_id: str
-    source_native_message_id: str
-    neighbors: list[PersonalContextNeighbor]
-    full_source_available: bool
+    source_native_chat_id: str | None
+    source_native_message_id: str | None
+    filename: str | None = None
+    header_path: str | None = None
+    chunk_ordinal: int | None = None
+    previous_chunk: str | None = None
+    next_chunk: str | None = None
+    neighbors: list[PersonalContextNeighbor] = Field(default_factory=list)
+    full_source_available: bool = False
 
 
 async def _embed_query(request: Request, query: str) -> list[float] | None:
@@ -134,7 +146,7 @@ async def _embed_query(request: Request, query: str) -> list[float] | None:
 async def search_personal_context(
     body: PersonalContextSearchRequest, request: Request
 ) -> PersonalContextSearchResponse:
-    """Search active explicit memory and owner-scoped conversation evidence."""
+    """Search active explicit memory, conversation evidence, and file passages."""
     started_at = perf_counter()
     query_embedding = await _embed_query(request, body.query)
     mode: Literal["lexical", "hybrid"] = (
@@ -151,6 +163,13 @@ async def search_personal_context(
             session,
             native_user_id=body.native_user_id,
             query=body.query,
+            query_embedding=query_embedding,
+            limit=body.limit,
+        )
+        file_hits = await search_file_passages(
+            session,
+            native_user_id=body.native_user_id,
+            query_text=body.query,
             query_embedding=query_embedding,
             limit=body.limit,
         )
@@ -178,6 +197,21 @@ async def search_personal_context(
             source_native_message_id=hit.native_message_id,
         )
         ranked.append((hit.score, 1, str(hit.source_id), preview))
+    for fhit in file_hits:
+        preview = PersonalContextPreview(
+            source_id=uuid.UUID(fhit.reference_id),
+            source_type="file",
+            category="file_passage",
+            role=None,
+            preview=_compact_preview(fhit.content),
+            source_native_chat_id=None,
+            source_native_message_id=None,
+            filename=fhit.filename,
+            header_path=fhit.header_path,
+            chunk_ordinal=fhit.chunk_ordinal,
+        )
+        ranked.append((fhit.score, 2, fhit.reference_id, preview))
+
     ranked.sort(key=lambda item: (-item[0], item[1], item[2]))
     selected = ranked[: body.limit]
     LOGGER.info(
@@ -188,6 +222,7 @@ async def search_personal_context(
         mode=mode,
         memory_result_count=len(memory_records),
         conversation_result_count=len(conversation_hits),
+        file_result_count=len(file_hits),
         result_count=len(selected),
         top_score=round(selected[0][0], 6) if selected else None,
         duration_ms=round((perf_counter() - started_at) * 1000, 3),
@@ -206,7 +241,7 @@ async def search_personal_context(
 async def read_personal_context(
     body: PersonalContextReadRequest, request: Request
 ) -> PersonalContextReadResponse:
-    """Read one owned memory first, otherwise one bounded conversation source."""
+    """Read one owned memory, conversation passage, or file passage."""
     async with request.app.state.session_factory() as session:
         memory_result = await read_explicit_memory(
             session,
@@ -233,31 +268,55 @@ async def read_personal_context(
                 native_user_id=body.native_user_id,
                 source_id=body.memory_source_id,
             )
-            if conversation_result is None:
-                raise HTTPException(
-                    status_code=404, detail="memory source not found"
+            if conversation_result is not None:
+                selected = conversation_result.selected
+                response = PersonalContextReadResponse(
+                    source_id=selected.source_id,
+                    source_type="conversation",
+                    content=selected.content,
+                    category="conversation_evidence",
+                    role=selected.role,
+                    evidence_quote=None,
+                    source_native_chat_id=selected.native_chat_id,
+                    source_native_message_id=selected.native_message_id,
+                    neighbors=[
+                        PersonalContextNeighbor(
+                            role=neighbor.role,
+                            content=neighbor.content,
+                            source_native_chat_id=neighbor.native_chat_id,
+                            source_native_message_id=neighbor.native_message_id,
+                        )
+                        for neighbor in conversation_result.neighbors
+                    ],
+                    full_source_available=False,
                 )
-            selected = conversation_result.selected
-            response = PersonalContextReadResponse(
-                source_id=selected.source_id,
-                source_type="conversation",
-                content=selected.content,
-                category="conversation_evidence",
-                role=selected.role,
-                evidence_quote=None,
-                source_native_chat_id=selected.native_chat_id,
-                source_native_message_id=selected.native_message_id,
-                neighbors=[
-                    PersonalContextNeighbor(
-                        role=neighbor.role,
-                        content=neighbor.content,
-                        source_native_chat_id=neighbor.native_chat_id,
-                        source_native_message_id=neighbor.native_message_id,
+            else:
+                file_result = await read_file_passage_context(
+                    session,
+                    native_user_id=body.native_user_id,
+                    reference_id=body.memory_source_id,
+                )
+                if file_result is None:
+                    raise HTTPException(
+                        status_code=404, detail="memory source not found"
                     )
-                    for neighbor in conversation_result.neighbors
-                ],
-                full_source_available=False,
-            )
+                response = PersonalContextReadResponse(
+                    source_id=uuid.UUID(file_result.reference_id),
+                    source_type="file",
+                    content=file_result.content,
+                    category=file_result.mime_type,
+                    role=None,
+                    evidence_quote=None,
+                    source_native_chat_id=None,
+                    source_native_message_id=None,
+                    filename=file_result.filename,
+                    header_path=file_result.header_path,
+                    chunk_ordinal=file_result.chunk_ordinal,
+                    previous_chunk=file_result.previous_content,
+                    next_chunk=file_result.next_content,
+                    neighbors=[],
+                    full_source_available=False,
+                )
     LOGGER.info(
         "personal_context_read_completed",
         native_user_id=body.native_user_id,
@@ -266,6 +325,7 @@ async def read_personal_context(
         role=response.role,
         source_native_chat_id=response.source_native_chat_id,
         source_native_message_id=response.source_native_message_id,
+        filename=response.filename,
         neighbor_count=len(response.neighbors),
         content_chars=len(response.content),
     )

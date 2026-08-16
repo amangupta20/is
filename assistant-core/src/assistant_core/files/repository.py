@@ -15,6 +15,7 @@ from assistant_core.files.schemas import (
     FileMaterializationResult,
     FilePassageContext,
 )
+from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
 
 RRF_K = 60
@@ -178,13 +179,20 @@ async def store_file_segment_embedding(
 async def search_file_passages(
     session: AsyncSession,
     *,
-    user_id: uuid.UUID,
+    native_user_id: str | None = None,
+    user_id: uuid.UUID | None = None,
     query_text: str,
     query_embedding: list[float] | None = None,
     limit: int = 10,
 ) -> list[FileHit]:
     """Retrieve top file passages using hybrid FTS + pgvector cosine similarity."""
     lexical_hits: dict[uuid.UUID, FileHit] = {}
+
+    user_filters = []
+    if user_id is not None:
+        user_filters.append(FileReference.user_id == user_id)
+    elif native_user_id is not None:
+        user_filters.append(UserIdentity.native_user_id == native_user_id)
 
     # Lexical search via TSVECTOR
     if query_text.strip():
@@ -199,15 +207,17 @@ async def search_file_passages(
                 FileSegment.content,
             )
             .join(FileSegment, FileReference.segment_id == FileSegment.id)
-            .where(
-                FileReference.user_id == user_id,
-                FileReference.tombstoned_at.is_(None),
-                FileSegment.search_vector.op("@@")(
-                    func.plainto_tsquery("simple", query_text)
-                ),
-            )
-            .limit(limit)
         )
+        if native_user_id is not None and user_id is None:
+            lexical_stmt = lexical_stmt.join(UserIdentity, UserIdentity.id == FileReference.user_id)
+        lexical_stmt = lexical_stmt.where(
+            *user_filters,
+            FileReference.tombstoned_at.is_(None),
+            FileSegment.search_vector.op("@@")(
+                func.plainto_tsquery("simple", query_text)
+            ),
+        ).limit(limit)
+
         lexical_rows = (await session.execute(lexical_stmt)).all()
         for rank, row in enumerate(lexical_rows, start=1):
             ref_id, seg_id, file_id, fname, hpath, ordinal, content = row
@@ -235,8 +245,12 @@ async def search_file_passages(
                 FileSegment.content,
             )
             .join(FileSegment, FileReference.segment_id == FileSegment.id)
-            .where(
-                FileReference.user_id == user_id,
+        )
+        if native_user_id is not None and user_id is None:
+            semantic_stmt = semantic_stmt.join(UserIdentity, UserIdentity.id == FileReference.user_id)
+        semantic_stmt = (
+            semantic_stmt.where(
+                *user_filters,
                 FileReference.tombstoned_at.is_(None),
                 FileSegment.embedding.is_not(None),
             )
@@ -299,13 +313,21 @@ async def search_file_passages(
 async def read_file_passage_context(
     session: AsyncSession,
     *,
-    user_id: uuid.UUID,
     reference_id: uuid.UUID,
+    native_user_id: str | None = None,
+    user_id: uuid.UUID | None = None,
 ) -> FilePassageContext | None:
     """Read a specific file reference and its adjacent ordinal neighbors."""
+    user_filters = []
+    if user_id is not None:
+        user_filters.append(FileReference.user_id == user_id)
+    elif native_user_id is not None:
+        user_filters.append(UserIdentity.native_user_id == native_user_id)
+
     target_stmt = (
         select(
             FileReference.id,
+            FileReference.user_id,
             FileReference.native_file_id,
             FileReference.filename,
             FileReference.mime_type,
@@ -314,24 +336,26 @@ async def read_file_passage_context(
             FileSegment.content,
         )
         .join(FileSegment, FileReference.segment_id == FileSegment.id)
-        .where(
-            FileReference.id == reference_id,
-            FileReference.user_id == user_id,
-            FileReference.tombstoned_at.is_(None),
-        )
+    )
+    if native_user_id is not None and user_id is None:
+        target_stmt = target_stmt.join(UserIdentity, UserIdentity.id == FileReference.user_id)
+    target_stmt = target_stmt.where(
+        *user_filters,
+        FileReference.id == reference_id,
+        FileReference.tombstoned_at.is_(None),
     )
     row = (await session.execute(target_stmt)).one_or_none()
     if not row:
         return None
 
-    ref_id, native_file_id, filename, mime_type, header_path, ordinal, content = row
+    ref_id, owner_id, native_file_id, filename, mime_type, header_path, ordinal, content = row
 
     # Fetch previous chunk
     prev_stmt = (
         select(FileSegment.content)
         .join(FileReference, FileReference.segment_id == FileSegment.id)
         .where(
-            FileReference.user_id == user_id,
+            FileReference.user_id == owner_id,
             FileReference.native_file_id == native_file_id,
             FileReference.chunk_ordinal == ordinal - 1,
             FileReference.tombstoned_at.is_(None),
@@ -344,7 +368,7 @@ async def read_file_passage_context(
         select(FileSegment.content)
         .join(FileReference, FileReference.segment_id == FileSegment.id)
         .where(
-            FileReference.user_id == user_id,
+            FileReference.user_id == owner_id,
             FileReference.native_file_id == native_file_id,
             FileReference.chunk_ordinal == ordinal + 1,
             FileReference.tombstoned_at.is_(None),

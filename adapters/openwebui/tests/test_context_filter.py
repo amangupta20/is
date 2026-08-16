@@ -776,3 +776,29 @@ def test_outlet_mapping_system_exit_still_propagates() -> None:
             {"id": "user"},
             {"user_id": "user"},
         )
+
+
+def test_outlet_captures_attached_file_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Attached files from body or message are extracted and included in the event payload."""
+    filter_ = Filter()
+    delivered_payload: dict[str, object] = {}
+
+    async def mock_post_signed(_path: str, payload: dict[str, object]) -> dict[str, object]:
+        delivered_payload.update(payload)
+        return {"status": "accepted"}
+
+    monkeypatch.setattr(filter_, "_post_signed", mock_post_signed)
+
+    body, user, metadata = _outlet_fixture(
+        user_content="Here is the architecture doc.",
+        assistant_content="I see the details.",
+    )
+    body["files"] = [{"id": "file-top-level-1", "type": "file"}]
+    # Also attach in user message
+    body["messages"][0]["files"] = [{"id": "file-msg-level-2", "type": "file"}, {"id": "file-top-level-1"}]
+
+    assert anyio.run(filter_.outlet, body, user, metadata) is body
+    payload = delivered_payload.get("payload")
+    assert isinstance(payload, dict)
+    assert payload.get("attached_file_ids") == ["file-top-level-1", "file-msg-level-2"]
+

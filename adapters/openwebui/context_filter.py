@@ -305,6 +305,28 @@ class Filter:
             user_content_bytes = len(user_message["content"].encode("utf-8"))
             assistant_content_bytes = len(assistant_message["content"].encode("utf-8"))
             occurred_at = datetime.now(UTC).isoformat(timespec="microseconds")
+
+            attached_file_ids: list[str] = []
+            candidate_files: list[object] = []
+            if isinstance(body.get("files"), list):
+                candidate_files.extend(body["files"])
+            if isinstance(user_matches[0].get("files"), list):
+                candidate_files.extend(user_matches[0]["files"])
+
+            for f in candidate_files:
+                if isinstance(f, Mapping):
+                    fid = f.get("id") or f.get("file_id")
+                    if isinstance(fid, str) and fid.strip() and fid.strip() not in attached_file_ids:
+                        attached_file_ids.append(fid.strip())
+
+            turn_payload: dict[str, object] = {
+                "source": self._EVENT_SOURCE,
+                "user_message": user_message,
+                "assistant_message": assistant_message,
+            }
+            if attached_file_ids:
+                turn_payload["attached_file_ids"] = attached_file_ids
+
             envelope: dict[str, object] = {
                 "schema_version": 1,
                 "event_id": event_id,
@@ -313,11 +335,7 @@ class Filter:
                 "native_user_id": user_id,
                 "native_chat_id": chat_id,
                 "native_message_id": assistant_id,
-                "payload": {
-                    "source": self._EVENT_SOURCE,
-                    "user_message": user_message,
-                    "assistant_message": assistant_message,
-                },
+                "payload": turn_payload,
             }
             if len(self._event_bytes(envelope)) > self._MAX_EVENT_BYTES:
                 diagnostic_event_type = "turn.oversized.v1"

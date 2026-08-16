@@ -56,7 +56,7 @@ class _ContextSession:
         )
         if "ORDER BY assistant_core.memory_evidence.created_at" in str(compiled):
             return _Result(row=self.read_row if native_user_id == "user-1" else None)
-        if "conversation_reference" in str(compiled):
+        if "conversation_reference" in str(compiled) or "file_reference" in str(compiled):
             return _Result(row=None, rows=[])
         return _Result(rows=[self.records[0]] if native_user_id == "user-1" else [])
 
@@ -175,6 +175,9 @@ def test_search_previews_correct_user_memory_then_read_rejects_foreign_source() 
                 "preview": normalized_long_statement[:239] + "…",
                 "source_native_chat_id": None,
                 "source_native_message_id": None,
+                "filename": None,
+                "header_path": None,
+                "chunk_ordinal": None,
             }
         ],
     }
@@ -191,6 +194,11 @@ def test_search_previews_correct_user_memory_then_read_rejects_foreign_source() 
         "evidence_quote": "I prefer direct answers.",
         "source_native_chat_id": "chat-1",
         "source_native_message_id": "message-1",
+        "filename": None,
+        "header_path": None,
+        "chunk_ordinal": None,
+        "previous_chunk": None,
+        "next_chunk": None,
         "neighbors": [],
         "full_source_available": False,
     }
@@ -327,6 +335,9 @@ def test_hybrid_conversation_hit_reads_bounded_neighbors_and_fails_open_lexicall
                 "preview": hit.content,
                 "source_native_chat_id": "chat-a",
                 "source_native_message_id": "assistant-a",
+                "filename": None,
+                "header_path": None,
+                "chunk_ordinal": None,
             }
         ],
     }
@@ -340,6 +351,11 @@ def test_hybrid_conversation_hit_reads_bounded_neighbors_and_fails_open_lexicall
         "evidence_quote": None,
         "source_native_chat_id": "chat-a",
         "source_native_message_id": "assistant-a",
+        "filename": None,
+        "header_path": None,
+        "chunk_ordinal": None,
+        "previous_chunk": None,
+        "next_chunk": None,
         "neighbors": [
             {
                 "role": "user",
@@ -371,3 +387,109 @@ def test_hybrid_conversation_hit_reads_bounded_neighbors_and_fails_open_lexicall
         "how did we split discussions",
         "how did we split discussions",
     ]
+
+
+def test_search_and_read_file_passages(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hybrid search merges file passages and read returns surrounding file chunks."""
+    from assistant_core.api.routes import personal_context
+    from assistant_core.files.schemas import FileHit, FilePassageContext
+
+    ref_id = uuid.uuid4()
+    seg_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+
+    file_hit = FileHit(
+        reference_id=str(ref_id),
+        segment_id=str(seg_id),
+        native_file_id="file-xyz",
+        filename="system-architecture.pdf",
+        header_path="Infrastructure > Storage",
+        chunk_ordinal=2,
+        content="PostgreSQL pgvector storage details.",
+        lexical_rank=1,
+        score=0.95,
+    )
+
+    file_ctx = FilePassageContext(
+        reference_id=str(ref_id),
+        native_file_id="file-xyz",
+        filename="system-architecture.pdf",
+        mime_type="application/pdf",
+        header_path="Infrastructure > Storage",
+        chunk_ordinal=2,
+        content="PostgreSQL pgvector storage details.",
+        previous_content="Previous chunk content.",
+        next_content="Next chunk content.",
+    )
+
+    async def mock_search_files(*_args: object, **_kwargs: object) -> list[FileHit]:
+        return [file_hit]
+
+    async def mock_read_file(*_args: object, **_kwargs: object) -> FilePassageContext | None:
+        return file_ctx
+
+    async def no_memories(*_args: object, **_kwargs: object) -> list[object]:
+        return []
+
+    async def no_conversations(*_args: object, **_kwargs: object) -> list[object]:
+        return []
+
+    async def no_memory_read(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def no_conversation_read(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(personal_context, "search_explicit_memory", no_memories)
+    monkeypatch.setattr(personal_context, "search_conversation_context", no_conversations)
+    monkeypatch.setattr(personal_context, "search_file_passages", mock_search_files)
+    monkeypatch.setattr(personal_context, "read_explicit_memory", no_memory_read)
+    monkeypatch.setattr(personal_context, "read_conversation_context", no_conversation_read)
+    monkeypatch.setattr(personal_context, "read_file_passage_context", mock_read_file)
+
+    class FakeSession:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def execute(self, statement: object) -> _Result:
+            return _Result(row=user_id)
+
+    app = create_app(Settings(hmac_secret="a" * 32))
+    app.state.session_factory = lambda: FakeSession()
+
+    search = anyio.run(
+        lambda: _post(
+            app,
+            "/v1/personal-context/search",
+            {
+                "native_user_id": "user-1",
+                "query": "pgvector storage",
+                "limit": 5,
+            },
+        )
+    )
+    assert search.status_code == 200
+    search_data = search.json()
+    assert len(search_data["results"]) == 1
+    res = search_data["results"][0]
+    assert res["source_type"] == "file"
+    assert res["filename"] == "system-architecture.pdf"
+    assert res["header_path"] == "Infrastructure > Storage"
+
+    read = anyio.run(
+        lambda: _post(
+            app,
+            "/v1/personal-context/read",
+            {"native_user_id": "user-1", "memory_source_id": str(ref_id)},
+        )
+    )
+    assert read.status_code == 200
+    read_data = read.json()
+    assert read_data["source_type"] == "file"
+    assert read_data["filename"] == "system-architecture.pdf"
+    assert read_data["previous_chunk"] == "Previous chunk content."
+    assert read_data["next_chunk"] == "Next chunk content."
+
