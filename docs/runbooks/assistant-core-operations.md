@@ -119,6 +119,23 @@ Dual-secret verification is not implemented. Use a brief adapter disable window:
 3. Replace every adapter's password Valve with the same new secret.
 4. Re-enable adapters in the documented order and perform the Slice 1F2 smoke checks.
 
+## Admin Dashboard & Search Playground
+
+The assistant core exposes an administrative web interface at `GET /` served from `/static/`:
+
+- **Authentication**: Authenticate using the secret configured in `ASSISTANT_ADMIN_TOKEN` or `ASSISTANT_HMAC_SECRET`. A signed session cookie (`assistant_admin_session`) is established.
+- **Overview & Telemetry**: Monitor active entity counts (memories, indexed markdown documents, conversation turns) and dead worker job counts in real time.
+- **Search & Retrieval Playground**: Test hybrid search against indexed user data:
+  - Select user ID and source filter (`all`, `memories`, `files`, `conversations`).
+  - View live Reciprocal Rank Fusion (RRF) scores and pgvector cosine similarity rankings.
+  - Preview simulated `<user_profile>` and `<retrieved_context>` prompt blocks with a 1-click clipboard copy.
+- **Data Management & Batch Actions**:
+  - Checkbox selection allows multi-item batch deletion across memories, documents, and conversation history.
+  - **Double-Confirmation System Purge**: Open the Purge modal and type `PURGE` to drop tables or specific subsets during staging/test resets.
+- **Memory Consolidation**:
+  - Automatically scheduled once every 24 hours per user by the background worker (`consolidate:{user}:{YYYY-MM-DD}`).
+  - To trigger an immediate consolidation run, navigate to the **Memories** tab, click **`⚡ Consolidate`**, and inspect the resolved conflicts.
+
 ## Rollback
 
 Disable the adapters first so ordinary Open WebUI chat continues without the
