@@ -110,34 +110,45 @@ class Tools:
         mime_type: str,
         user: dict | None,
         request: object | None = None,
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
         """Upload generated binary directly to Open WebUI's native /api/v1/files/ store."""
         token = self._extract_openwebui_token(user, request)
-        if not token or not self.valves.open_webui_url:
-            return None
+        if not token:
+            return None, "No Open WebUI API key found in Tool Valves (open_webui_api_key is empty)"
 
-        base = self.valves.open_webui_url.rstrip("/")
-        urls_to_try = [f"{base}/api/v1/files/", f"{base}/api/v1/files"]
-        if "localhost" in base:
-            urls_to_try.append("http://127.0.0.1:8080/api/v1/files/")
+        configured = self.valves.open_webui_url.rstrip("/") if self.valves.open_webui_url else ""
+        candidates = [configured] if configured else []
+        for fallback in [
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+            "http://open-webui:8080",
+        ]:
+            if fallback and fallback not in candidates:
+                candidates.append(fallback)
 
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         files = {"file": (filename, file_bytes, mime_type)}
+        last_error = "Could not reach Open WebUI file API"
 
-        for url in urls_to_try:
-            try:
-                async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                    res = await client.post(url, headers=headers, files=files)
-                    if res.status_code in (200, 201):
-                        data = res.json()
-                        file_id = data.get("id") or (
-                            data.get("file", {}).get("id") if isinstance(data.get("file"), dict) else None
-                        )
-                        if file_id:
-                            return f"/api/v1/files/{file_id}/content"
-            except Exception:  # noqa: S110, BLE001
-                pass
-        return None
+        for base_url in candidates:
+            for path in ("/api/v1/files/", "/api/v1/files"):
+                target = f"{base_url}{path}"
+                try:
+                    async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as client:
+                        res = await client.post(target, headers=headers, files=files)
+                        if res.status_code in (200, 201):
+                            data = res.json()
+                            file_id = data.get("id") or (
+                                data.get("file", {}).get("id") if isinstance(data.get("file"), dict) else None
+                            )
+                            if file_id:
+                                return f"/api/v1/files/{file_id}/content", None
+                        else:
+                            last_error = f"{target} returned HTTP {res.status_code}"
+                except Exception as exc:  # noqa: BLE001
+                    last_error = f"{target} connection error: {exc}"
+
+        return None, last_error
 
     async def _format_result(
         self,
@@ -156,15 +167,18 @@ class Tools:
         filename = f"{title}.{ext}" if not title.endswith(f".{ext}") else title
 
         download_link = None
+        upload_err = None
         if b64:
             try:
                 b64_padded = b64 + "=" * (-len(b64) % 4)
                 raw_bytes = base64.b64decode(b64_padded)
-                openwebui_link = await self._upload_to_open_webui(filename, raw_bytes, mime_type, user, request)
+                openwebui_link, upload_err = await self._upload_to_open_webui(
+                    filename, raw_bytes, mime_type, user, request
+                )
                 if openwebui_link:
                     download_link = openwebui_link
-            except Exception:  # noqa: S110, BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                upload_err = str(exc)
 
         if not download_link:
             raw_dl = res.get("download_url") or f"/v1/artifacts/{art_id}/download"
@@ -179,6 +193,10 @@ class Tools:
             f"- **Download**: [⬇️ Download `{filename}`]({download_link})",
             f"- **Artifact ID**: `{art_id}`",
         ]
+        if not download_link.startswith("/api/v1/files/") and upload_err:
+            lines.append("")
+            lines.append(f"*(Open WebUI File Store note: {upload_err})*")
+
         return "\n".join(lines)
 
     async def create_spreadsheet(
