@@ -63,6 +63,32 @@ class Tools:
         response.raise_for_status()
         return response.json()
 
+    def _format_result(self, title: str, ext: str, icon: str, res: dict[str, Any]) -> str:
+        """Format a rich markdown response with direct in-chat download capabilities."""
+        art_id = res.get("id")
+        v_num = res.get("current_version_num", 1)
+        mime_type = res.get("mime_type") or "application/octet-stream"
+        b64 = res.get("base64_data")
+        filename = f"{title}.{ext}" if not title.endswith(f".{ext}") else title
+
+        lines = [
+            f"{icon} **{ext.upper()} Created**: `{filename}` (v{v_num})",
+            "",
+        ]
+
+        if b64:
+            data_uri = f"data:{mime_type};base64,{b64}"
+            lines.append(f"- **Direct Download**: [⬇️ Click to Download `{filename}`]({data_uri})")
+
+        dl_url = res.get("download_url")
+        if dl_url:
+            lines.append(f"- **Server URL**: [🔗 `{dl_url}`]({dl_url})")
+
+        lines.append(f"- **Artifact ID**: `{art_id}`")
+        lines.append("")
+        lines.append("*The download link works directly inside this browser window with no VPN or internal network access required.*")
+        return "\n".join(lines)
+
     async def create_spreadsheet(
         self,
         title: str,
@@ -89,15 +115,7 @@ class Tools:
             if not isinstance(res, dict):
                 return self._UNAVAILABLE
 
-            art_id = res.get("id")
-            v_num = res.get("current_version_num", 1)
-            dl_url = res.get("download_url", "")
-            return (
-                f"📊 **Spreadsheet Created**: `{title}.xlsx` (v{v_num})\n\n"
-                f"- **Artifact ID**: `{art_id}`\n"
-                f"- **Download Link**: [⬇️ Download Spreadsheet]({dl_url})\n\n"
-                f"*To edit online, you can open this spreadsheet in the Assistant Core Dashboard.*"
-            )
+            return self._format_result(title=title.strip(), ext="xlsx", icon="📊", res=res)
         except httpx.HTTPStatusError as exc:
             try:
                 detail = exc.response.json().get("detail", exc.response.text)
@@ -135,15 +153,7 @@ class Tools:
             if not isinstance(res, dict):
                 return self._UNAVAILABLE
 
-            art_id = res.get("id")
-            v_num = res.get("current_version_num", 1)
-            dl_url = res.get("download_url", "")
-            return (
-                f"📄 **Document Created**: `{title}.docx` (v{v_num})\n\n"
-                f"- **Artifact ID**: `{art_id}`\n"
-                f"- **Download Link**: [⬇️ Download Document]({dl_url})\n\n"
-                f"*To edit online, you can open this document in the Assistant Core Dashboard.*"
-            )
+            return self._format_result(title=title.strip(), ext="docx", icon="📄", res=res)
         except httpx.HTTPStatusError as exc:
             try:
                 detail = exc.response.json().get("detail", exc.response.text)
@@ -181,15 +191,7 @@ class Tools:
             if not isinstance(res, dict):
                 return self._UNAVAILABLE
 
-            art_id = res.get("id")
-            v_num = res.get("current_version_num", 1)
-            dl_url = res.get("download_url", "")
-            return (
-                f"📽️ **Presentation Created**: `{title}.pptx` (v{v_num})\n\n"
-                f"- **Artifact ID**: `{art_id}`\n"
-                f"- **Download Link**: [⬇️ Download Presentation]({dl_url})\n\n"
-                f"*To edit online, you can open this presentation in the Assistant Core Dashboard.*"
-            )
+            return self._format_result(title=title.strip(), ext="pptx", icon="📽️", res=res)
         except httpx.HTTPStatusError as exc:
             try:
                 detail = exc.response.json().get("detail", exc.response.text)

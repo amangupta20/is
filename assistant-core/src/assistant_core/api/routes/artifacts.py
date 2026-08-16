@@ -1,5 +1,6 @@
 """API endpoints for managing and generating versioned documents and spreadsheets."""
 
+import base64
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -20,7 +21,7 @@ from assistant_core.artifacts.schemas import (
 router = APIRouter(prefix="/v1/artifacts", tags=["artifacts"])
 
 
-def _serialize_artifact(art: Artifact, native_user_id: str, base_url: str) -> ArtifactResponse:
+def _serialize_artifact(art: Artifact, native_user_id: str, base_url: str, include_binary: bool = True) -> ArtifactResponse:
     versions = [
         ArtifactVersionResponse(
             version_num=v.version_num,
@@ -32,6 +33,12 @@ def _serialize_artifact(art: Artifact, native_user_id: str, base_url: str) -> Ar
         )
         for v in art.versions
     ]
+    target_v = next((v for v in art.versions if v.version_num == art.current_version_num), None)
+    base64_data = None
+    mime_type = target_v.mime_type if target_v else None
+    if include_binary and target_v and target_v.binary_data:
+        base64_data = base64.b64encode(target_v.binary_data).decode("ascii")
+
     return ArtifactResponse(
         id=str(art.id),
         native_user_id=native_user_id,
@@ -43,6 +50,8 @@ def _serialize_artifact(art: Artifact, native_user_id: str, base_url: str) -> Ar
         updated_at=(art.updated_at or datetime.now(UTC)).isoformat(),
         versions=versions,
         download_url=f"{base_url.rstrip('/')}/v1/artifacts/{art.id}/download",
+        base64_data=base64_data,
+        mime_type=mime_type,
     )
 
 

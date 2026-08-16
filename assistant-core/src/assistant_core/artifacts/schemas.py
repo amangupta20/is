@@ -147,4 +147,6 @@ class ArtifactResponse(BaseModel):
     updated_at: str
     versions: list[ArtifactVersionResponse] = Field(default_factory=list)
     download_url: str
+    base64_data: str | None = None
+    mime_type: str | None = None
     onlyoffice_url: str | None = None
