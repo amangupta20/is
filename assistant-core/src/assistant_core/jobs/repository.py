@@ -38,9 +38,7 @@ def _claim_statement(now: datetime) -> Select[tuple[Job]]:
     )
 
 
-def _complete_statement(
-    job_id: uuid.UUID, expected_claimed_at: datetime, now: datetime
-) -> Update:
+def _complete_statement(job_id: uuid.UUID, expected_claimed_at: datetime, now: datetime) -> Update:
     """Build a completion update owned by one exact active claim."""
     return (
         update(Job)

@@ -195,10 +195,14 @@ async def inspection_stats(
         ).scalar_one_or_none()
         if user_id is None:
             queued = (
-                await session.execute(select(func.count()).select_from(Job).where(Job.status == "queued"))
+                await session.execute(
+                    select(func.count()).select_from(Job).where(Job.status == "queued")
+                )
             ).scalar_one()
             dead = (
-                await session.execute(select(func.count()).select_from(Job).where(Job.status == "dead"))
+                await session.execute(
+                    select(func.count()).select_from(Job).where(Job.status == "dead")
+                )
             ).scalar_one()
             LOGGER.info("inspection_stats_completed", user_found=False)
             return InspectionStatsResponse(
@@ -240,10 +244,14 @@ async def inspection_files_stats(
         ).scalar_one_or_none()
         if user_id is None:
             queued = (
-                await session.execute(select(func.count()).select_from(Job).where(Job.status == "queued"))
+                await session.execute(
+                    select(func.count()).select_from(Job).where(Job.status == "queued")
+                )
             ).scalar_one()
             dead = (
-                await session.execute(select(func.count()).select_from(Job).where(Job.status == "dead"))
+                await session.execute(
+                    select(func.count()).select_from(Job).where(Job.status == "dead")
+                )
             ).scalar_one()
             LOGGER.info("inspection_files_stats_completed", user_found=False)
             return InspectionFilesStatsResponse(

@@ -66,10 +66,7 @@ def test_chunk_markdown_preserves_atomic_fenced_code_blocks() -> None:
 
 def test_chunk_markdown_subdivides_large_sections_with_overlap() -> None:
     """A very large section (>4000 chars) is subdivided along paragraphs with overlap."""
-    paragraphs = [
-        f"Paragraph {i}: " + ("word " * 60) + "\n\n"
-        for i in range(30)
-    ]
+    paragraphs = [f"Paragraph {i}: " + ("word " * 60) + "\n\n" for i in range(30)]
     long_doc = "# Massive Guide\n\n" + "".join(paragraphs)
     chunks = chunk_markdown(long_doc, max_chars=1000, overlap_chars=100)
     assert len(chunks) > 1

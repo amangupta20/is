@@ -35,9 +35,7 @@ class ConversationHashCollisionError(RuntimeError):
 async def enqueue_missing_conversation_jobs(session: AsyncSession) -> int:
     """Idempotently queue indexing for every active completed turn."""
     turn_ids = (
-        await session.execute(
-            select(CompletedTurn.id).where(CompletedTurn.tombstoned_at.is_(None))
-        )
+        await session.execute(select(CompletedTurn.id).where(CompletedTurn.tombstoned_at.is_(None)))
     ).scalars()
     enqueued = 0
     for turn_id in turn_ids:
@@ -59,9 +57,7 @@ async def enqueue_missing_conversation_jobs(session: AsyncSession) -> int:
     return enqueued
 
 
-async def get_segment_content(
-    session: AsyncSession, segment_id: uuid.UUID
-) -> str | None:
+async def get_segment_content(session: AsyncSession, segment_id: uuid.UUID) -> str | None:
     """Load exact text only while a segment still needs an embedding."""
     return (
         await session.execute(
@@ -130,9 +126,7 @@ async def search_conversation_context(
     """Fuse owner-scoped PostgreSQL lexical and vector reference candidates."""
     candidate_limit = min(max(limit * 4, limit), SEARCH_CANDIDATE_LIMIT)
     tsquery = func.websearch_to_tsquery("simple", query)
-    lexical_rank = func.ts_rank_cd(
-        ConversationSegment.search_vector, tsquery
-    ).label("lexical_rank")
+    lexical_rank = func.ts_rank_cd(ConversationSegment.search_vector, tsquery).label("lexical_rank")
     active_filters = (
         UserIdentity.native_user_id == native_user_id,
         ConversationSegment.user_id == ConversationReference.user_id,
@@ -206,9 +200,7 @@ async def search_conversation_context(
         _conversation_hit(reference, segment, scores[source_id])
         for source_id, (reference, segment) in rows_by_id.items()
     ]
-    hits.sort(
-        key=lambda hit: (-hit.score, -hit.occurred_at.timestamp(), str(hit.source_id))
-    )
+    hits.sort(key=lambda hit: (-hit.score, -hit.occurred_at.timestamp(), str(hit.source_id)))
     return hits[:limit]
 
 
@@ -342,45 +334,59 @@ async def tombstone_chat(
                 )
                 .distinct()
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     reference_ids = (
-        await session.execute(
-            update(ConversationReference)
-            .where(
-                ConversationReference.user_id == user_id,
-                ConversationReference.native_chat_id == native_chat_id,
-                ConversationReference.tombstoned_at.is_(None),
+        (
+            await session.execute(
+                update(ConversationReference)
+                .where(
+                    ConversationReference.user_id == user_id,
+                    ConversationReference.native_chat_id == native_chat_id,
+                    ConversationReference.tombstoned_at.is_(None),
+                )
+                .values(tombstoned_at=occurred_at)
+                .returning(ConversationReference.id)
             )
-            .values(tombstoned_at=occurred_at)
-            .returning(ConversationReference.id)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     turn_ids = (
-        await session.execute(
-            update(CompletedTurn)
-            .where(
-                CompletedTurn.user_id == user_id,
-                CompletedTurn.native_chat_id == native_chat_id,
-                CompletedTurn.tombstoned_at.is_(None),
+        (
+            await session.execute(
+                update(CompletedTurn)
+                .where(
+                    CompletedTurn.user_id == user_id,
+                    CompletedTurn.native_chat_id == native_chat_id,
+                    CompletedTurn.tombstoned_at.is_(None),
+                )
+                .values(tombstoned_at=occurred_at)
+                .returning(CompletedTurn.id)
             )
-            .values(tombstoned_at=occurred_at)
-            .returning(CompletedTurn.id)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     orphan_segment_ids = (
-        await session.execute(
-            select(ConversationSegment.id).where(
-                ConversationSegment.id.in_(affected_segment_ids),
-                ~exists(
-                    select(ConversationReference.id).where(
-                        ConversationReference.segment_id == ConversationSegment.id,
-                        ConversationReference.tombstoned_at.is_(None),
-                    )
-                ),
+        (
+            await session.execute(
+                select(ConversationSegment.id).where(
+                    ConversationSegment.id.in_(affected_segment_ids),
+                    ~exists(
+                        select(ConversationReference.id).where(
+                            ConversationReference.segment_id == ConversationSegment.id,
+                            ConversationReference.tombstoned_at.is_(None),
+                        )
+                    ),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return TombstoneResult(
         reference_count=len(reference_ids),
         turn_count=len(turn_ids),
@@ -490,9 +496,7 @@ async def get_recent_references(
     return list(result.scalars().all())
 
 
-async def get_conversation_stats(
-    session: AsyncSession, user_id: uuid.UUID
-) -> dict[str, object]:
+async def get_conversation_stats(session: AsyncSession, user_id: uuid.UUID) -> dict[str, object]:
     """Return metadata-only counts for the user's indexed graph."""
     total_segments = (
         await session.execute(

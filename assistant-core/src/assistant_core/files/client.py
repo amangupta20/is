@@ -39,12 +39,16 @@ def fetch_openwebui_file(
         with httpx.Client(timeout=timeout_seconds) as client:
             resp = client.get(meta_url, headers=headers)
             if resp.status_code == 404:
-                raise OpenWebUIFileFetchError(f"File {file_id} not found in Open WebUI", status_code=404)
+                raise OpenWebUIFileFetchError(
+                    f"File {file_id} not found in Open WebUI", status_code=404
+                )
             resp.raise_for_status()
             data: dict[str, Any] = resp.json()
     except httpx.HTTPError as exc:
         status = getattr(getattr(exc, "response", None), "status_code", None)
-        raise OpenWebUIFileFetchError(f"Failed to fetch metadata for file {file_id}: {exc}", status_code=status) from exc
+        raise OpenWebUIFileFetchError(
+            f"Failed to fetch metadata for file {file_id}: {exc}", status_code=status
+        ) from exc
 
     filename = str(data.get("filename") or data.get("meta", {}).get("name") or file_id)
     mime_type = str(data.get("meta", {}).get("content_type") or "text/plain")
@@ -67,6 +71,8 @@ def fetch_openwebui_file(
                 content = content_resp.text
         except httpx.HTTPError as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
-            raise OpenWebUIFileFetchError(f"Failed to fetch content for file {file_id}: {exc}", status_code=status) from exc
+            raise OpenWebUIFileFetchError(
+                f"Failed to fetch content for file {file_id}: {exc}", status_code=status
+            ) from exc
 
     return filename, mime_type, content

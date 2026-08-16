@@ -120,9 +120,7 @@ def get_conversation_embedder(
     return build_conversation_embedder(resolved_settings)
 
 
-async def _handle_process_event(
-    session: AsyncSession, payload: dict[str, JsonValue]
-) -> None:
+async def _handle_process_event(session: AsyncSession, payload: dict[str, JsonValue]) -> None:
     """Route one received event to its durable materialization."""
     event_id = payload.get("event_id")
     if (
@@ -217,7 +215,9 @@ async def _handle_process_event(
             .on_conflict_do_nothing(index_elements=[Job.identity_key])
         )
 
-        attached_files = event.payload.get("attached_file_ids") if isinstance(event.payload, dict) else None
+        attached_files = (
+            event.payload.get("attached_file_ids") if isinstance(event.payload, dict) else None
+        )
         if isinstance(attached_files, list):
             for fid in attached_files:
                 if isinstance(fid, str) and fid.strip():
@@ -246,9 +246,7 @@ def _turn_id_from_payload(payload: dict[str, JsonValue]) -> uuid.UUID:
         raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR) from None
 
 
-async def _handle_extract_memory(
-    session: AsyncSession, payload: dict[str, JsonValue]
-) -> None:
+async def _handle_extract_memory(session: AsyncSession, payload: dict[str, JsonValue]) -> None:
     """Extract after ending the DB read, then apply candidates in a fresh transaction."""
     turn_id = _turn_id_from_payload(payload)
     turn = await session.get(CompletedTurn, turn_id)
@@ -263,9 +261,7 @@ async def _handle_extract_memory(
     await apply_explicit_candidates(session, fresh_turn, candidates)
 
 
-async def _handle_index_conversation(
-    session: AsyncSession, payload: dict[str, JsonValue]
-) -> None:
+async def _handle_index_conversation(session: AsyncSession, payload: dict[str, JsonValue]) -> None:
     """Commit lexical passages first, then enrich only missing vectors."""
     turn_id = _turn_id_from_payload(payload)
     turn = await session.get(CompletedTurn, turn_id)
@@ -339,9 +335,7 @@ async def _handle_index_conversation(
     )
 
 
-async def _handle_index_file(
-    session: AsyncSession, payload: dict[str, JsonValue]
-) -> None:
+async def _handle_index_file(session: AsyncSession, payload: dict[str, JsonValue]) -> None:
     """Fetch file markdown from Open WebUI, chunk, persist passages, and calculate missing embeddings."""
     file_id = payload.get("file_id")
     user_id_raw = payload.get("user_id")
@@ -365,7 +359,9 @@ async def _handle_index_file(
     filename, mime_type, content = await asyncio.to_thread(
         fetch_openwebui_file,
         base_url=settings.open_webui_url,
-        api_key=settings.open_webui_api_key.get_secret_value() if settings.open_webui_api_key else None,
+        api_key=settings.open_webui_api_key.get_secret_value()
+        if settings.open_webui_api_key
+        else None,
         file_id=file_id,
         timeout_seconds=settings.file_indexing_timeout_seconds,
     )
@@ -475,7 +471,9 @@ async def process_one(session: AsyncSession) -> bool:
     except (ConversationEmbeddingError, EmbeddingConfigurationError):
         error_code = CONVERSATION_EMBEDDING_FAILED_ERROR
     except OpenWebUIFileFetchError as exc:
-        error_code = f"file_fetch_failed_{exc.status_code}" if exc.status_code else "file_fetch_failed"
+        error_code = (
+            f"file_fetch_failed_{exc.status_code}" if exc.status_code else "file_fetch_failed"
+        )
     except Exception:  # noqa: BLE001 - all ordinary handler failures share one safe code
         error_code = "handler_failed"
     else:
@@ -486,9 +484,7 @@ async def process_one(session: AsyncSession) -> bool:
 
     if expected_claimed_at is None:
         raise InvalidJobClaimError(INVALID_JOB_CLAIM_ERROR) from None
-    await _record_handler_failure(
-        session, job_id, expected_claimed_at, error_code
-    )
+    await _record_handler_failure(session, job_id, expected_claimed_at, error_code)
     return True
 
 

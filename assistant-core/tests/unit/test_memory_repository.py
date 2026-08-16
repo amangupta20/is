@@ -103,9 +103,7 @@ def test_apply_explicit_candidates_inserts_replays_and_supersedes_with_evidence(
     async def exercise() -> tuple[list[object], list[object], list[object]]:
         inserted = await apply_explicit_candidates(session, first_turn, [first_candidate])  # type: ignore[arg-type]
         replayed = await apply_explicit_candidates(session, first_turn, [first_candidate])  # type: ignore[arg-type]
-        corrected = await apply_explicit_candidates(
-            session, second_turn, [corrected_candidate]
-        )  # type: ignore[arg-type]
+        corrected = await apply_explicit_candidates(session, second_turn, [corrected_candidate])  # type: ignore[arg-type]
         return inserted, replayed, corrected
 
     inserted, replayed, corrected = anyio.run(exercise)

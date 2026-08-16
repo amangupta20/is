@@ -529,9 +529,7 @@ def test_outlet_rejects_unstable_or_malformed_native_turns_without_delivery(
         body["chat_id"] = metadata["chat_id"] = "channel:session"
     elif case == "duplicate_user_id":
         assert isinstance(body["messages"], list)
-        body["messages"].append(
-            {"id": "user-current", "role": "user", "content": "duplicate"}
-        )
+        body["messages"].append({"id": "user-current", "role": "user", "content": "duplicate"})
     elif case == "duplicate_assistant_id":
         assert isinstance(body["messages"], list)
         body["messages"].append(
@@ -736,9 +734,7 @@ def test_turn_event_identity_is_deterministic_and_content_independent() -> None:
     )
     assert filter_._turn_event_id(
         "user-current-owner", "chat-current", "assistant-different"
-    ) != filter_._turn_event_id(
-        "user-current-owner", "chat-current", "assistant-current"
-    )
+    ) != filter_._turn_event_id("user-current-owner", "chat-current", "assistant-current")
 
 
 class _RaisingGetMapping(dict[object, object]):
@@ -795,10 +791,12 @@ def test_outlet_captures_attached_file_ids(monkeypatch: pytest.MonkeyPatch) -> N
     )
     body["files"] = [{"id": "file-top-level-1", "type": "file"}]
     # Also attach in user message
-    body["messages"][0]["files"] = [{"id": "file-msg-level-2", "type": "file"}, {"id": "file-top-level-1"}]
+    body["messages"][0]["files"] = [
+        {"id": "file-msg-level-2", "type": "file"},
+        {"id": "file-top-level-1"},
+    ]
 
     assert anyio.run(filter_.outlet, body, user, metadata) is body
     payload = delivered_payload.get("payload")
     assert isinstance(payload, dict)
     assert payload.get("attached_file_ids") == ["file-top-level-1", "file-msg-level-2"]
-

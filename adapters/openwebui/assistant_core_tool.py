@@ -66,9 +66,7 @@ class Tools:
         return response.json()
 
     @staticmethod
-    def _context_payload(
-        __user__: dict | None, __metadata__: dict | None
-    ) -> dict[str, object]:
+    def _context_payload(__user__: dict | None, __metadata__: dict | None) -> dict[str, object]:
         """Build the bounded native identity envelope used by context routes."""
         return {
             "native_user_id": Tools._optional_id(__user__, "id") or "unknown",
@@ -107,11 +105,16 @@ class Tools:
                 return self._UNAVAILABLE
             source_ids: list[str] = []
             for source in sources:
-                if not isinstance(source, dict) or set(source) != {
-                    "source_type",
-                    "source_id",
-                    "label",
-                } or any(type(source[key]) is not str for key in source):
+                if (
+                    not isinstance(source, dict)
+                    or set(source)
+                    != {
+                        "source_type",
+                        "source_id",
+                        "label",
+                    }
+                    or any(type(source[key]) is not str for key in source)
+                ):
                     return self._UNAVAILABLE
                 source_ids.append(source["source_id"])
             if degraded:
@@ -173,9 +176,7 @@ class Tools:
                 else:
                     return self._UNAVAILABLE
 
-                lines.append(
-                    f"- [{label}] {source_id}: {preview}{provenance}"
-                )
+                lines.append(f"- [{label}] {source_id}: {preview}{provenance}")
             if not lines:
                 return "No matching personal context found."
             return f"Personal context search ({mode}):\n" + "\n".join(lines)
@@ -210,7 +211,7 @@ class Tools:
             if source_type == "memory":
                 role_line = f"Role: {role}\n" if role is not None else ""
                 evidence_line = (
-                    f"Evidence: \"{evidence_quote}\"\n" if evidence_quote is not None else ""
+                    f'Evidence: "{evidence_quote}"\n' if evidence_quote is not None else ""
                 )
                 return (
                     f"Personal memory source {source_id}:\n"
@@ -294,9 +295,7 @@ class Tools:
                 or dead_jobs < 0
             ):
                 return self._UNAVAILABLE
-            return (
-                f"Assistant Core: ok; queued jobs: {queued_jobs}; dead jobs: {dead_jobs}."
-            )
+            return f"Assistant Core: ok; queued jobs: {queued_jobs}; dead jobs: {dead_jobs}."
         except Exception:  # noqa: BLE001 - optional status must fail closed to unavailable.
             return self._UNAVAILABLE
 

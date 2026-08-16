@@ -107,9 +107,7 @@ async def insert_process_event_fixture(
         return job.id
 
 
-async def read_job(
-    session_factory: async_sessionmaker[AsyncSession], identity_key: str
-) -> Job:
+async def read_job(session_factory: async_sessionmaker[AsyncSession], identity_key: str) -> Job:
     """Read one exact test-owned job row."""
     async with session_factory() as session:
         return (
@@ -126,9 +124,7 @@ async def cleanup_exact_jobs(
 
     async with session_factory() as session:
         remaining = await session.scalar(
-            select(func.count())
-            .select_from(Job)
-            .where(Job.identity_key.in_(identity_keys))
+            select(func.count()).select_from(Job).where(Job.identity_key.in_(identity_keys))
         )
     assert int(remaining or 0) == 0
 
@@ -149,14 +145,10 @@ async def cleanup_process_event_fixture(
 
     async with session_factory() as session:
         job_count = await session.scalar(
-            select(func.count())
-            .select_from(Job)
-            .where(Job.identity_key == identity_key)
+            select(func.count()).select_from(Job).where(Job.identity_key == identity_key)
         )
         event_count = await session.scalar(
-            select(func.count())
-            .select_from(EventInbox)
-            .where(EventInbox.event_id == event_id)
+            select(func.count()).select_from(EventInbox).where(EventInbox.event_id == event_id)
         )
         identity_count = await session.scalar(
             select(func.count())
@@ -199,9 +191,7 @@ def scope_claims_to_identities(
     exact_identity_keys = tuple(identity_keys)
 
     def scoped_claim_statement(now: datetime) -> Select[tuple[Job]]:
-        return real_claim_statement(now).where(
-            Job.identity_key.in_(exact_identity_keys)
-        )
+        return real_claim_statement(now).where(Job.identity_key.in_(exact_identity_keys))
 
     monkeypatch.setattr(repository, "_claim_statement", scoped_claim_statement)
 
@@ -306,9 +296,7 @@ async def exercise_completion() -> None:
 
             async with session_factory() as session:
                 job = (
-                    await session.execute(
-                        select(Job).where(Job.identity_key == identity_key)
-                    )
+                    await session.execute(select(Job).where(Job.identity_key == identity_key))
                 ).scalar_one()
                 assert job.claimed_at is not None
                 assert await complete_job(session, job.id, job.claimed_at)
@@ -347,9 +335,7 @@ async def exercise_requeue_after_failure() -> None:
 
             async with session_factory() as session:
                 job = (
-                    await session.execute(
-                        select(Job).where(Job.identity_key == identity_key)
-                    )
+                    await session.execute(select(Job).where(Job.identity_key == identity_key))
                 ).scalar_one()
                 assert job.claimed_at is not None
                 assert await fail_job(session, job, job.claimed_at, error_code)
@@ -387,14 +373,10 @@ async def exercise_eighth_failure() -> None:
 
             async with session_factory() as session:
                 job = (
-                    await session.execute(
-                        select(Job).where(Job.identity_key == identity_key)
-                    )
+                    await session.execute(select(Job).where(Job.identity_key == identity_key))
                 ).scalar_one()
                 assert job.claimed_at is not None
-                assert await fail_job(
-                    session, job, job.claimed_at, "handler_failed"
-                )
+                assert await fail_job(session, job, job.claimed_at, "handler_failed")
 
             failed = await read_job(session_factory, identity_key)
             assert failed.status == "dead"
@@ -465,9 +447,7 @@ async def exercise_older_worker_cannot_complete_replaced_claim() -> None:
 
             async with session_factory() as older_session:
                 older_job = (
-                    await older_session.execute(
-                        select(Job).where(Job.identity_key == identity_key)
-                    )
+                    await older_session.execute(select(Job).where(Job.identity_key == identity_key))
                 ).scalar_one()
                 async with session_factory() as newer_session, newer_session.begin():
                     await newer_session.execute(
@@ -476,9 +456,7 @@ async def exercise_older_worker_cannot_complete_replaced_claim() -> None:
                         .values(status="running", claimed_at=replacement_lease)
                     )
 
-                assert await complete_job(
-                    older_session, older_job.id, original_lease
-                ) is False
+                assert await complete_job(older_session, older_job.id, original_lease) is False
 
             current = await read_job(session_factory, identity_key)
             assert current.status == "running"

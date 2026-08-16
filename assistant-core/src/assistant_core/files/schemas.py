@@ -70,4 +70,3 @@ class FullFileContent(BaseModel):
     total_chunks: int
     total_characters: int
     content: str
-

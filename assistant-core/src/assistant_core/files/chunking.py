@@ -79,7 +79,9 @@ def _subdivide_text(
             if current_chunk.strip():
                 chunks.append(current_chunk.strip())
                 # Start new chunk with overlap if possible
-                overlap_text = current_chunk[-overlap_chars:] if len(current_chunk) > overlap_chars else ""
+                overlap_text = (
+                    current_chunk[-overlap_chars:] if len(current_chunk) > overlap_chars else ""
+                )
                 current_chunk = overlap_text + part
             else:
                 # A single paragraph exceeds max_chars; hard slice along lines or words
@@ -100,7 +102,7 @@ def _subdivide_text(
     for c in chunks:
         while len(c) > max_chars:
             final_chunks.append(c[:max_chars])
-            c = c[max_chars - overlap_chars:]
+            c = c[max_chars - overlap_chars :]
         if c.strip():
             final_chunks.append(c)
 

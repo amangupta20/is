@@ -174,9 +174,7 @@ async def search_personal_context(
     """Search active explicit memory, conversation evidence, and file passages."""
     started_at = perf_counter()
     query_embedding = await _embed_query(request, body.query)
-    mode: Literal["lexical", "hybrid"] = (
-        "hybrid" if query_embedding is not None else "lexical"
-    )
+    mode: Literal["lexical", "hybrid"] = "hybrid" if query_embedding is not None else "lexical"
     async with request.app.state.session_factory() as session:
         memory_records = await search_explicit_memory(
             session,
@@ -323,9 +321,7 @@ async def read_personal_context(
                     reference_id=body.memory_source_id,
                 )
                 if file_result is None:
-                    raise HTTPException(
-                        status_code=404, detail="memory source not found"
-                    )
+                    raise HTTPException(status_code=404, detail="memory source not found")
                 response = PersonalContextReadResponse(
                     source_id=uuid.UUID(file_result.reference_id),
                     source_type="file",

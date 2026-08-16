@@ -61,9 +61,7 @@ class _ContextSession:
         return _Result(rows=[self.records[0]] if native_user_id == "user-1" else [])
 
 
-async def _post(
-    app: FastAPI, path: str, body: dict[str, object]
-) -> httpx.Response:
+async def _post(app: FastAPI, path: str, body: dict[str, object]) -> httpx.Response:
     request_body = json.dumps(body, separators=(",", ":"), sort_keys=True).encode()
     timestamp = str(int(time.time()))
     signature = sign_request("a" * 32, "POST", path, timestamp, request_body)
@@ -281,7 +279,9 @@ def test_hybrid_conversation_hit_reads_bounded_neighbors_and_fails_open_lexicall
         native_user_id: str,
         source_id: uuid.UUID,
     ) -> ConversationRead | None:
-        return conversation_read if native_user_id == "user-1" and source_id == hit.source_id else None
+        return (
+            conversation_read if native_user_id == "user-1" and source_id == hit.source_id else None
+        )
 
     monkeypatch.setattr(personal_context, "search_explicit_memory", no_memories)
     monkeypatch.setattr(personal_context, "search_conversation_context", search_conversations)
@@ -514,7 +514,11 @@ def test_read_full_document_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     async def mock_get_full_file(
-        _session: object, *, file_id_or_name: str, native_user_id: str | None = None, **_kwargs: object
+        _session: object,
+        *,
+        file_id_or_name: str,
+        native_user_id: str | None = None,
+        **_kwargs: object,
     ) -> FullFileContent | None:
         if native_user_id == "user-1" and file_id_or_name in {"file-123", "overview.md"}:
             return full_doc
@@ -553,5 +557,3 @@ def test_read_full_document_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
         )
     )
     assert missing.status_code == 404
-
-

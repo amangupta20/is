@@ -37,7 +37,9 @@ def test_extractor_parses_explicit_preference_and_empty_candidates() -> None:
         assert body["response_format"] == {"type": "json_object"}
         rubric = " ".join(body["messages"][0]["content"].split())
         assert "lowercase dotted identifier" in rubric
-        assert 'exactly one of "fact", "preference", "instruction", "project", or "decision"' in rubric
+        assert (
+            'exactly one of "fact", "preference", "instruction", "project", or "decision"' in rubric
+        )
         return httpx.Response(
             200,
             json={"choices": [{"message": {"content": json.dumps(next(responses))}}]},
@@ -50,9 +52,7 @@ def test_extractor_parses_explicit_preference_and_empty_candidates() -> None:
         timeout_seconds=3,
         transport=httpx.MockTransport(respond),
     )
-    preference_turn = CompletedTurnData(
-        id=uuid.uuid4(), user_content="I prefer concise answers."
-    )
+    preference_turn = CompletedTurnData(id=uuid.uuid4(), user_content="I prefer concise answers.")
     transient_turn = CompletedTurnData(id=uuid.uuid4(), user_content="What time is it?")
 
     candidates = extractor.extract(preference_turn)

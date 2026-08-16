@@ -84,7 +84,9 @@ def test_inspection_files_stats_requires_signature() -> None:
             transport=httpx.ASGITransport(app=app, raise_app_exceptions=True),
             base_url="http://test",
         ) as client:
-            resp = await client.post("/v1/inspection/files/stats", json={"native_user_id": "user-1"})
+            resp = await client.post(
+                "/v1/inspection/files/stats", json={"native_user_id": "user-1"}
+            )
             assert resp.status_code == 401
 
     anyio.run(exercise)

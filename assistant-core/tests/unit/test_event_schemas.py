@@ -85,9 +85,7 @@ def test_event_contract_requires_a_json_object_payload() -> None:
 
 def test_event_contract_allows_empty_optional_native_ids() -> None:
     """Optional chat and message identifiers are bounded but need not be populated."""
-    event = EventEnvelope.model_validate(
-        valid_event(native_chat_id="", native_message_id="")
-    )
+    event = EventEnvelope.model_validate(valid_event(native_chat_id="", native_message_id=""))
 
     assert event.native_chat_id == ""
     assert event.native_message_id == ""

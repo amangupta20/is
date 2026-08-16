@@ -51,9 +51,7 @@ class Filter:
             if not (
                 normalized == "0"
                 or (
-                    normalized.isascii()
-                    and normalized.isdigit()
-                    and not normalized.startswith("0")
+                    normalized.isascii() and normalized.isdigit() and not normalized.startswith("0")
                 )
             ):
                 raise ValueError("max_context_tokens must be a canonical decimal string")
@@ -195,8 +193,7 @@ class Filter:
             (
                 index
                 for index in range(len(messages) - 1, -1, -1)
-                if isinstance(messages[index], Mapping)
-                and messages[index].get("role") == "user"
+                if isinstance(messages[index], Mapping) and messages[index].get("role") == "user"
             ),
             None,
         )
@@ -316,7 +313,11 @@ class Filter:
             for f in candidate_files:
                 if isinstance(f, Mapping):
                     fid = f.get("id") or f.get("file_id")
-                    if isinstance(fid, str) and fid.strip() and fid.strip() not in attached_file_ids:
+                    if (
+                        isinstance(fid, str)
+                        and fid.strip()
+                        and fid.strip() not in attached_file_ids
+                    ):
                         attached_file_ids.append(fid.strip())
 
             turn_payload: dict[str, object] = {

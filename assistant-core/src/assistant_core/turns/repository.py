@@ -33,9 +33,7 @@ def _validated_payload(event: EventInbox) -> CompletedTurnPayload:
     return payload
 
 
-async def materialize_completed_turn(
-    session: AsyncSession, event: EventInbox
-) -> bool:
+async def materialize_completed_turn(session: AsyncSession, event: EventInbox) -> bool:
     """Insert a completed turn once, returning false for an event replay."""
     payload = _validated_payload(event)
     statement = (
@@ -59,9 +57,7 @@ async def materialize_completed_turn(
     return inserted_id is not None
 
 
-async def get_completed_turn_for_event(
-    session: AsyncSession, event_id: str
-) -> CompletedTurn:
+async def get_completed_turn_for_event(session: AsyncSession, event_id: str) -> CompletedTurn:
     """Load the completed turn for one already-validated inbox event."""
     statement = select(CompletedTurn).where(CompletedTurn.event_id == event_id)
     turn = (await session.execute(statement)).scalar_one_or_none()

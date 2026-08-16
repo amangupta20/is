@@ -37,9 +37,7 @@ class _Response:
 
 
 class _RecordingClient:
-    def __init__(
-        self, capture: dict[str, Any], timeout: float, response_json: object
-    ) -> None:
+    def __init__(self, capture: dict[str, Any], timeout: float, response_json: object) -> None:
         capture["timeout"] = timeout
         self.capture = capture
         self.response_json = response_json
@@ -186,9 +184,7 @@ def test_personal_context_tools_show_profile_search_read_and_fail_open(
         "/v1/context": {
             "context_text": "<user_profile>\n- Use direct answers.\n</user_profile>",
             "token_estimate": 13,
-            "sources": [
-                {"source_type": "memory", "source_id": source_id, "label": "profile"}
-            ],
+            "sources": [{"source_type": "memory", "source_id": source_id, "label": "profile"}],
             "degraded": False,
         },
         "/v1/personal-context/search": {
@@ -211,7 +207,7 @@ def test_personal_context_tools_show_profile_search_read_and_fail_open(
                     "preview": "We used bounded hybrid recall.",
                     "source_native_chat_id": "chat-2",
                     "source_native_message_id": "message-2",
-                }
+                },
             ],
         },
         "/v1/personal-context/read": {
@@ -245,8 +241,7 @@ def test_personal_context_tools_show_profile_search_read_and_fail_open(
     metadata = {"chat_id": "chat-1", "message_id": "message-1"}
 
     assert asyncio.run(tool.show_loaded_profile(__user__=user, __metadata__=metadata)) == (
-        "<user_profile>\n- Use direct answers.\n</user_profile>\n"
-        f"Profile source IDs: {source_id}."
+        f"<user_profile>\n- Use direct answers.\n</user_profile>\nProfile source IDs: {source_id}."
     )
     assert asyncio.run(
         tool.search_personal_context("direct", __user__=user, __metadata__=metadata)
@@ -256,9 +251,7 @@ def test_personal_context_tools_show_profile_search_read_and_fail_open(
         "- [conversation/assistant evidence] 00000000-0000-0000-0000-000000000012: "
         "We used bounded hybrid recall. (chat chat-2, message message-2)"
     )
-    assert asyncio.run(
-        tool.read_personal_context(source_id, __user__=user)
-    ) == (
+    assert asyncio.run(tool.read_personal_context(source_id, __user__=user)) == (
         f"Personal memory source {source_id}:\n"
         "Content: Use direct answers.\n"
         "Category: preference\n"
@@ -401,5 +394,3 @@ def test_read_full_document(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "Full Document: specs.pdf" in out
     assert "Chunks: 5" in out
     assert "# System Architecture\nComplete text here." in out
-
-

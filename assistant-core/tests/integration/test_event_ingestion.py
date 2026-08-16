@@ -81,14 +81,10 @@ async def record_counts(
             .where(UserIdentity.native_user_id == native_user_id)
         )
         event_count = await session.scalar(
-            select(func.count())
-            .select_from(EventInbox)
-            .where(EventInbox.event_id == event_id)
+            select(func.count()).select_from(EventInbox).where(EventInbox.event_id == event_id)
         )
         job_count = await session.scalar(
-            select(func.count())
-            .select_from(Job)
-            .where(Job.identity_key == f"event:{event_id}")
+            select(func.count()).select_from(Job).where(Job.identity_key == f"event:{event_id}")
         )
     return int(identity_count or 0), int(event_count or 0), int(job_count or 0)
 
@@ -111,9 +107,7 @@ async def cleanup_exact_rows(
 @asynccontextmanager
 async def app_context() -> AsyncIterator[FastAPI]:
     """Yield a live-database app and always dispose its engine."""
-    app = create_app(
-        Settings(database_url=configured_database_url(), hmac_secret=HMAC_SECRET)
-    )
+    app = create_app(Settings(database_url=configured_database_url(), hmac_secret=HMAC_SECRET))
     try:
         yield app
     finally:
@@ -132,9 +126,11 @@ async def exercise_idempotent_delivery(event_id: str, native_user_id: str) -> No
             assert first.json() == {"event_id": event_id, "duplicate": False}
             assert duplicate.status_code == 202
             assert duplicate.json() == {"event_id": event_id, "duplicate": True}
-            assert await record_counts(
-                app.state.session_factory, event_id, native_user_id
-            ) == (1, 1, 1)
+            assert await record_counts(app.state.session_factory, event_id, native_user_id) == (
+                1,
+                1,
+                1,
+            )
         finally:
             await cleanup_exact_rows(app.state.session_factory, event_id, native_user_id)
 
@@ -164,9 +160,11 @@ async def exercise_rejections(event_id: str, native_user_id: str) -> None:
 
             assert unsigned.status_code == 401
             assert invalid.status_code == 422
-            assert await record_counts(
-                app.state.session_factory, event_id, native_user_id
-            ) == (0, 0, 0)
+            assert await record_counts(app.state.session_factory, event_id, native_user_id) == (
+                0,
+                0,
+                0,
+            )
         finally:
             await cleanup_exact_rows(app.state.session_factory, event_id, native_user_id)
 

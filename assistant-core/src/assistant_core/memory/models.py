@@ -56,11 +56,19 @@ class MemoryRecord(Base):
     key: Mapped[str] = mapped_column(String(200), nullable=False)
     category: Mapped[str] = mapped_column(String(30), nullable=False)
     statement: Mapped[str] = mapped_column(Text, nullable=False)
-    kind: Mapped[str] = mapped_column(String(30), nullable=False, default="explicit", server_default="explicit")
+    kind: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="explicit", server_default="explicit"
+    )
     confidence: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
-    state: Mapped[str] = mapped_column(String(30), nullable=False, default="active", server_default="active")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    state: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="active", server_default="active"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -95,14 +103,18 @@ class MemoryEvidence(Base):
     )
     native_user_message_id: Mapped[str] = mapped_column(String(200), nullable=False)
     evidence_quote: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class ChatProfileSnapshot(Base):
     """Exact profile rendering for one native chat and its ordered memory sources."""
 
     __tablename__ = "chat_profile_snapshot"
-    __table_args__ = (Index("uq_chat_profile_snapshot_user_chat", "user_id", "native_chat_id", unique=True),)
+    __table_args__ = (
+        Index("uq_chat_profile_snapshot_user_chat", "user_id", "native_chat_id", unique=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -110,5 +122,9 @@ class ChatProfileSnapshot(Base):
     )
     native_chat_id: Mapped[str] = mapped_column(String(200), nullable=False)
     rendered_text: Mapped[str] = mapped_column(Text, nullable=False)
-    source_memory_ids: Mapped[list[uuid.UUID]] = mapped_column(ARRAY(UUID(as_uuid=True)), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    source_memory_ids: Mapped[list[uuid.UUID]] = mapped_column(
+        ARRAY(UUID(as_uuid=True)), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

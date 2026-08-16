@@ -52,9 +52,7 @@ class OpenAICompatibleEmbedder:
             "dimensions": self.dimension,
         }
         try:
-            with httpx.Client(
-                timeout=self._timeout_seconds, transport=self._transport
-            ) as client:
+            with httpx.Client(timeout=self._timeout_seconds, transport=self._transport) as client:
                 response = client.post(self._url, headers=headers, json=request_body)
                 response.raise_for_status()
             payload = response.json()
@@ -73,9 +71,7 @@ class OpenAICompatibleEmbedder:
                 raise TypeError
             return [float(value) for value in embedding]
         except (httpx.HTTPError, KeyError, TypeError, ValueError):
-            raise ConversationEmbeddingError(
-                CONVERSATION_EMBEDDING_FAILED_ERROR
-            ) from None
+            raise ConversationEmbeddingError(CONVERSATION_EMBEDDING_FAILED_ERROR) from None
 
 
 def get_conversation_embedder(settings: Settings) -> OpenAICompatibleEmbedder:

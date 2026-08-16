@@ -176,9 +176,7 @@ def test_signed_event_runs_ingestion_in_route_owned_transaction(monkeypatch: Any
     assert response.status_code == 202
     assert response.json() == {"event_id": "event-1", "duplicate": False}
     assert fake_session.transaction_entries == 1
-    assert [(session, event.event_id) for session, event in ingested] == [
-        (fake_session, "event-1")
-    ]
+    assert [(session, event.event_id) for session, event in ingested] == [(fake_session, "event-1")]
 
 
 def test_authentication_and_validation_fail_before_ingestion(monkeypatch: Any) -> None:
@@ -400,9 +398,7 @@ def test_invalid_oversized_turn_payload_is_rejected_with_one_safe_error(
 @pytest.mark.parametrize(
     "mutation",
     [
-        lambda envelope: envelope.update(
-            {"unexpected": "PRIVATE_TOP_LEVEL_CONTENT"}
-        ),
+        lambda envelope: envelope.update({"unexpected": "PRIVATE_TOP_LEVEL_CONTENT"}),
         lambda envelope: envelope.pop("schema_version"),
         lambda envelope: envelope.update({"schema_version": "1"}),
         lambda envelope: envelope.update({"schema_version": True}),
@@ -421,12 +417,8 @@ def test_invalid_oversized_turn_payload_is_rejected_with_one_safe_error(
         lambda envelope: envelope.pop("native_message_id"),
         lambda envelope: envelope.update({"native_message_id": "x" * 201}),
         lambda envelope: envelope.pop("occurred_at"),
-        lambda envelope: envelope.update(
-            {"occurred_at": "2026-08-10T12:00:00"}
-        ),
-        lambda envelope: envelope.update(
-            {"occurred_at": "PRIVATE_TOP_LEVEL_CONTENT"}
-        ),
+        lambda envelope: envelope.update({"occurred_at": "2026-08-10T12:00:00"}),
+        lambda envelope: envelope.update({"occurred_at": "PRIVATE_TOP_LEVEL_CONTENT"}),
         lambda envelope: envelope.update({"occurred_at": 1_800_000_000}),
     ],
 )

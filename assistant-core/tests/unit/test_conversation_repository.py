@@ -254,14 +254,19 @@ def test_hybrid_search_and_read_queries_are_owner_scoped_and_active_only() -> No
     assert "<=>" in sql
     assert sql.count("conversation_reference.tombstoned_at IS NULL") == 3
     assert sql.count("completed_turn.tombstoned_at IS NULL") == 3
-    assert sql.count(
-        "assistant_core.conversation_segment.user_id = "
-        "assistant_core.conversation_reference.user_id"
-    ) == 3
-    assert sql.count(
-        "assistant_core.completed_turn.user_id = "
-        "assistant_core.conversation_reference.user_id"
-    ) >= 3
+    assert (
+        sql.count(
+            "assistant_core.conversation_segment.user_id = "
+            "assistant_core.conversation_reference.user_id"
+        )
+        == 3
+    )
+    assert (
+        sql.count(
+            "assistant_core.completed_turn.user_id = assistant_core.conversation_reference.user_id"
+        )
+        >= 3
+    )
     assert parameters.count("native-user-1") == 3
 
 

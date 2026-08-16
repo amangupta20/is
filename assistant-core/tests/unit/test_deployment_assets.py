@@ -23,9 +23,7 @@ def read_required(path: Path) -> str:
 
 def compose_service_sections(compose: str) -> dict[str, str]:
     """Return each assistant service's Compose section without adjacent sections."""
-    heading_pattern = re.compile(
-        rf"^  (?P<name>{'|'.join(COMPOSE_SERVICES)}):$", re.MULTILINE
-    )
+    heading_pattern = re.compile(rf"^  (?P<name>{'|'.join(COMPOSE_SERVICES)}):$", re.MULTILINE)
     headings = list(heading_pattern.finditer(compose))
     assert [heading.group("name") for heading in headings] == list(COMPOSE_SERVICES)
 
@@ -42,9 +40,7 @@ def assert_compose_has_one_git_build_owner(compose: str) -> dict[str, str]:
     sections = compose_service_sections(compose)
 
     for section in sections.values():
-        assert re.findall(r"^    image: (.+)$", section, re.MULTILINE) == [
-            LOCAL_ASSISTANT_IMAGE
-        ]
+        assert re.findall(r"^    image: (.+)$", section, re.MULTILINE) == [LOCAL_ASSISTANT_IMAGE]
 
     migration = sections["assistant-migrate"]
     assert migration.count(ASSISTANT_BUILD_BLOCK) == 1
@@ -114,6 +110,7 @@ def test_env_example_has_only_safe_documented_assistant_settings() -> None:
     }
 
     assert set(assignments) == {
+        "ASSISTANT_ADMIN_TOKEN",
         "ASSISTANT_CONTEXT_TIMEOUT_SECONDS",
         "ASSISTANT_DATABASE_URL",
         "ASSISTANT_EMBEDDING_API_KEY",
@@ -211,9 +208,7 @@ def test_compose_build_contract_rejects_a_second_build_owner() -> None:
 
 def test_postgres_bootstrap_is_guarded_idempotent_and_least_privilege() -> None:
     """The optional admin script cannot mutate before password validation."""
-    sql = read_required(
-        REPOSITORY_ROOT / "deploy" / "postgres" / "bootstrap_assistant_role.sql"
-    )
+    sql = read_required(REPOSITORY_ROOT / "deploy" / "postgres" / "bootstrap_assistant_role.sql")
     lowered = sql.lower()
 
     assert lowered.index(r"\if :{?assistant_password}") < lowered.index("create role")
@@ -320,11 +315,7 @@ def test_completed_turn_migration_has_stable_schema_qualified_operations(
     assert create_table[1][0] == "completed_turn"
     assert create_table[2]["schema"] == "assistant_core"
     table_objects = create_table[1][1:]
-    columns = {
-        item.name: item
-        for item in table_objects
-        if isinstance(item, sa.Column)
-    }
+    columns = {item.name: item for item in table_objects if isinstance(item, sa.Column)}
     assert list(columns) == [
         "id",
         "event_id",
@@ -365,11 +356,7 @@ def test_completed_turn_migration_has_stable_schema_qualified_operations(
     assert not columns["captured_at"].nullable
     assert columns["captured_at"].server_default is not None
     assert columns["tombstoned_at"].nullable
-    unique_constraints = [
-        item
-        for item in table_objects
-        if isinstance(item, sa.UniqueConstraint)
-    ]
+    unique_constraints = [item for item in table_objects if isinstance(item, sa.UniqueConstraint)]
     assert len(unique_constraints) == 1
     assert unique_constraints[0].name == "uq_completed_turn_event_id"
     assert unique_constraints[0]._pending_colargs == ["event_id"]
@@ -398,9 +385,7 @@ def test_completed_turn_migration_has_stable_schema_qualified_operations(
 
 def test_live_process_event_fixture_creates_and_cleans_exact_inbox_provenance() -> None:
     """The live worker success path must provide the event ID its job routes."""
-    worker_integration = read_required(
-        ASSISTANT_CORE / "tests" / "integration" / "test_worker.py"
-    )
+    worker_integration = read_required(ASSISTANT_CORE / "tests" / "integration" / "test_worker.py")
 
     assert "insert_process_event_fixture(" in worker_integration
     assert 'payload={"event_id": event_id}' in worker_integration

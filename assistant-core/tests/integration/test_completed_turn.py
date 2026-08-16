@@ -39,9 +39,7 @@ async def database_context() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
         await engine.dispose()
 
 
-def scope_claim_to_job(
-    monkeypatch: pytest.MonkeyPatch, identity_key: str
-) -> None:
+def scope_claim_to_job(monkeypatch: pytest.MonkeyPatch, identity_key: str) -> None:
     """Constrain the production claim statement to this test's exact UUID job."""
     from assistant_core.jobs import repository
 
@@ -62,9 +60,7 @@ async def cleanup_exact_rows(
 ) -> None:
     """Delete only UUID-owned rows in reverse dependency order and prove absence."""
     async with session_factory() as session, session.begin():
-        await session.execute(
-            delete(CompletedTurn).where(CompletedTurn.event_id == event_id)
-        )
+        await session.execute(delete(CompletedTurn).where(CompletedTurn.event_id == event_id))
         await session.execute(delete(Job).where(Job.identity_key == identity_key))
         await session.execute(delete(EventInbox).where(EventInbox.event_id == event_id))
         await session.execute(
@@ -80,21 +76,26 @@ async def cleanup_exact_rows(
             )
             or 0
         )
-        remaining += await session.scalar(
-            select(func.count())
-            .select_from(EventInbox)
-            .where(EventInbox.event_id == event_id)
-        ) or 0
-        remaining += await session.scalar(
-            select(func.count())
-            .select_from(Job)
-            .where(Job.identity_key == identity_key)
-        ) or 0
-        remaining += await session.scalar(
-            select(func.count())
-            .select_from(CompletedTurn)
-            .where(CompletedTurn.event_id == event_id)
-        ) or 0
+        remaining += (
+            await session.scalar(
+                select(func.count()).select_from(EventInbox).where(EventInbox.event_id == event_id)
+            )
+            or 0
+        )
+        remaining += (
+            await session.scalar(
+                select(func.count()).select_from(Job).where(Job.identity_key == identity_key)
+            )
+            or 0
+        )
+        remaining += (
+            await session.scalar(
+                select(func.count())
+                .select_from(CompletedTurn)
+                .where(CompletedTurn.event_id == event_id)
+            )
+            or 0
+        )
     if remaining != 0:
         pytest.fail("exact completed-turn integration cleanup was incomplete")
 
@@ -110,9 +111,7 @@ async def completed_turn_table_exists(
     return bool(ready)
 
 
-async def exercise_completed_turn_worker(
-    monkeypatch: pytest.MonkeyPatch, suffix: str
-) -> None:
+async def exercise_completed_turn_worker(monkeypatch: pytest.MonkeyPatch, suffix: str) -> None:
     """Materialize through the worker, then prove repository replay idempotency."""
     from assistant_core.jobs.worker import process_one
     from assistant_core.turns.repository import materialize_completed_turn

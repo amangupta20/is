@@ -96,9 +96,7 @@ def test_completed_turn_payload_rejects_noncanonical_or_untrusted_values(
         ("assistant_message", "sha256"),
     ],
 )
-def test_completed_turn_payload_requires_every_message_field(
-    message_key: str, field: str
-) -> None:
+def test_completed_turn_payload_requires_every_message_field(message_key: str, field: str) -> None:
     """Neither native message may omit identity, role, content, or digest."""
     raw = valid_payload()
     del raw[message_key][field]

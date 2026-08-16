@@ -1,2 +1,1 @@
 """Durable assistant jobs."""
-

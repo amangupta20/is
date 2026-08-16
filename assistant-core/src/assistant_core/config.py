@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     database_url: str = "postgresql://postgres:postgres@localhost:5432/assistant_core"
     hmac_secret: str = DEVELOPMENT_HMAC_SECRET
+    admin_token: SecretStr | None = None
     request_clock_skew_seconds: int = 60
     context_timeout_seconds: float = 1.5
     open_webui_url: str = Field(default="http://open-webui:8080", min_length=1, max_length=2_048)
@@ -51,7 +52,13 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator("open_webui_api_key", "task_model_api_key", "embedding_api_key", mode="before")
+    @field_validator(
+        "open_webui_api_key",
+        "task_model_api_key",
+        "embedding_api_key",
+        "admin_token",
+        mode="before",
+    )
     @classmethod
     def _empty_secret_to_none(cls, value: object) -> object:
         if isinstance(value, str) and value.strip() == "":

@@ -87,9 +87,7 @@ async def materialize_file_passages(
                 chunking_version=CHUNKING_VERSION,
                 content=chunk.text,
             )
-            .on_conflict_do_nothing(
-                constraint="uq_file_segment_user_hash_version"
-            )
+            .on_conflict_do_nothing(constraint="uq_file_segment_user_hash_version")
             .returning(FileSegment.id)
         )
         res = await session.execute(stmt)
@@ -135,9 +133,7 @@ async def materialize_file_passages(
                 header_path=chunk.header_path,
                 chunk_ordinal=chunk.chunk_ordinal,
             )
-            .on_conflict_do_nothing(
-                constraint="uq_file_reference_user_file_chunk"
-            )
+            .on_conflict_do_nothing(constraint="uq_file_reference_user_file_chunk")
         )
         await session.execute(ref_stmt)
 
@@ -183,9 +179,7 @@ async def tombstone_file_references(
     return len(result.scalars().all())
 
 
-async def get_file_segment_content(
-    session: AsyncSession, segment_id: uuid.UUID
-) -> str | None:
+async def get_file_segment_content(session: AsyncSession, segment_id: uuid.UUID) -> str | None:
     """Load exact text for a segment missing an embedding."""
     stmt = select(FileSegment.content).where(
         FileSegment.id == segment_id,
@@ -238,26 +232,21 @@ async def search_file_passages(
 
     # Lexical search via TSVECTOR
     if query_text.strip():
-        lexical_stmt = (
-            select(
-                FileReference.id,
-                FileReference.segment_id,
-                FileReference.native_file_id,
-                FileReference.filename,
-                FileReference.header_path,
-                FileReference.chunk_ordinal,
-                FileSegment.content,
-            )
-            .join(FileSegment, FileReference.segment_id == FileSegment.id)
-        )
+        lexical_stmt = select(
+            FileReference.id,
+            FileReference.segment_id,
+            FileReference.native_file_id,
+            FileReference.filename,
+            FileReference.header_path,
+            FileReference.chunk_ordinal,
+            FileSegment.content,
+        ).join(FileSegment, FileReference.segment_id == FileSegment.id)
         if native_user_id is not None and user_id is None:
             lexical_stmt = lexical_stmt.join(UserIdentity, UserIdentity.id == FileReference.user_id)
         lexical_stmt = lexical_stmt.where(
             *user_filters,
             FileReference.tombstoned_at.is_(None),
-            FileSegment.search_vector.op("@@")(
-                func.plainto_tsquery("simple", query_text)
-            ),
+            FileSegment.search_vector.op("@@")(func.plainto_tsquery("simple", query_text)),
         ).limit(limit)
 
         lexical_rows = (await session.execute(lexical_stmt)).all()
@@ -276,20 +265,19 @@ async def search_file_passages(
 
     semantic_hits: dict[uuid.UUID, FileHit] = {}
     if query_embedding is not None:
-        semantic_stmt = (
-            select(
-                FileReference.id,
-                FileReference.segment_id,
-                FileReference.native_file_id,
-                FileReference.filename,
-                FileReference.header_path,
-                FileReference.chunk_ordinal,
-                FileSegment.content,
-            )
-            .join(FileSegment, FileReference.segment_id == FileSegment.id)
-        )
+        semantic_stmt = select(
+            FileReference.id,
+            FileReference.segment_id,
+            FileReference.native_file_id,
+            FileReference.filename,
+            FileReference.header_path,
+            FileReference.chunk_ordinal,
+            FileSegment.content,
+        ).join(FileSegment, FileReference.segment_id == FileSegment.id)
         if native_user_id is not None and user_id is None:
-            semantic_stmt = semantic_stmt.join(UserIdentity, UserIdentity.id == FileReference.user_id)
+            semantic_stmt = semantic_stmt.join(
+                UserIdentity, UserIdentity.id == FileReference.user_id
+            )
         semantic_stmt = (
             semantic_stmt.where(
                 *user_filters,
@@ -366,19 +354,16 @@ async def read_file_passage_context(
     elif native_user_id is not None:
         user_filters.append(UserIdentity.native_user_id == native_user_id)
 
-    target_stmt = (
-        select(
-            FileReference.id,
-            FileReference.user_id,
-            FileReference.native_file_id,
-            FileReference.filename,
-            FileReference.mime_type,
-            FileReference.header_path,
-            FileReference.chunk_ordinal,
-            FileSegment.content,
-        )
-        .join(FileSegment, FileReference.segment_id == FileSegment.id)
-    )
+    target_stmt = select(
+        FileReference.id,
+        FileReference.user_id,
+        FileReference.native_file_id,
+        FileReference.filename,
+        FileReference.mime_type,
+        FileReference.header_path,
+        FileReference.chunk_ordinal,
+        FileSegment.content,
+    ).join(FileSegment, FileReference.segment_id == FileSegment.id)
     if native_user_id is not None and user_id is None:
         target_stmt = target_stmt.join(UserIdentity, UserIdentity.id == FileReference.user_id)
     target_stmt = target_stmt.where(
@@ -475,9 +460,7 @@ async def get_full_file_content(
     )
 
 
-async def get_file_stats(
-    session: AsyncSession, user_id: uuid.UUID
-) -> dict[str, Any]:
+async def get_file_stats(session: AsyncSession, user_id: uuid.UUID) -> dict[str, Any]:
     """Return aggregated file index and queue stats for an owner."""
     total_files = (
         await session.execute(
@@ -528,22 +511,16 @@ async def get_file_stats(
 
     last_indexed_at = (
         await session.execute(
-            select(func.max(FileReference.created_at)).where(
-                FileReference.user_id == user_id
-            )
+            select(func.max(FileReference.created_at)).where(FileReference.user_id == user_id)
         )
     ).scalar_one_or_none()
 
     queued_jobs = (
-        await session.execute(
-            select(func.count()).select_from(Job).where(Job.status == "queued")
-        )
+        await session.execute(select(func.count()).select_from(Job).where(Job.status == "queued"))
     ).scalar_one()
 
     dead_jobs = (
-        await session.execute(
-            select(func.count()).select_from(Job).where(Job.status == "dead")
-        )
+        await session.execute(select(func.count()).select_from(Job).where(Job.status == "dead"))
     ).scalar_one()
 
     reused_segments = max(0, total_references - total_segments)
@@ -603,9 +580,7 @@ async def get_recent_files(
     return results
 
 
-async def get_dead_jobs(
-    session: AsyncSession, limit: int = 10
-) -> list[dict[str, Any]]:
+async def get_dead_jobs(session: AsyncSession, limit: int = 10) -> list[dict[str, Any]]:
     """Return recent dead jobs with failure details."""
     stmt = (
         select(
@@ -634,5 +609,3 @@ async def get_dead_jobs(
         }
         for r in rows
     ]
-
-

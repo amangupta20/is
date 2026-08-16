@@ -205,4 +205,3 @@ def test_get_full_file_content() -> None:
     assert res.total_characters == 60
     assert "# Overview" in res.content
     assert "## Details" in res.content
-

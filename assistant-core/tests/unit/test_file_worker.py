@@ -33,11 +33,16 @@ def test_handle_index_file_success() -> None:
 
     session = FakeSession()
 
-    with patch("assistant_core.jobs.worker.fetch_openwebui_file") as mock_fetch, \
-         patch("assistant_core.jobs.worker.materialize_file_passages") as mock_mat, \
-         patch("assistant_core.jobs.worker.get_conversation_embedder"):
-
-        mock_fetch.return_value = ("report.docx", "application/vnd.openxmlformats", "# Heading\n\nContent")
+    with (
+        patch("assistant_core.jobs.worker.fetch_openwebui_file") as mock_fetch,
+        patch("assistant_core.jobs.worker.materialize_file_passages") as mock_mat,
+        patch("assistant_core.jobs.worker.get_conversation_embedder"),
+    ):
+        mock_fetch.return_value = (
+            "report.docx",
+            "application/vnd.openxmlformats",
+            "# Heading\n\nContent",
+        )
         mock_mat.return_value = FileMaterializationResult(
             native_file_id=file_id,
             total_chunks=1,

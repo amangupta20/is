@@ -51,7 +51,9 @@ def test_identity_and_event_columns_enforce_the_contract() -> None:
     assert event.event_id.primary_key and event.event_id.type.length == 200
     assert event.event_type.type.length == 120 and event.event_type.index
     assert not event.user_id.nullable
-    assert next(iter(event.user_id.foreign_keys)).target_fullname == "assistant_core.user_identity.id"
+    assert (
+        next(iter(event.user_id.foreign_keys)).target_fullname == "assistant_core.user_identity.id"
+    )
     assert event.native_chat_id.type.length == 200 and event.native_chat_id.nullable
     assert event.native_message_id.type.length == 200 and event.native_message_id.nullable
     assert event.occurred_at.type.timezone and not event.occurred_at.nullable

@@ -166,9 +166,7 @@ def test_exception_path_emits_one_redacted_completion_event(
         raise RuntimeError("private exception detail")
 
     caplog.set_level(logging.INFO, logger="assistant_core.http")
-    response = anyio.run(
-        lambda: request(app, "/explode/private-item", raise_app_exceptions=False)
-    )
+    response = anyio.run(lambda: request(app, "/explode/private-item", raise_app_exceptions=False))
     records = [
         json.loads(record.getMessage())
         for record in caplog.records
@@ -176,9 +174,7 @@ def test_exception_path_emits_one_redacted_completion_event(
     ]
 
     assert response.status_code == 500
-    assert str(UUID(response.headers["x-correlation-id"])) == response.headers[
-        "x-correlation-id"
-    ]
+    assert str(UUID(response.headers["x-correlation-id"])) == response.headers["x-correlation-id"]
     assert response.json() == {"detail": "internal server error"}
     assert len(records) == 1
     assert records[0]["status_code"] == 500
@@ -993,8 +989,7 @@ def test_exported_server_and_client_spans_contain_no_url_or_payload_values(
         transport._pool = NetworkFreePool()  # type: ignore[assignment]
         async with httpx.AsyncClient(transport=transport) as outbound_client:
             await outbound_client.get(
-                "https://private-host.invalid/private-client-path"
-                "?client_token=private-client-query"
+                "https://private-host.invalid/private-client-path?client_token=private-client-query"
             )
         return {"status": "ok"}
 

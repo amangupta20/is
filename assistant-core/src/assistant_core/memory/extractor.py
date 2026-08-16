@@ -74,9 +74,7 @@ class TaskModelMemoryExtractor:
             ],
         }
         try:
-            with httpx.Client(
-                timeout=self._timeout_seconds, transport=self._transport
-            ) as client:
+            with httpx.Client(timeout=self._timeout_seconds, transport=self._transport) as client:
                 response = client.post(self._url, headers=headers, json=request_body)
                 response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]

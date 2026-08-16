@@ -118,6 +118,7 @@ def test_completed_event_loads_exact_inbox_row_and_materializes_once(
         return True
 
     monkeypatch.setattr(worker, "materialize_completed_turn", materialize)
+
     async def get_turn(*_args: object) -> CompletedTurn:
         return turn
 
@@ -232,9 +233,7 @@ def test_completed_turn_enqueue_commits_before_later_extractor_failure(
 
             raise MemoryExtractionError(MEMORY_EXTRACTION_FAILED_ERROR)
 
-    async def fail(
-        _session: object, _job: Job, _lease: datetime, code: str
-    ) -> bool:
+    async def fail(_session: object, _job: Job, _lease: datetime, code: str) -> bool:
         failures.append(code)
         return True
 
@@ -330,7 +329,9 @@ def test_embedding_failure_preserves_committed_lexical_passages(
     monkeypatch.setattr(worker, "materialize_turn_passages", materialize, raising=False)
     monkeypatch.setattr(worker, "get_segment_content", load_content, raising=False)
     monkeypatch.setattr(worker, "store_segment_embedding", store_embedding, raising=False)
-    monkeypatch.setattr(worker, "get_conversation_embedder", lambda: FailingEmbedder(), raising=False)
+    monkeypatch.setattr(
+        worker, "get_conversation_embedder", lambda: FailingEmbedder(), raising=False
+    )
 
     with pytest.raises(ConversationEmbeddingError):
         anyio.run(
@@ -653,9 +654,7 @@ def test_invalid_completed_turn_uses_fixed_safe_failure_code(
     async def reject(*_args: object) -> None:
         raise InvalidTurnPayloadError("invalid_turn_payload")
 
-    async def fail(
-        _session: object, _job: Job, _lease: datetime, code: str
-    ) -> bool:
+    async def fail(_session: object, _job: Job, _lease: datetime, code: str) -> bool:
         failures.append(code)
         return True
 
@@ -697,9 +696,7 @@ def test_process_one_captures_claim_before_successful_handler(
     async def handle(_session: object, _kind: str, _payload: object) -> None:
         job.claimed_at = replacement_lease
 
-    async def complete(
-        _session: object, job_id: uuid.UUID, lease: datetime
-    ) -> bool:
+    async def complete(_session: object, job_id: uuid.UUID, lease: datetime) -> bool:
         finalized_claims.append((job_id, lease))
         return False
 
@@ -756,9 +753,7 @@ def test_failure_recovery_keeps_original_claim_after_reload(
     async def reject(*_args: object) -> None:
         raise ValueError("bounded-handler-failure")
 
-    async def fail(
-        _session: object, _job: Job, lease: datetime, _code: str
-    ) -> bool:
+    async def fail(_session: object, _job: Job, lease: datetime, _code: str) -> bool:
         failed_leases.append(lease)
         return False
 
