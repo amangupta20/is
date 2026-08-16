@@ -4,6 +4,7 @@ version: 0.1.0
 requirements: httpx
 """
 
+import base64
 import hashlib
 import hmac
 import json
@@ -23,12 +24,25 @@ class Tools:
     class Valves(BaseModel):
         """Administrator-managed connection settings."""
 
-        assistant_core_url: str = Field(default="http://assistant-core:8080")
+        assistant_core_url: str = Field(
+            default="http://assistant-core:8080",
+            description="Assistant Core API backend URL",
+        )
         hmac_secret: str = Field(
             default="development-hmac-secret-change-me",
+            description="Shared HMAC secret matching ASSISTANT_HMAC_SECRET",
             json_schema_extra={"input": {"type": "password"}},
         )
-        timeout_seconds: float = Field(default=8.0, ge=0.5, le=30.0)
+        open_webui_url: str = Field(
+            default="http://localhost:8080",
+            description="Open WebUI backend URL for native file uploads",
+        )
+        open_webui_api_key: str = Field(
+            default="",
+            description="Open WebUI API Key for native file uploads (optional if user token is active)",
+            json_schema_extra={"input": {"type": "password"}},
+        )
+        timeout_seconds: float = Field(default=15.0, ge=0.5, le=60.0)
 
     def __init__(self) -> None:
         """Initialise the Tool with administrator-configured valves."""
@@ -63,30 +77,69 @@ class Tools:
         response.raise_for_status()
         return response.json()
 
-    def _format_result(self, title: str, ext: str, icon: str, res: dict[str, Any]) -> str:
-        """Format a rich markdown response with direct in-chat download capabilities."""
+    async def _upload_to_open_webui(
+        self, filename: str, file_bytes: bytes, mime_type: str, user: dict | None
+    ) -> str | None:
+        """Upload generated binary directly to Open WebUI's native /api/v1/files/ store."""
+        token = ""
+        if isinstance(user, Mapping) and user.get("token"):
+            token = str(user["token"])
+        elif self.valves.open_webui_api_key:
+            token = self.valves.open_webui_api_key
+
+        if not token or not self.valves.open_webui_url:
+            return None
+
+        try:
+            url = f"{self.valves.open_webui_url.rstrip('/')}/api/v1/files/"
+            headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+            files = {"file": (filename, file_bytes, mime_type)}
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.post(url, headers=headers, files=files)
+                if res.status_code == 200:
+                    data = res.json()
+                    file_id = data.get("id")
+                    if file_id:
+                        return f"/api/v1/files/{file_id}/content"
+        except Exception:  # noqa: S110, BLE001
+            pass
+        return None
+
+    async def _format_result(
+        self,
+        title: str,
+        ext: str,
+        icon: str,
+        res: dict[str, Any],
+        user: dict | None = None,
+    ) -> str:
+        """Format a clean markdown response with native Open WebUI download links."""
         art_id = res.get("id")
         v_num = res.get("current_version_num", 1)
         mime_type = res.get("mime_type") or "application/octet-stream"
         b64 = res.get("base64_data")
         filename = f"{title}.{ext}" if not title.endswith(f".{ext}") else title
 
+        download_link = None
+        if b64:
+            try:
+                b64_padded = b64 + "=" * (-len(b64) % 4)
+                raw_bytes = base64.b64decode(b64_padded)
+                openwebui_link = await self._upload_to_open_webui(filename, raw_bytes, mime_type, user)
+                if openwebui_link:
+                    download_link = openwebui_link
+            except Exception:  # noqa: S110, BLE001
+                pass
+
+        if not download_link:
+            download_link = res.get("download_url") or f"/v1/artifacts/{art_id}/download"
+
         lines = [
             f"{icon} **{ext.upper()} Created**: `{filename}` (v{v_num})",
             "",
+            f"- **Download**: [⬇️ Download `{filename}`]({download_link})",
+            f"- **Artifact ID**: `{art_id}`",
         ]
-
-        if b64:
-            data_uri = f"data:{mime_type};base64,{b64}"
-            lines.append(f"- **Direct Download**: [⬇️ Click to Download `{filename}`]({data_uri})")
-
-        dl_url = res.get("download_url")
-        if dl_url:
-            lines.append(f"- **Server URL**: [🔗 `{dl_url}`]({dl_url})")
-
-        lines.append(f"- **Artifact ID**: `{art_id}`")
-        lines.append("")
-        lines.append("*The download link works directly inside this browser window with no VPN or internal network access required.*")
         return "\n".join(lines)
 
     async def create_spreadsheet(
@@ -115,7 +168,7 @@ class Tools:
             if not isinstance(res, dict):
                 return self._UNAVAILABLE
 
-            return self._format_result(title=title.strip(), ext="xlsx", icon="📊", res=res)
+            return await self._format_result(title=title.strip(), ext="xlsx", icon="📊", res=res, user=__user__)
         except httpx.HTTPStatusError as exc:
             try:
                 detail = exc.response.json().get("detail", exc.response.text)
@@ -153,7 +206,7 @@ class Tools:
             if not isinstance(res, dict):
                 return self._UNAVAILABLE
 
-            return self._format_result(title=title.strip(), ext="docx", icon="📄", res=res)
+            return await self._format_result(title=title.strip(), ext="docx", icon="📄", res=res, user=__user__)
         except httpx.HTTPStatusError as exc:
             try:
                 detail = exc.response.json().get("detail", exc.response.text)
@@ -191,7 +244,7 @@ class Tools:
             if not isinstance(res, dict):
                 return self._UNAVAILABLE
 
-            return self._format_result(title=title.strip(), ext="pptx", icon="📽️", res=res)
+            return await self._format_result(title=title.strip(), ext="pptx", icon="📽️", res=res, user=__user__)
         except httpx.HTTPStatusError as exc:
             try:
                 detail = exc.response.json().get("detail", exc.response.text)
