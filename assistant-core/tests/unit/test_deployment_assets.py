@@ -175,6 +175,10 @@ def test_compose_builds_one_private_local_image_without_host_ports() -> None:
             "ASSISTANT_EMBEDDING_MODEL",
             "ASSISTANT_EMBEDDING_DIMENSION",
             "ASSISTANT_EMBEDDING_TIMEOUT_SECONDS",
+            "ASSISTANT_TASK_MODEL_BASE_URL",
+            "ASSISTANT_TASK_MODEL_API_KEY",
+            "ASSISTANT_TASK_MODEL_MODEL",
+            "ASSISTANT_TASK_MODEL_TIMEOUT_SECONDS",
         ):
             assert f"{variable}: ${{{variable}" in sections[service]
     assert "ports:" not in compose
