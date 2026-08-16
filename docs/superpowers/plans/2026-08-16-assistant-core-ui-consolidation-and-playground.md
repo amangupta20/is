@@ -128,3 +128,27 @@ ASSISTANT_EMBEDDING_DIMENSION=1536
 
 ### 5.4 🎛️ Persona & Dynamic Directives Manager in Dashboard
 - Dashboard UI tab to configure system prompt directives, tone presets, and retrieval formatting rules live without redeploying code.
+
+---
+
+## 6. Homelab Management, Security Auditing & Komodo Migration
+
+### 6.1 🛡️ Execution & Network Topology
+- **Isolated Open Terminal VM**: Dedicated VM in the network functioning as a security-testing and execution jumpbox. Accessible via explicit SSH keys only.
+- **Red Team / Blast Radius Isolation**: Emulates a compromised edge service to test internal lateral movement, network segmentation, and service hardening without exposing the primary host.
+
+### 6.2 🦎 Portainer to Komodo Migration & Custom Open WebUI Model
+- **Dedicated Homelab Model Persona**: Custom Open WebUI model loaded with homelab system prompts, skills, and tools for Docker Compose architectures.
+- **GitOps Stack Repository**: GitHub MCP connected to a dedicated Compose stack repo (`homelab-stacks`).
+- **Komodo REST API Integration**: Tool/adapter to query stack statuses, fetch container health and runtime logs, and trigger rolling stack deployments directly from chat.
+- **Hardened Compose Templates**: Automation to migrate Portainer stacks into standardized Compose definitions (`read_only: true`, `cap_drop: ALL`, `no-new-privileges: true`, explicit healthchecks).
+
+### 6.3 🔍 Automated Security Auditing Toolset
+- **Trivy / Checkov**: Static analysis and CVE vulnerability scanning on Dockerfiles and Compose configurations before deployment.
+- **Nmap / Rustscan**: Periodic internal and external port exposure auditing against Traefik entrypoints.
+- **Testssl.sh / SSL Checks**: Verification of TLS ciphers, HSTS headers, and reverse-proxy certificates.
+- **Gitleaks**: Automated secret scanning to prevent API keys and `.env` credentials from being committed to Git.
+
+### 6.4 🎛️ Confirmation & Action Policy
+- **Autonomous Tier**: Read actions, log inspection, container stats, security scans, Compose linting, and diff generation.
+- **Confirmation-Gated Tier**: Stack deployments, service restarts, live credential modifications, network reconfigurations, and volume/prune operations.
