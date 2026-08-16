@@ -13,8 +13,6 @@ def test_settings_have_development_defaults() -> None:
     assert settings.environment == "development"
     assert settings.database_url == "postgresql://postgres:postgres@localhost:5432/assistant_core"
     assert settings.hmac_secret == "development-hmac-secret-change-me"
-    assert settings.admin_password is None
-    assert settings.effective_admin_password == "development-hmac-secret-change-me"
     assert settings.request_clock_skew_seconds == 60
     assert settings.context_timeout_seconds == 1.5
     assert settings.embedding_base_url is None
@@ -24,21 +22,6 @@ def test_settings_have_development_defaults() -> None:
     assert settings.embedding_timeout_seconds == 15
     assert settings.log_level == "INFO"
     assert settings.otlp_endpoint is None
-
-
-def test_effective_admin_password_prefers_explicit_password() -> None:
-    """Explicit admin password takes precedence over hmac secret."""
-    settings = Settings(admin_password="my-admin-password")
-    assert settings.admin_password == "my-admin-password"
-    assert settings.effective_admin_password == "my-admin-password"
-
-
-def test_empty_admin_password_converts_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Empty string environment variable converts to None and falls back to HMAC secret."""
-    monkeypatch.setenv("ASSISTANT_ADMIN_PASSWORD", "   ")
-    settings = Settings()
-    assert settings.admin_password is None
-    assert settings.effective_admin_password == settings.hmac_secret
 
 
 def test_settings_ignore_unrelated_environment_variables(monkeypatch: pytest.MonkeyPatch) -> None:

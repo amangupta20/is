@@ -19,7 +19,6 @@ class Settings(BaseSettings):
     environment: str = "development"
     database_url: str = "postgresql://postgres:postgres@localhost:5432/assistant_core"
     hmac_secret: str = DEVELOPMENT_HMAC_SECRET
-    admin_password: str | None = None
     request_clock_skew_seconds: int = 60
     context_timeout_seconds: float = 1.5
     task_model_base_url: str | None = Field(default=None, min_length=1, max_length=2_048)
@@ -34,13 +33,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     otlp_endpoint: str | None = None
 
-    @property
-    def effective_admin_password(self) -> str:
-        """Return admin password if configured, otherwise fall back to HMAC secret."""
-        return self.admin_password or self.hmac_secret
-
     @field_validator(
-        "admin_password",
         "task_model_base_url",
         "task_model_model",
         "embedding_base_url",
@@ -72,9 +65,6 @@ class Settings(BaseSettings):
                 "production requires a non-development HMAC secret of at least 32 bytes"
             )
         return self
-
-
-AssistantSettings = Settings
 
 
 def get_settings() -> Settings:

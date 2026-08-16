@@ -176,15 +176,6 @@ class Tools:
                         return self._UNAVAILABLE
                     label = f"conversation/{role} evidence"
                     provenance = f" (chat {chat_id}, message {message_id})"
-                elif source_type == "file":
-                    if (
-                        role is not None
-                        or type(chat_id) is not str
-                        or type(message_id) is not str
-                    ):
-                        return self._UNAVAILABLE
-                    label = "file evidence"
-                    provenance = f" (file {chat_id}, chunk {message_id})"
                 else:
                     return self._UNAVAILABLE
                 lines.append(
@@ -283,133 +274,6 @@ class Tools:
                 f"{'yes' if response['full_source_available'] else 'no'}"
             )
         except Exception:  # noqa: BLE001 - optional memory read must fail open.
-            return self._UNAVAILABLE
-
-    async def list_memories(
-        self,
-        category: str = "",
-        status: str = "active",
-        limit: int = 50,
-        __user__: dict | None = None,
-        __metadata__: dict | None = None,
-    ) -> str:
-        """List durable memories (preferences, facts, instructions, etc.) with their IDs and statements."""
-        try:
-            native_user_id = self._optional_id(__user__, "id") or "unknown"
-            status_val = status.strip().lower() if isinstance(status, str) else "active"
-            if status_val not in {"active", "archived", "all"}:
-                status_val = "active"
-            cat_val = (
-                category.strip()
-                if isinstance(category, str) and category.strip()
-                else None
-            )
-            lim_val = limit if isinstance(limit, int) and 1 <= limit <= 500 else 50
-            payload: dict[str, object] = {
-                "native_user_id": native_user_id,
-                "status": status_val,
-                "category": cat_val,
-                "limit": lim_val,
-            }
-            data = await self._signed_json_post("/v1/personal-context/list", payload)
-            if (
-                not isinstance(data, dict)
-                or "memories" not in data
-                or not isinstance(data["memories"], list)
-            ):
-                return self._UNAVAILABLE
-            memories = data["memories"]
-            if not memories:
-                return "No memories found matching criteria."
-            lines: list[str] = []
-            for item in memories:
-                if not isinstance(item, dict):
-                    return self._UNAVAILABLE
-                mem_id = item.get("id")
-                cat = item.get("category")
-                stmt = item.get("statement")
-                state = item.get("state") or item.get("status")
-                created = item.get("created_at")
-                if not mem_id or not cat or not stmt or not state or not created:
-                    return self._UNAVAILABLE
-                date_str = str(created)[:10]
-                line = f"- [{cat}] {mem_id}: {stmt} (created {date_str} | state: {state})"
-                quote = item.get("evidence_quote")
-                if quote:
-                    line += f'\n  Evidence: "{quote}"'
-                lines.append(line)
-            return "\n".join(lines)
-        except Exception:  # noqa: BLE001 - optional memory list must fail open.
-            return self._UNAVAILABLE
-
-    async def archive_memory(
-        self,
-        memory_id: str,
-        __user__: dict | None = None,
-        __metadata__: dict | None = None,
-    ) -> str:
-        """Archive an outdated or incorrect memory by its ID so it is no longer used in future context."""
-        try:
-            clean_id = memory_id.strip() if isinstance(memory_id, str) else ""
-            if not clean_id:
-                return self._UNAVAILABLE
-            payload: dict[str, object] = {
-                "native_user_id": self._optional_id(__user__, "id") or "unknown",
-                "memory_id": clean_id,
-            }
-            data = await self._signed_json_post("/v1/personal-context/archive", payload)
-            if not isinstance(data, dict) or data.get("status") != "ok":
-                return self._UNAVAILABLE
-            return f"Successfully archived memory {memory_id}."
-        except Exception:  # noqa: BLE001 - optional memory archive must fail open.
-            return self._UNAVAILABLE
-
-    async def merge_memories(
-        self,
-        source_memory_ids: str,
-        new_statement: str,
-        category: str = "preference",
-        __user__: dict | None = None,
-        __metadata__: dict | None = None,
-    ) -> str:
-        """Merge multiple memories into a single consolidated statement, archiving the originals."""
-        try:
-            clean_statement = (
-                new_statement.strip() if isinstance(new_statement, str) else ""
-            )
-            clean_category = (
-                category.strip()
-                if isinstance(category, str) and category.strip()
-                else "preference"
-            )
-            if not isinstance(source_memory_ids, str) or not clean_statement:
-                return self._UNAVAILABLE
-            ids_list = [
-                s.strip()
-                for s in source_memory_ids.replace(",", " ").split()
-                if s.strip()
-            ]
-            if len(ids_list) < 2:
-                return self._UNAVAILABLE
-            payload: dict[str, object] = {
-                "native_user_id": self._optional_id(__user__, "id") or "unknown",
-                "source_memory_ids": ids_list,
-                "target_category": clean_category,
-                "new_statement": clean_statement,
-            }
-            data = await self._signed_json_post("/v1/personal-context/merge", payload)
-            if (
-                not isinstance(data, dict)
-                or data.get("status") != "ok"
-                or "created_id" not in data
-            ):
-                return self._UNAVAILABLE
-            created_id = str(data["created_id"])
-            return (
-                f"Successfully merged {len(ids_list)} memories into new {category} "
-                f"memory {created_id}: '{new_statement}'."
-            )
-        except Exception:  # noqa: BLE001 - optional memory merge must fail open.
             return self._UNAVAILABLE
 
     async def assistant_status(
@@ -541,20 +405,11 @@ class Tools:
                 return self._UNAVAILABLE
             last = data.get("last_indexed_at")
             last_str = str(last) if last else "never"
-            file_part = ""
-            if "total_file_segments" in data:
-                file_part = (
-                    f", files {data['total_file_segments']} "
-                    f"(embedded {data.get('embedded_file_segments', 0)}, "
-                    f"active refs {data.get('active_file_references', 0)}, "
-                    f"tombstoned {data.get('tombstoned_file_references', 0)})"
-                )
             return (
                 f"Index stats: segments {data['total_segments']} "
                 f"(embedded {data['embedded_segments']}, lexical {data['lexical_segments']}), "
                 f"references {data['total_references']} "
-                f"(active {data['active_references']}, tombstoned {data['tombstoned_references']})"
-                f"{file_part}, "
+                f"(active {data['active_references']}, tombstoned {data['tombstoned_references']}), "
                 f"jobs queued {data['queued_jobs']} dead {data['dead_jobs']}, "
                 f"last indexed {last_str}."
             )
