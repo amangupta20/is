@@ -39,8 +39,12 @@ class Tools:
         )
         open_webui_api_key: str = Field(
             default="",
-            description="Open WebUI API Key for native file uploads (optional if user token is active)",
+            description="Open WebUI API Key (from Settings -> Account -> API Keys) for native file uploads",
             json_schema_extra={"input": {"type": "password"}},
+        )
+        public_assistant_url: str = Field(
+            default="",
+            description="Optional public Assistant Core URL (e.g. https://mem.app.amhl.ovh) to replace internal docker URLs in links",
         )
         timeout_seconds: float = Field(default=15.0, ge=0.5, le=60.0)
 
@@ -54,6 +58,28 @@ class Tools:
             return None
         identifier = container.get(key)
         return None if identifier is None else str(identifier)
+
+    def _extract_openwebui_token(self, user: dict | None, request: object | None) -> str:
+        """Extract user or admin token to authorize Open WebUI file uploads."""
+        if self.valves.open_webui_api_key:
+            return self.valves.open_webui_api_key.strip()
+
+        if isinstance(user, Mapping):
+            for k in ("token", "api_key", "jwt"):
+                if user.get(k):
+                    return str(user[k]).strip()
+
+        if request is not None:
+            headers = getattr(request, "headers", None)
+            if isinstance(headers, Mapping):
+                auth = headers.get("authorization") or headers.get("Authorization")
+                if auth and str(auth).startswith("Bearer "):
+                    return str(auth)[7:].strip()
+            cookies = getattr(request, "cookies", None)
+            if isinstance(cookies, Mapping) and cookies.get("token"):
+                return str(cookies["token"]).strip()
+
+        return ""
 
     async def _signed_json_post(self, path: str, payload: dict[str, object]) -> Any:
         """POST one JSON body over the signed Assistant Core transport."""
@@ -78,15 +104,15 @@ class Tools:
         return response.json()
 
     async def _upload_to_open_webui(
-        self, filename: str, file_bytes: bytes, mime_type: str, user: dict | None
+        self,
+        filename: str,
+        file_bytes: bytes,
+        mime_type: str,
+        user: dict | None,
+        request: object | None = None,
     ) -> str | None:
         """Upload generated binary directly to Open WebUI's native /api/v1/files/ store."""
-        token = ""
-        if isinstance(user, Mapping) and user.get("token"):
-            token = str(user["token"])
-        elif self.valves.open_webui_api_key:
-            token = self.valves.open_webui_api_key
-
+        token = self._extract_openwebui_token(user, request)
         if not token or not self.valves.open_webui_url:
             return None
 
@@ -112,6 +138,7 @@ class Tools:
         icon: str,
         res: dict[str, Any],
         user: dict | None = None,
+        request: object | None = None,
     ) -> str:
         """Format a clean markdown response with native Open WebUI download links."""
         art_id = res.get("id")
@@ -125,14 +152,18 @@ class Tools:
             try:
                 b64_padded = b64 + "=" * (-len(b64) % 4)
                 raw_bytes = base64.b64decode(b64_padded)
-                openwebui_link = await self._upload_to_open_webui(filename, raw_bytes, mime_type, user)
+                openwebui_link = await self._upload_to_open_webui(filename, raw_bytes, mime_type, user, request)
                 if openwebui_link:
                     download_link = openwebui_link
             except Exception:  # noqa: S110, BLE001
                 pass
 
         if not download_link:
-            download_link = res.get("download_url") or f"/v1/artifacts/{art_id}/download"
+            raw_dl = res.get("download_url") or f"/v1/artifacts/{art_id}/download"
+            if self.valves.public_assistant_url:
+                download_link = f"{self.valves.public_assistant_url.rstrip('/')}/v1/artifacts/{art_id}/download"
+            else:
+                download_link = raw_dl
 
         lines = [
             f"{icon} **{ext.upper()} Created**: `{filename}` (v{v_num})",
@@ -147,6 +178,7 @@ class Tools:
         title: str,
         sheets_json: str,
         __user__: dict | None = None,
+        __request__: object | None = None,
     ) -> str:
         """Create a styled multi-tab Excel spreadsheet (.xlsx) with auto-widths, formulas, and number formats.
         sheets_json must be a JSON array of sheets: [{"name": "Sheet1", "headers": ["A", "B"], "rows": [[1, 2]], "column_types": ["text", "currency"], "totals_row": true}]
@@ -168,7 +200,9 @@ class Tools:
             if not isinstance(res, dict):
                 return self._UNAVAILABLE
 
-            return await self._format_result(title=title.strip(), ext="xlsx", icon="📊", res=res, user=__user__)
+            return await self._format_result(
+                title=title.strip(), ext="xlsx", icon="📊", res=res, user=__user__, request=__request__
+            )
         except httpx.HTTPStatusError as exc:
             try:
                 detail = exc.response.json().get("detail", exc.response.text)
@@ -184,6 +218,7 @@ class Tools:
         sections_json: str,
         subtitle: str = "",
         __user__: dict | None = None,
+        __request__: object | None = None,
     ) -> str:
         """Create a styled Word document (.docx) with typography, callouts, and data tables.
         sections_json must be a JSON array of sections: [{"heading": "Section 1", "level": 1, "paragraphs": ["text..."], "bullets": ["item..."], "callout": "note..."}]
@@ -206,7 +241,9 @@ class Tools:
             if not isinstance(res, dict):
                 return self._UNAVAILABLE
 
-            return await self._format_result(title=title.strip(), ext="docx", icon="📄", res=res, user=__user__)
+            return await self._format_result(
+                title=title.strip(), ext="docx", icon="📄", res=res, user=__user__, request=__request__
+            )
         except httpx.HTTPStatusError as exc:
             try:
                 detail = exc.response.json().get("detail", exc.response.text)
@@ -222,6 +259,7 @@ class Tools:
         slides_json: str,
         subtitle: str = "",
         __user__: dict | None = None,
+        __request__: object | None = None,
     ) -> str:
         """Create a 16:9 widescreen PowerPoint presentation (.pptx) deck.
         slides_json must be a JSON array of slides: [{"title": "Slide Title", "layout": "bullets", "bullets": ["..."]}]
@@ -244,7 +282,9 @@ class Tools:
             if not isinstance(res, dict):
                 return self._UNAVAILABLE
 
-            return await self._format_result(title=title.strip(), ext="pptx", icon="📽️", res=res, user=__user__)
+            return await self._format_result(
+                title=title.strip(), ext="pptx", icon="📽️", res=res, user=__user__, request=__request__
+            )
         except httpx.HTTPStatusError as exc:
             try:
                 detail = exc.response.json().get("detail", exc.response.text)

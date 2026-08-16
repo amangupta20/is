@@ -126,6 +126,41 @@ def test_create_document_tool_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "http://assistant-core:8080/v1/artifacts/22222222-2222-2222-2222-222222222222/download" in result
 
 
+def test_create_document_tool_with_public_assistant_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+    tools = module.Tools()
+    tools.valves.hmac_secret = "test-secret"
+    tools.valves.open_webui_url = ""  # No Open WebUI upload
+    tools.valves.public_assistant_url = "https://mem.app.amhl.ovh"
+
+    capture: dict[str, Any] = {}
+    mock_resp = {
+        "id": "44444444-4444-4444-4444-444444444444",
+        "current_version_num": 1,
+        "base64_data": "UEsDBBQAAAA=",
+        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "download_url": "http://assistant-core:8080/v1/artifacts/44444444-4444-4444-4444-444444444444/download",
+    }
+
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda timeout: _RecordingClient(capture, timeout, mock_resp),
+    )
+
+    sections_json = json.dumps([{"heading": "Executive Summary", "paragraphs": ["All systems normal."]}])
+    result = asyncio.run(
+        tools.create_document(
+            title="Public Spec",
+            sections_json=sections_json,
+            __user__={"id": "user-123"},
+        )
+    )
+
+    assert "DOCX Created" in result
+    assert "https://mem.app.amhl.ovh/v1/artifacts/44444444-4444-4444-4444-444444444444/download" in result
+
+
 def test_create_presentation_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     module = _module()
     tools = module.Tools()
