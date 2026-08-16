@@ -2,6 +2,7 @@
 
 from assistant_core.conversation.models import ConversationReference, ConversationSegment
 from assistant_core.events.models import EventInbox
+from assistant_core.files.models import FileReference, FileSegment
 from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
 from assistant_core.memory.models import ChatProfileSnapshot, MemoryEvidence, MemoryRecord
@@ -13,6 +14,8 @@ __all__ = [
     "ConversationReference",
     "ConversationSegment",
     "EventInbox",
+    "FileReference",
+    "FileSegment",
     "Job",
     "MemoryEvidence",
     "MemoryRecord",
