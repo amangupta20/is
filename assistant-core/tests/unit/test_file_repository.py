@@ -169,3 +169,30 @@ def test_read_file_passage_context() -> None:
     assert ctx.content == "Middle content"
     assert ctx.previous_content == "Previous chunk content"
     assert ctx.next_content == "Next chunk content"
+
+
+def test_get_full_file_content() -> None:
+    from assistant_core.files.repository import get_full_file_content
+
+    user_id = uuid.uuid4()
+    rows = [
+        ("file-xyz", "specs.md", "text/markdown", 0, "# Overview\nSystem specs."),
+        ("file-xyz", "specs.md", "text/markdown", 1, "## Details\nPostgreSQL pgvector storage."),
+    ]
+    session = FakeSession([FakeResult(rows=rows)])
+
+    async def exercise() -> object:
+        return await get_full_file_content(
+            session,  # type: ignore[arg-type]
+            user_id=user_id,
+            file_id_or_name="specs.md",
+        )
+
+    res = anyio.run(exercise)
+    assert res is not None
+    assert res.native_file_id == "file-xyz"
+    assert res.filename == "specs.md"
+    assert res.total_chunks == 2
+    assert "# Overview" in res.content
+    assert "## Details" in res.content
+

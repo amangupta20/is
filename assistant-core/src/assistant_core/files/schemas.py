@@ -57,3 +57,17 @@ class FilePassageContext(BaseModel):
     content: str
     previous_content: str | None = None
     next_content: str | None = None
+
+
+class FullFileContent(BaseModel):
+    """Complete reconstructed document content from ordered segments."""
+
+    model_config = ConfigDict(frozen=True)
+
+    native_file_id: str
+    filename: str
+    mime_type: str
+    total_chunks: int
+    total_characters: int
+    content: str
+

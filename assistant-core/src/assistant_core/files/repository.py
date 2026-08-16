@@ -14,6 +14,7 @@ from assistant_core.files.schemas import (
     FileHit,
     FileMaterializationResult,
     FilePassageContext,
+    FullFileContent,
 )
 from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
@@ -386,6 +387,59 @@ async def read_file_passage_context(
         content=content,
         previous_content=prev_content,
         next_content=next_content,
+    )
+
+
+async def get_full_file_content(
+    session: AsyncSession,
+    *,
+    file_id_or_name: str,
+    native_user_id: str | None = None,
+    user_id: uuid.UUID | None = None,
+) -> FullFileContent | None:
+    """Retrieve and reconstruct full document content in chunk order."""
+    user_filters = []
+    if user_id is not None:
+        user_filters.append(FileReference.user_id == user_id)
+    elif native_user_id is not None:
+        user_filters.append(UserIdentity.native_user_id == native_user_id)
+
+    stmt = (
+        select(
+            FileReference.native_file_id,
+            FileReference.filename,
+            FileReference.mime_type,
+            FileReference.chunk_ordinal,
+            FileSegment.content,
+        )
+        .join(FileSegment, FileReference.segment_id == FileSegment.id)
+    )
+    if native_user_id is not None and user_id is None:
+        stmt = stmt.join(UserIdentity, UserIdentity.id == FileReference.user_id)
+    stmt = (
+        stmt.where(
+            *user_filters,
+            FileReference.tombstoned_at.is_(None),
+            (FileReference.native_file_id == file_id_or_name)
+            | (FileReference.filename == file_id_or_name),
+        )
+        .order_by(FileReference.chunk_ordinal.asc())
+    )
+    rows = (await session.execute(stmt)).all()
+    if not rows:
+        return None
+
+    native_file_id, filename, mime_type, _, _ = rows[0]
+    ordered_chunks = [str(row[4]) for row in rows]
+    combined_content = "\n\n".join(ordered_chunks)
+
+    return FullFileContent(
+        native_file_id=native_file_id,
+        filename=filename,
+        mime_type=mime_type,
+        total_chunks=len(rows),
+        total_characters=len(combined_content),
+        content=combined_content,
     )
 
 

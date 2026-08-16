@@ -457,3 +457,36 @@ class Tools:
             return "\n".join(lines)
         except Exception:  # noqa: BLE001
             return self._UNAVAILABLE
+
+    async def read_full_document(
+        self,
+        file_id_or_name: str,
+        __user__: dict | None = None,
+    ) -> str:
+        """Fetch and reconstruct the complete full text of an indexed document."""
+        try:
+            payload = {
+                "native_user_id": self._optional_id(__user__, "id") or "unknown",
+                "file_id_or_name": file_id_or_name.strip(),
+            }
+            response = await self._signed_json_post("/v1/personal-context/file-content", payload)
+            if not isinstance(response, dict):
+                return self._UNAVAILABLE
+
+            filename = response.get("filename") or "document"
+            file_id = response.get("native_file_id") or file_id_or_name
+            total_chunks = response.get("total_chunks", 0)
+            total_chars = response.get("total_characters", 0)
+            content = response.get("content", "")
+
+            if not isinstance(content, str) or not content.strip():
+                return f"Document '{file_id_or_name}' has no extracted content."
+
+            return (
+                f"📄 Full Document: {filename} (ID: {file_id})\n"
+                f"📊 Chunks: {total_chunks} | Length: {total_chars} characters\n"
+                f"MIME type: {response.get('mime_type') or 'unknown'}\n\n"
+                f"---\n{content}\n---"
+            )
+        except Exception:  # noqa: BLE001
+            return f"Document '{file_id_or_name}' could not be found or is unavailable."

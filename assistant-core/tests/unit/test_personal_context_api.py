@@ -176,6 +176,7 @@ def test_search_previews_correct_user_memory_then_read_rejects_foreign_source() 
                 "source_native_chat_id": None,
                 "source_native_message_id": None,
                 "filename": None,
+                "native_file_id": None,
                 "header_path": None,
                 "chunk_ordinal": None,
             }
@@ -195,6 +196,7 @@ def test_search_previews_correct_user_memory_then_read_rejects_foreign_source() 
         "source_native_chat_id": "chat-1",
         "source_native_message_id": "message-1",
         "filename": None,
+        "native_file_id": None,
         "header_path": None,
         "chunk_ordinal": None,
         "previous_chunk": None,
@@ -336,6 +338,7 @@ def test_hybrid_conversation_hit_reads_bounded_neighbors_and_fails_open_lexicall
                 "source_native_chat_id": "chat-a",
                 "source_native_message_id": "assistant-a",
                 "filename": None,
+                "native_file_id": None,
                 "header_path": None,
                 "chunk_ordinal": None,
             }
@@ -352,6 +355,7 @@ def test_hybrid_conversation_hit_reads_bounded_neighbors_and_fails_open_lexicall
         "source_native_chat_id": "chat-a",
         "source_native_message_id": "assistant-a",
         "filename": None,
+        "native_file_id": None,
         "header_path": None,
         "chunk_ordinal": None,
         "previous_chunk": None,
@@ -492,4 +496,62 @@ def test_search_and_read_file_passages(monkeypatch: pytest.MonkeyPatch) -> None:
     assert read_data["filename"] == "system-architecture.pdf"
     assert read_data["previous_chunk"] == "Previous chunk content."
     assert read_data["next_chunk"] == "Next chunk content."
+    assert read_data["full_source_available"] is True
+
+
+def test_read_full_document_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reconstructing the full document succeeds and fails for unknown files."""
+    from assistant_core.api.routes import personal_context
+    from assistant_core.files.schemas import FullFileContent
+
+    full_doc = FullFileContent(
+        native_file_id="file-123",
+        filename="overview.md",
+        mime_type="text/markdown",
+        total_chunks=3,
+        total_characters=150,
+        content="# Section 1\nContent 1\n\n# Section 2\nContent 2",
+    )
+
+    async def mock_get_full_file(
+        _session: object, *, file_id_or_name: str, native_user_id: str | None = None, **_kwargs: object
+    ) -> FullFileContent | None:
+        if native_user_id == "user-1" and file_id_or_name in {"file-123", "overview.md"}:
+            return full_doc
+        return None
+
+    monkeypatch.setattr(personal_context, "get_full_file_content", mock_get_full_file)
+
+    class FakeSession:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    app = create_app(Settings(hmac_secret="a" * 32))
+    app.state.session_factory = lambda: FakeSession()
+
+    success = anyio.run(
+        lambda: _post(
+            app,
+            "/v1/personal-context/file-content",
+            {"native_user_id": "user-1", "file_id_or_name": "overview.md"},
+        )
+    )
+    assert success.status_code == 200
+    data = success.json()
+    assert data["filename"] == "overview.md"
+    assert data["total_chunks"] == 3
+    assert "# Section 1" in data["content"]
+
+    missing = anyio.run(
+        lambda: _post(
+            app,
+            "/v1/personal-context/file-content",
+            {"native_user_id": "user-1", "file_id_or_name": "nonexistent.pdf"},
+        )
+    )
+    assert missing.status_code == 404
+
 

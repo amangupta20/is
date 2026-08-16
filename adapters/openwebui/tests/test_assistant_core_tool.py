@@ -367,3 +367,39 @@ def test_show_file_index_status_and_failed_jobs(monkeypatch: pytest.MonkeyPatch)
     assert "Found 1 failed background jobs:" in dead_out
     assert "file_fetch_failed_404" in dead_out
 
+
+def test_read_full_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+    responses = {
+        "/v1/personal-context/file-content": {
+            "native_file_id": "file-123",
+            "filename": "specs.pdf",
+            "mime_type": "application/pdf",
+            "total_chunks": 5,
+            "total_characters": 1200,
+            "content": "# System Architecture\nComplete text here.",
+        }
+    }
+
+    class _RoutingClient:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, url: str, **_kwargs: Any) -> _Response:
+            path = "/" + url.split("/", 3)[3]
+            return _Response(responses[path])
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda *, timeout: _RoutingClient())
+    tool = module.Tools()
+    tool.valves.hmac_secret = "tool-test-secret"
+    user = {"id": "user-1"}
+
+    out = asyncio.run(tool.read_full_document("specs.pdf", __user__=user))
+    assert "Full Document: specs.pdf" in out
+    assert "Chunks: 5" in out
+    assert "# System Architecture\nComplete text here." in out
+
+

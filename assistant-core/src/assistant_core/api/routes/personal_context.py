@@ -20,6 +20,7 @@ from assistant_core.conversation.repository import (
     search_conversation_context,
 )
 from assistant_core.files.repository import (
+    get_full_file_content,
     read_file_passage_context,
     search_file_passages,
 )
@@ -74,6 +75,7 @@ class PersonalContextPreview(BaseModel):
     source_native_chat_id: str | None
     source_native_message_id: str | None
     filename: str | None = None
+    native_file_id: str | None = None
     header_path: str | None = None
     chunk_ordinal: int | None = None
 
@@ -94,6 +96,28 @@ class PersonalContextReadRequest(BaseModel):
 
     native_user_id: str = Field(min_length=1, max_length=200)
     memory_source_id: uuid.UUID
+
+
+class PersonalContextFileRequest(BaseModel):
+    """Native identity and file identifier or filename."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    native_user_id: str = Field(min_length=1, max_length=200)
+    file_id_or_name: str = Field(min_length=1, max_length=500)
+
+
+class PersonalContextFileResponse(BaseModel):
+    """Full reconstructed document content."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    native_file_id: str
+    filename: str
+    mime_type: str
+    total_chunks: int
+    total_characters: int
+    content: str
 
 
 class PersonalContextNeighbor(BaseModel):
@@ -121,6 +145,7 @@ class PersonalContextReadResponse(BaseModel):
     source_native_chat_id: str | None
     source_native_message_id: str | None
     filename: str | None = None
+    native_file_id: str | None = None
     header_path: str | None = None
     chunk_ordinal: int | None = None
     previous_chunk: str | None = None
@@ -207,6 +232,7 @@ async def search_personal_context(
             source_native_chat_id=None,
             source_native_message_id=None,
             filename=fhit.filename,
+            native_file_id=fhit.native_file_id,
             header_path=fhit.header_path,
             chunk_ordinal=fhit.chunk_ordinal,
         )
@@ -310,12 +336,13 @@ async def read_personal_context(
                     source_native_chat_id=None,
                     source_native_message_id=None,
                     filename=file_result.filename,
+                    native_file_id=file_result.native_file_id,
                     header_path=file_result.header_path,
                     chunk_ordinal=file_result.chunk_ordinal,
                     previous_chunk=file_result.previous_content,
                     next_chunk=file_result.next_content,
                     neighbors=[],
-                    full_source_available=False,
+                    full_source_available=True,
                 )
     LOGGER.info(
         "personal_context_read_completed",
@@ -330,3 +357,41 @@ async def read_personal_context(
         content_chars=len(response.content),
     )
     return response
+
+
+@router.post(
+    "/file-content",
+    dependencies=[Depends(require_adapter_signature)],
+    response_model=PersonalContextFileResponse,
+)
+async def read_full_document(
+    body: PersonalContextFileRequest, request: Request
+) -> PersonalContextFileResponse:
+    """Retrieve and reconstruct full document content in chunk order."""
+    started_at = perf_counter()
+    async with request.app.state.session_factory() as session:
+        file_content = await get_full_file_content(
+            session,
+            native_user_id=body.native_user_id,
+            file_id_or_name=body.file_id_or_name,
+        )
+        if file_content is None:
+            raise HTTPException(status_code=404, detail="file not found")
+
+    LOGGER.info(
+        "personal_context_full_file_read_completed",
+        native_user_id=body.native_user_id,
+        native_file_id=file_content.native_file_id,
+        filename=file_content.filename,
+        total_chunks=file_content.total_chunks,
+        total_characters=file_content.total_characters,
+        duration_ms=round((perf_counter() - started_at) * 1000, 3),
+    )
+    return PersonalContextFileResponse(
+        native_file_id=file_content.native_file_id,
+        filename=file_content.filename,
+        mime_type=file_content.mime_type,
+        total_chunks=file_content.total_chunks,
+        total_characters=file_content.total_characters,
+        content=file_content.content,
+    )
