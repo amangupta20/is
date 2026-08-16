@@ -6,7 +6,6 @@
 .env
 .env.*
 deploy/.env.assistant
-**/*.html
 omp-session*.html
 **/__pycache__/
 *.py[cod]

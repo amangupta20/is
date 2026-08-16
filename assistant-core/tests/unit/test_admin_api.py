@@ -269,3 +269,22 @@ def test_admin_files_and_jobs_endpoints() -> None:
     retry_res = client.post(f"/v1/admin/jobs/{job_uuid}/retry")
     assert retry_res.status_code == 200
     assert retry_res.json()["status"] == "requeued"
+
+
+def test_dashboard_ui_served() -> None:
+    secret = "admin-secret-at-least-32-chars-long"
+    settings = Settings(hmac_secret=secret)
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        res = client.get("/")
+        assert res.status_code == 200
+        assert "Assistant Core" in res.text
+        assert "text/html" in res.headers.get("content-type", "")
+
+        js_res = client.get("/static/app.js")
+        assert js_res.status_code == 200
+
+        css_res = client.get("/static/styles.css")
+        assert css_res.status_code == 200
+

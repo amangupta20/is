@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Assistant Core | Brain & Memory Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Marked.js for markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Auth Screen -->
+    <div id="auth-screen" class="auth-overlay">
+      <div class="auth-card">
+        <div class="auth-header">
+          <div class="brand-icon">🧠</div>
+          <h1>Assistant Core</h1>
+          <p>Sign in to manage memories, documents, and worker telemetry.</p>
+        </div>
+        <form id="login-form">
+          <div class="form-group">
+            <label for="admin-token-input">Admin Token or HMAC Secret</label>
+            <input type="password" id="admin-token-input" placeholder="Enter ASSISTANT_ADMIN_TOKEN..." required autocomplete="current-password">
+          </div>
+          <button type="submit" id="login-btn" class="btn btn-primary btn-block">Sign In</button>
+          <div id="login-error" class="error-msg" style="display: none;"></div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Main Dashboard Layout -->
+    <div id="main-layout" class="layout-container" style="display: none;">
+      <!-- Sidebar -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="brand">
+            <span class="brand-icon-sm">🧠</span>
+            <div class="brand-text">
+              <span class="brand-title">Assistant Core</span>
+              <span class="status-pill status-online"><span class="dot"></span> Online</span>
+            </div>
+          </div>
+        </div>
+
+        <nav class="sidebar-nav">
+          <button class="nav-item active" data-tab="overview">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+            <span>Overview</span>
+          </button>
+          <button class="nav-item" data-tab="memories">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/><path d="M12 6v6l4 2"/></svg>
+            <span>Memories</span>
+            <span id="badge-memories" class="nav-badge">0</span>
+          </button>
+          <button class="nav-item" data-tab="files">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <span>Documents</span>
+            <span id="badge-files" class="nav-badge">0</span>
+          </button>
+          <button class="nav-item" data-tab="conversations">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span>Conversations</span>
+          </button>
+          <button class="nav-item" data-tab="jobs">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48 2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48 2.83-2.83"/></svg>
+            <span>Worker Jobs</span>
+            <span id="badge-dead-jobs" class="nav-badge badge-danger" style="display: none;">0 dead</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="user-info">
+            <div class="user-avatar">A</div>
+            <div class="user-details">
+              <span class="user-name">Admin Session</span>
+              <span class="user-role">Superuser</span>
+            </div>
+          </div>
+          <button id="logout-btn" class="btn-icon" title="Sign Out">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+          </button>
+        </div>
+      </aside>
+
+      <!-- Main Content Area -->
+      <main class="main-content">
+        <!-- Top Bar -->
+        <header class="topbar">
+          <div class="page-title-area">
+            <h1 id="page-title">Overview</h1>
+            <p id="page-subtitle">Real-time telemetry and memory status.</p>
+          </div>
+          <div class="topbar-actions">
+            <button id="refresh-btn" class="btn btn-secondary btn-sm">
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              Refresh
+            </button>
+            <div id="tab-specific-actions"></div>
+          </div>
+        </header>
+
+        <!-- Tab: Overview -->
+        <section id="tab-overview" class="tab-pane active">
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-icon icon-indigo">🧠</div>
+              <div class="stat-content">
+                <span class="stat-label">Active Memories</span>
+                <span id="stat-memories" class="stat-value">0</span>
+                <span class="stat-hint" id="stat-memories-sub">0 total stored</span>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon icon-emerald">📁</div>
+              <div class="stat-content">
+                <span class="stat-label">Active Documents</span>
+                <span id="stat-files" class="stat-value">0</span>
+                <span class="stat-hint" id="stat-files-sub">0 characters indexed</span>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon icon-cyan">🧩</div>
+              <div class="stat-content">
+                <span class="stat-label">Passage Segments</span>
+                <span id="stat-segments" class="stat-value">0</span>
+                <span class="stat-hint" id="stat-segments-sub">0 deduplicated refs</span>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon icon-amber">⚙️</div>
+              <div class="stat-content">
+                <span class="stat-label">Worker Queue</span>
+                <span id="stat-jobs" class="stat-value">0</span>
+                <span class="stat-hint" id="stat-jobs-sub">0 dead jobs</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="overview-sections">
+            <div class="card">
+              <div class="card-header">
+                <h3>Quick Actions</h3>
+              </div>
+              <div class="quick-actions-grid">
+                <button class="action-card" onclick="app.openNewMemoryModal()">
+                  <div class="action-icon">➕</div>
+                  <div class="action-text">
+                    <strong>Add Memory</strong>
+                    <span>Store a new user preference or fact</span>
+                  </div>
+                </button>
+                <button class="action-card" onclick="app.switchTab('files')">
+                  <div class="action-icon">📄</div>
+                  <div class="action-text">
+                    <strong>Inspect Documents</strong>
+                    <span>View full text and chunk trees</span>
+                  </div>
+                </button>
+                <button class="action-card" onclick="app.switchTab('jobs')">
+                  <div class="action-icon">🔄</div>
+                  <div class="action-text">
+                    <strong>Worker Diagnostics</strong>
+                    <span>Review failed jobs and retry</span>
+                  </div>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Tab: Memories -->
+        <section id="tab-memories" class="tab-pane">
+          <div class="table-controls">
+            <div class="search-box">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" id="memories-search" placeholder="Search statements, categories, users...">
+            </div>
+            <div class="filter-group">
+              <select id="memories-category-filter">
+                <option value="">All Categories</option>
+                <option value="preference">Preference</option>
+                <option value="fact">Fact</option>
+                <option value="constraint">Constraint</option>
+                <option value="profile">Profile</option>
+              </select>
+              <select id="memories-status-filter">
+                <option value="active">Active Only</option>
+                <option value="tombstoned">Tombstoned Only</option>
+                <option value="all">All States</option>
+              </select>
+              <button class="btn btn-primary btn-sm" onclick="app.openNewMemoryModal()">+ New Memory</button>
+            </div>
+          </div>
+
+          <div class="card table-card">
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Statement</th>
+                    <th>Category</th>
+                    <th>User</th>
+                    <th>Confidence</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="memories-table-body">
+                  <tr><td colspan="7" class="loading-cell">Loading memories...</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div id="memories-pagination" class="pagination-bar"></div>
+          </div>
+        </section>
+
+        <!-- Tab: Documents -->
+        <section id="tab-files" class="tab-pane">
+          <div class="table-controls">
+            <div class="search-box">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" id="files-search" placeholder="Search filename, file ID, user...">
+            </div>
+            <div class="filter-group">
+              <select id="files-status-filter">
+                <option value="active">Active Only</option>
+                <option value="tombstoned">Tombstoned Only</option>
+                <option value="all">All States</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="card table-card">
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Filename</th>
+                    <th>MIME Type</th>
+                    <th>User</th>
+                    <th>Chunks</th>
+                    <th>Size (Chars)</th>
+                    <th>Status</th>
+                    <th>Indexed</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="files-table-body">
+                  <tr><td colspan="8" class="loading-cell">Loading documents...</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div id="files-pagination" class="pagination-bar"></div>
+          </div>
+        </section>
+
+        <!-- Tab: Conversations -->
+        <section id="tab-conversations" class="tab-pane">
+          <div class="table-controls">
+            <div class="search-box">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" id="conversations-search" placeholder="Search conversations...">
+            </div>
+          </div>
+          <div class="card table-card">
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>User Prompt</th>
+                    <th>Assistant Response</th>
+                    <th>Chat ID</th>
+                    <th>User</th>
+                    <th>Occurred</th>
+                  </tr>
+                </thead>
+                <tbody id="conversations-table-body">
+                  <tr><td colspan="5" class="loading-cell">Loading conversations...</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div id="conversations-pagination" class="pagination-bar"></div>
+          </div>
+        </section>
+
+        <!-- Tab: Jobs -->
+        <section id="tab-jobs" class="tab-pane">
+          <div class="table-controls">
+            <div class="filter-group">
+              <select id="jobs-status-filter">
+                <option value="">All Job Statuses</option>
+                <option value="queued">Queued</option>
+                <option value="running">Running</option>
+                <option value="completed">Completed</option>
+                <option value="dead">Dead / Failed</option>
+              </select>
+            </div>
+          </div>
+          <div class="card table-card">
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Job ID</th>
+                    <th>Kind</th>
+                    <th>Status</th>
+                    <th>Attempts</th>
+                    <th>Last Error</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="jobs-table-body">
+                  <tr><td colspan="7" class="loading-cell">Loading background jobs...</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div id="jobs-pagination" class="pagination-bar"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- Modal: Memory Form -->
+    <div id="memory-modal" class="modal-overlay" style="display: none;">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h2 id="memory-modal-title">New Memory</h2>
+          <button class="modal-close" onclick="app.closeMemoryModal()">&times;</button>
+        </div>
+        <form id="memory-form">
+          <input type="hidden" id="memory-form-id">
+          <div class="form-group">
+            <label for="memory-user-input">User ID</label>
+            <input type="text" id="memory-user-input" required placeholder="e.g. user-1 or uuid">
+          </div>
+          <div class="form-group">
+            <label for="memory-statement-input">Memory Statement</label>
+            <textarea id="memory-statement-input" rows="3" required placeholder="User statement or preference..."></textarea>
+          </div>
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label for="memory-category-input">Category</label>
+              <select id="memory-category-input">
+                <option value="preference">Preference</option>
+                <option value="fact">Fact</option>
+                <option value="constraint">Constraint</option>
+                <option value="profile">Profile</option>
+              </select>
+            </div>
+            <div class="form-group flex-1">
+              <label for="memory-confidence-input">Confidence (0.0 - 1.0)</label>
+              <input type="number" id="memory-confidence-input" min="0" max="1" step="0.05" value="1.0">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="memory-evidence-input">Evidence Quote (Optional)</label>
+            <input type="text" id="memory-evidence-input" placeholder="Verbatim quote from chat...">
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="app.closeMemoryModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Memory</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Document Full Viewer & Chunk Inspector -->
+    <div id="file-modal" class="modal-overlay" style="display: none;">
+      <div class="modal-card modal-lg">
+        <div class="modal-header">
+          <div>
+            <h2 id="file-modal-title">Document Inspector</h2>
+            <p id="file-modal-subtitle" class="text-muted"></p>
+          </div>
+          <button class="modal-close" onclick="app.closeFileModal()">&times;</button>
+        </div>
+        <div class="modal-tabs">
+          <button class="tab-btn active" data-file-tab="rendered">Markdown Preview</button>
+          <button class="tab-btn" data-file-tab="raw">Raw Text</button>
+          <button class="tab-btn" data-file-tab="chunks">Chunk Tree (<span id="file-chunks-count">0</span>)</button>
+        </div>
+        <div class="modal-body">
+          <div id="file-tab-rendered" class="file-tab-pane active markdown-body"></div>
+          <div id="file-tab-raw" class="file-tab-pane">
+            <pre><code id="file-raw-content"></code></pre>
+          </div>
+          <div id="file-tab-chunks" class="file-tab-pane">
+            <div id="file-chunks-list" class="chunks-container"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="app.copyFileContent()">Copy Text</button>
+          <button class="btn btn-secondary" onclick="app.closeFileModal()">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
