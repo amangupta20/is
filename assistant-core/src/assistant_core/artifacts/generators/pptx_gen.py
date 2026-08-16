@@ -11,7 +11,7 @@ from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
-from assistant_core.artifacts.schemas import PresentationSpec, SlideSpec
+from assistant_core.artifacts.schemas import PresentationSpec, SlideLayout, SlideSpec
 
 # Theme palettes
 THEMES: dict[str, dict[str, RGBColor]] = {
@@ -108,6 +108,25 @@ def _resolve_image_stream(image_url: str | None, image_base64: str | None) -> io
         return None
 
 
+def _infer_layout(slide_spec: SlideSpec) -> SlideLayout:
+    """Infer the intended slide layout if not explicitly provided."""
+    if slide_spec.layout != "bullets":
+        return slide_spec.layout
+    if slide_spec.cards:
+        return "cards"
+    if slide_spec.timeline_steps:
+        return "timeline"
+    if slide_spec.chart_type or slide_spec.chart_series:
+        return "chart"
+    if slide_spec.image_url or slide_spec.image_base64:
+        return "image_right" if slide_spec.bullets else "full_image"
+    if slide_spec.quote:
+        return "quote"
+    if slide_spec.left_column or slide_spec.right_column:
+        return "comparison"
+    return "bullets"
+
+
 class PptxGenerator:
     """Renders structured PresentationSpec into polished 16:9 .pptx bytes."""
 
@@ -128,11 +147,21 @@ class PptxGenerator:
         # 2. Content Slides
         for s_idx, slide_spec in enumerate(spec.slides):
             slide = prs.slides.add_slide(blank_slide_layout)
+
+            # Paint background for content slide according to theme
+            bg_color = theme_colors["dark_bg"] if spec.theme == "dark" else theme_colors["light_bg"]
+            bg = slide.shapes.add_shape(
+                MSO_SHAPE.RECTANGLE, 0, 0, Inches(13.333), Inches(7.5)
+            )
+            bg.fill.solid()
+            bg.fill.fore_color.rgb = bg_color
+            bg.line.color.rgb = bg_color
+
             PptxGenerator._render_header(
                 slide, slide_spec.title, slide_spec.subtitle, slide_num=s_idx + 2, theme=theme_colors
             )
 
-            layout = slide_spec.layout
+            layout = _infer_layout(slide_spec)
             if layout == "cards" and slide_spec.cards:
                 PptxGenerator._render_cards_layout(slide, slide_spec, theme_colors)
             elif layout == "comparison" and (slide_spec.left_column or slide_spec.right_column):
@@ -145,7 +174,7 @@ class PptxGenerator:
                 )
             elif layout == "full_image":
                 PptxGenerator._render_full_image_layout(slide, slide_spec, theme_colors)
-            elif layout == "chart" and slide_spec.chart_type:
+            elif layout == "chart" and (slide_spec.chart_type or slide_spec.chart_series):
                 PptxGenerator._render_chart_layout(slide, slide_spec, theme_colors)
             elif layout == "timeline" and slide_spec.timeline_steps:
                 PptxGenerator._render_timeline_layout(slide, slide_spec, theme_colors)
