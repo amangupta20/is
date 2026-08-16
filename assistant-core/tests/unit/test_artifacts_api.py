@@ -220,3 +220,51 @@ def test_artifacts_onlyoffice_session_and_callback(tmp_path: Path) -> None:
     res_data = resp.json()
     assert res_data["onlyoffice_url"] == "https://onlyoffice.test"
     assert "token" in res_data["config"]
+
+
+def test_create_presentation_api() -> None:
+    secret = "test-hmac-secret-at-least-32-chars-long"
+    settings = Settings(hmac_secret=secret)
+    app = create_app(settings)
+    client = TestClient(app)
+
+    user = UserIdentity(id=uuid.uuid4(), native_user_id="user-123")
+    session = _FakeSession([user])
+    app.state.session_factory = lambda: session
+
+    payload = {
+        "native_user_id": "user-123",
+        "title": "Test Presentation Deck",
+        "artifact_type": "pptx",
+        "presentation_spec": {
+            "title": "Test Presentation Deck",
+            "subtitle": "Automated Deck Generation & Feature Verification",
+            "slides": [
+                {
+                    "title": "Executive Summary",
+                    "layout": "bullets",
+                    "bullets": [
+                        "Overview of automated presentation generation",
+                        "Key validation goals",
+                    ],
+                },
+                {
+                    "title": "Project Objectives",
+                    "layout": "bullets",
+                    "bullets": ["Validate slide deck pipeline", "Clean visual hierarchy"],
+                },
+            ],
+        },
+        "change_summary": "Generated presentation",
+    }
+    body_bytes = json.dumps(payload, separators=(",", ":")).encode()
+    headers = _signed_headers(secret, "POST", "/v1/artifacts/create", body_bytes)
+    headers["content-type"] = "application/json"
+
+    resp = client.post("/v1/artifacts/create", content=body_bytes, headers=headers)
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["title"] == "Test Presentation Deck"
+    assert data["artifact_type"] == "pptx"
+    assert data["current_version_num"] == 1
+    assert "download_url" in data

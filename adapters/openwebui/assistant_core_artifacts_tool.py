@@ -98,6 +98,12 @@ class Tools:
                 f"- **Download Link**: [⬇️ Download Spreadsheet]({dl_url})\n\n"
                 f"*To edit online, you can open this spreadsheet in the Assistant Core Dashboard.*"
             )
+        except httpx.HTTPStatusError as exc:
+            try:
+                detail = exc.response.json().get("detail", exc.response.text)
+            except (ValueError, KeyError, AttributeError):
+                detail = exc.response.text or str(exc)
+            return f"Failed to generate spreadsheet '{title}': {detail}"
         except Exception as exc:  # noqa: BLE001
             return f"Failed to generate spreadsheet '{title}': {exc}"
 
@@ -138,6 +144,12 @@ class Tools:
                 f"- **Download Link**: [⬇️ Download Document]({dl_url})\n\n"
                 f"*To edit online, you can open this document in the Assistant Core Dashboard.*"
             )
+        except httpx.HTTPStatusError as exc:
+            try:
+                detail = exc.response.json().get("detail", exc.response.text)
+            except (ValueError, KeyError, AttributeError):
+                detail = exc.response.text or str(exc)
+            return f"Failed to generate document '{title}': {detail}"
         except Exception as exc:  # noqa: BLE001
             return f"Failed to generate document '{title}': {exc}"
 
@@ -178,5 +190,11 @@ class Tools:
                 f"- **Download Link**: [⬇️ Download Presentation]({dl_url})\n\n"
                 f"*To edit online, you can open this presentation in the Assistant Core Dashboard.*"
             )
+        except httpx.HTTPStatusError as exc:
+            try:
+                detail = exc.response.json().get("detail", exc.response.text)
+            except (ValueError, KeyError, AttributeError):
+                detail = exc.response.text or str(exc)
+            return f"Failed to generate presentation '{title}': {detail}"
         except Exception as exc:  # noqa: BLE001
             return f"Failed to generate presentation '{title}': {exc}"
