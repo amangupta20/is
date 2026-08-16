@@ -453,3 +453,22 @@ def test_admin_consolidation_and_playground() -> None:
     assert "Neovim" in p_data["results"][0]["statement"]
     assert "<user_profile>" in p_data["rendered_llm_block"]
     assert "<retrieved_context>" in p_data["rendered_llm_block"]
+
+
+def test_admin_consolidation_unconfigured_error() -> None:
+    secret = "admin-secret-at-least-32-chars-long"
+    settings = Settings(
+        hmac_secret=secret,
+        task_model_base_url=None,
+        task_model_model=None,
+    )
+    app = create_app(settings)
+    client = _get_authed_client(app, secret)
+
+    res = client.post(
+        "/v1/admin/memories/consolidate",
+        json={"native_user_id": "user-1"},
+    )
+    assert res.status_code == 400
+    assert "Task model is not configured" in res.json()["detail"]
+

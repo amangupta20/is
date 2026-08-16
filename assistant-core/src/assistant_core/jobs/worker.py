@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 import structlog
 from pydantic import JsonValue
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -280,23 +281,32 @@ async def _handle_extract_memory(session: AsyncSession, payload: dict[str, JsonV
     fresh_turn = await session.get(CompletedTurn, turn_id)
     if fresh_turn is None or fresh_turn.tombstoned_at is not None:
         raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
-    applied = await apply_explicit_candidates(session, fresh_turn, candidates)
+    await apply_explicit_candidates(session, fresh_turn, candidates)
 
-    if applied:
-        user = await session.get(UserIdentity, fresh_turn.user_id)
-        if user is not None:
-            await session.execute(
-                insert(Job)
-                .values(
-                    id=uuid.uuid4(),
-                    identity_key=f"consolidate:{user.native_user_id}",
-                    kind="consolidate_memories",
-                    status="queued",
-                    payload={"native_user_id": user.native_user_id},
-                    attempts=0,
-                )
-                .on_conflict_do_nothing(index_elements=[Job.identity_key])
+
+async def enqueue_daily_consolidation_jobs(session: AsyncSession) -> int:
+    """Enqueue at most one consolidation job per user per day."""
+    user_stmt = select(UserIdentity.native_user_id).distinct()
+    users = list((await session.execute(user_stmt)).scalars().all())
+    today_str = datetime.now(UTC).strftime("%Y-%m-%d")
+    enqueued = 0
+    for u in users:
+        result = await session.execute(
+            insert(Job)
+            .values(
+                id=uuid.uuid4(),
+                identity_key=f"consolidate:{u}:{today_str}",
+                kind="consolidate_memories",
+                status="queued",
+                payload={"native_user_id": u},
+                attempts=0,
             )
+            .on_conflict_do_nothing(index_elements=[Job.identity_key])
+            .returning(Job.id)
+        )
+        if result.scalar_one_or_none() is not None:
+            enqueued += 1
+    return enqueued
 
 
 async def _handle_consolidate_memories(
@@ -560,8 +570,13 @@ async def run_worker(stop_event: asyncio.Event | None = None) -> None:
     try:
         async with session_factory() as session:
             backfill_count = await enqueue_missing_conversation_jobs(session)
+            consolidation_count = await enqueue_daily_consolidation_jobs(session)
             await session.commit()
-        LOGGER.info("conversation_backfill_enqueued", job_count=backfill_count)
+        LOGGER.info(
+            "worker_startup_jobs_enqueued",
+            conversation_backfill=backfill_count,
+            daily_consolidation=consolidation_count,
+        )
 
         for signum in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -570,7 +585,20 @@ async def run_worker(stop_event: asyncio.Event | None = None) -> None:
                 continue
             registered_signals.append(signum)
 
+        last_consolidation_check = perf_counter()
+        consolidation_interval_seconds = 3600.0  # Check hourly for daily job enqueue
+
         while not resolved_stop_event.is_set():
+            now = perf_counter()
+            if (now - last_consolidation_check) >= consolidation_interval_seconds:
+                last_consolidation_check = now
+                try:
+                    async with session_factory() as session:
+                        await enqueue_daily_consolidation_jobs(session)
+                        await session.commit()
+                except Exception:  # noqa: BLE001
+                    LOGGER.warning("periodic_consolidation_enqueue_failed")
+
             async with session_factory() as session:
                 processed = await process_one(session)
 

@@ -29,7 +29,11 @@ from assistant_core.files.models import FileDocument, FileReference, FileSegment
 from assistant_core.files.repository import search_file_passages, tombstone_file_references
 from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
-from assistant_core.jobs.worker import get_memory_consolidator
+from assistant_core.jobs.worker import (
+    TaskModelConfigurationError,
+    get_memory_consolidator,
+)
+from assistant_core.memory.consolidator import MemoryConsolidationError
 from assistant_core.memory.models import ChatProfileSnapshot, MemoryEvidence, MemoryRecord
 from assistant_core.memory.profile import get_or_create_profile
 from assistant_core.memory.repository import (
@@ -874,24 +878,37 @@ async def trigger_memory_consolidation(
     body: ConsolidateMemoriesRequest, request: Request
 ) -> dict[str, Any]:
     """Trigger conflict resolution and memory consolidation for one or all users."""
-    consolidator = get_memory_consolidator(request.app.state.settings)
+    try:
+        consolidator = get_memory_consolidator(request.app.state.settings)
+    except TaskModelConfigurationError:
+        raise HTTPException(
+            status_code=400,
+            detail="Task model is not configured. Please configure ASSISTANT_TASK_MODEL_BASE_URL and ASSISTANT_TASK_MODEL_MODEL in your environment settings.",
+        ) from None
+
     applied_all: list[dict[str, Any]] = []
     users: list[str] = []
 
-    async with request.app.state.session_factory() as session:
-        if body.native_user_id:
-            users = [body.native_user_id]
-        else:
-            user_stmt = select(UserIdentity.native_user_id).distinct()
-            users = list((await session.execute(user_stmt)).scalars().all())
+    try:
+        async with request.app.state.session_factory() as session:
+            if body.native_user_id:
+                users = [body.native_user_id]
+            else:
+                user_stmt = select(UserIdentity.native_user_id).distinct()
+                users = list((await session.execute(user_stmt)).scalars().all())
 
-        for u in users:
-            applied = await consolidate_user_memories(
-                session, native_user_id=u, consolidator=consolidator
-            )
-            applied_all.extend(applied)
+            for u in users:
+                applied = await consolidate_user_memories(
+                    session, native_user_id=u, consolidator=consolidator
+                )
+                applied_all.extend(applied)
 
-        await session.commit()
+            await session.commit()
+    except MemoryConsolidationError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Memory consolidation failed during LLM evaluation: {exc}",
+        ) from None
 
     return {
         "status": "success",

@@ -892,8 +892,10 @@ class DashboardApp {
       resultsBox.style.display = 'block';
       this.loadMemories();
       this.loadOverview();
-    } catch {
-      // Handled in api()
+    } catch (err) {
+      resultsTitle.innerText = 'Consolidation Failed';
+      resultsList.innerHTML = `<div class="card" style="background: hsla(0, 84%, 60%, 0.1); border-color: var(--danger); padding: 12px; color: var(--danger);">${this.escapeHtml(err.message || 'Server error')}</div>`;
+      resultsBox.style.display = 'block';
     } finally {
       btn.disabled = false;
       btn.innerText = 'Run Consolidation Again';
