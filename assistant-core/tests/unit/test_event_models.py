@@ -18,6 +18,8 @@ def test_models_define_only_the_required_columns_in_assistant_schema() -> None:
         "event_type",
         "user_id",
         "native_chat_id",
+        "native_project_id",
+        "native_folder_id",
         "native_message_id",
         "occurred_at",
         "received_at",

@@ -19,6 +19,8 @@ class EventEnvelope(BaseModel):
     event_type: str = Field(min_length=1, max_length=120)
     native_user_id: str = Field(min_length=1, max_length=200)
     native_chat_id: str | None = Field(default=None, max_length=200)
+    native_project_id: str | None = Field(default=None, max_length=200)
+    native_folder_id: str | None = Field(default=None, max_length=200)
     native_message_id: str | None = Field(default=None, max_length=200)
     occurred_at: datetime
     payload: dict[str, JsonValue]

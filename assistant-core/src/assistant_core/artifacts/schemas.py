@@ -143,6 +143,8 @@ class CreateArtifactRequest(BaseModel):
     native_user_id: str
     title: str
     artifact_type: ArtifactFormat
+    native_project_id: str | None = None
+    native_folder_id: str | None = None
     workbook_spec: WorkbookSpec | None = None
     document_spec: DocumentSpec | None = None
     presentation_spec: PresentationSpec | None = None
@@ -183,6 +185,8 @@ class ArtifactResponse(BaseModel):
     current_version_num: int
     created_at: str
     updated_at: str
+    native_project_id: str | None = None
+    native_folder_id: str | None = None
     versions: list[ArtifactVersionResponse] = Field(default_factory=list)
     download_url: str
     base64_data: str | None = None

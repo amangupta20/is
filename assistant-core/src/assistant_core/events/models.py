@@ -24,6 +24,8 @@ class EventInbox(Base):
         nullable=False,
     )
     native_chat_id: Mapped[str | None] = mapped_column(String(200))
+    native_project_id: Mapped[str | None] = mapped_column(String(200))
+    native_folder_id: Mapped[str | None] = mapped_column(String(200))
     native_message_id: Mapped[str | None] = mapped_column(String(200))
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     received_at: Mapped[datetime] = mapped_column(

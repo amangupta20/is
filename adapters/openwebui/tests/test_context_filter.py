@@ -345,6 +345,8 @@ def _completed_envelope(filter_: Filter, assistant_content: str) -> dict[str, ob
         "occurred_at": "2026-08-10T12:34:56.123456+00:00",
         "native_user_id": "user-current-owner",
         "native_chat_id": "chat-current",
+        "native_project_id": None,
+        "native_folder_id": None,
         "native_message_id": "assistant-current",
         "payload": {
             "source": "openwebui_outlet_filter",

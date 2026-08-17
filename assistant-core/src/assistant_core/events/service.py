@@ -30,6 +30,8 @@ async def ingest_event(session: AsyncSession, event: EventEnvelope) -> bool:
             event_type=event.event_type,
             user_id=identity_id,
             native_chat_id=event.native_chat_id,
+            native_project_id=event.native_project_id,
+            native_folder_id=event.native_folder_id,
             native_message_id=event.native_message_id,
             occurred_at=event.occurred_at,
             payload=event.payload,

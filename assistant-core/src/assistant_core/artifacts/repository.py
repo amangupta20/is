@@ -99,6 +99,8 @@ class ArtifactRepository:
             title=request.title,
             slug=slug,
             artifact_type=request.artifact_type,
+            native_project_id=request.native_project_id,
+            native_folder_id=request.native_folder_id,
             current_version_num=1,
             created_at=now,
             updated_at=now,

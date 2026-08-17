@@ -68,9 +68,22 @@ class Tools:
     @staticmethod
     def _context_payload(__user__: dict | None, __metadata__: dict | None) -> dict[str, object]:
         """Build the bounded native identity envelope used by context routes."""
+        folder_id = Tools._optional_id(__metadata__, "folder_id")
+        project_id = Tools._optional_id(__metadata__, "project_id")
+        if folder_id is None and isinstance(__metadata__, Mapping):
+            chat = __metadata__.get("chat")
+            if isinstance(chat, Mapping):
+                folder_id = Tools._optional_id(chat, "folder_id")
+        if project_id is None and isinstance(__metadata__, Mapping):
+            chat = __metadata__.get("chat")
+            if isinstance(chat, Mapping):
+                project_id = Tools._optional_id(chat, "project_id")
+
         return {
             "native_user_id": Tools._optional_id(__user__, "id") or "unknown",
             "native_chat_id": Tools._optional_id(__metadata__, "chat_id"),
+            "native_project_id": project_id,
+            "native_folder_id": folder_id,
             "native_message_id": Tools._optional_id(__metadata__, "message_id"),
         }
 

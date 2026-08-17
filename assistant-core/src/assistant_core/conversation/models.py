@@ -122,6 +122,8 @@ class ConversationReference(Base):
         nullable=False,
     )
     native_chat_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    native_project_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    native_folder_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     native_message_id: Mapped[str] = mapped_column(String(200), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     role_order: Mapped[int] = mapped_column(Integer, nullable=False)

@@ -41,6 +41,8 @@ class ConversationHit:
     native_message_id: str
     occurred_at: datetime
     score: float
+    native_project_id: str | None = None
+    native_folder_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +53,8 @@ class ConversationNeighbor:
     content: str
     native_chat_id: str
     native_message_id: str
+    native_project_id: str | None = None
+    native_folder_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

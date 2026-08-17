@@ -17,6 +17,8 @@ def test_completed_turn_has_only_stable_provenance_and_content_columns() -> None
         "event_id",
         "user_id",
         "native_chat_id",
+        "native_project_id",
+        "native_folder_id",
         "native_user_message_id",
         "native_assistant_message_id",
         "user_content",

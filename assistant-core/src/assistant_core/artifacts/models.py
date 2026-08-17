@@ -40,6 +40,8 @@ class Artifact(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(255), nullable=False)
     artifact_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    native_project_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    native_folder_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     current_version_num: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

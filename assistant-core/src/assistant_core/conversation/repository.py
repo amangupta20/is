@@ -112,6 +112,8 @@ def _conversation_hit(
         native_message_id=reference.native_message_id,
         occurred_at=reference.occurred_at,
         score=score,
+        native_project_id=reference.native_project_id,
+        native_folder_id=reference.native_folder_id,
     )
 
 
@@ -217,6 +219,8 @@ def _neighbor(
         content=segment.content[:remaining_chars],
         native_chat_id=reference.native_chat_id,
         native_message_id=reference.native_message_id,
+        native_project_id=reference.native_project_id,
+        native_folder_id=reference.native_folder_id,
     )
 
 
@@ -455,6 +459,8 @@ async def materialize_turn_passages(
                 completed_turn_id=turn.id,
                 segment_id=segment_id,
                 native_chat_id=turn.native_chat_id,
+                native_project_id=turn.native_project_id,
+                native_folder_id=turn.native_folder_id,
                 native_message_id=passage.native_message_id,
                 role=passage.role,
                 role_order=passage.role_order,

@@ -169,6 +169,32 @@ class Filter:
             file=sys.stderr,
         )
 
+    @classmethod
+    def _extract_scope_ids(
+        cls, body: Mapping[object, object] | None, metadata: Mapping[object, object] | None
+    ) -> tuple[str | None, str | None]:
+        folder_id: str | None = None
+        project_id: str | None = None
+        if isinstance(metadata, Mapping):
+            folder_id = cls._plain_id(metadata.get("folder_id"))
+            project_id = cls._plain_id(metadata.get("project_id"))
+            chat = metadata.get("chat")
+            if folder_id is None and isinstance(chat, Mapping):
+                folder_id = cls._plain_id(chat.get("folder_id"))
+            if project_id is None and isinstance(chat, Mapping):
+                project_id = cls._plain_id(chat.get("project_id"))
+        if folder_id is None and isinstance(body, Mapping):
+            folder_id = cls._plain_id(body.get("folder_id"))
+            chat = body.get("chat")
+            if folder_id is None and isinstance(chat, Mapping):
+                folder_id = cls._plain_id(chat.get("folder_id"))
+        if project_id is None and isinstance(body, Mapping):
+            project_id = cls._plain_id(body.get("project_id"))
+            chat = body.get("chat")
+            if project_id is None and isinstance(chat, Mapping):
+                project_id = cls._plain_id(chat.get("project_id"))
+        return folder_id, project_id
+
     async def inlet(
         self,
         body: dict,
@@ -202,11 +228,14 @@ class Filter:
 
         metadata = __metadata__ or {}
         request_text = str(messages[latest_user_index].get("content", ""))[:16_000]
+        folder_id, project_id = self._extract_scope_ids(body, metadata)
         try:
             response = await self._post_context(
                 {
                     "native_user_id": str(__user__["id"]),
                     "native_chat_id": metadata.get("chat_id"),
+                    "native_project_id": project_id,
+                    "native_folder_id": folder_id,
                     "native_message_id": metadata.get("message_id"),
                     "request_text": request_text,
                     "max_tokens": int(self.valves.max_context_tokens),
@@ -345,6 +374,7 @@ class Filter:
             if attached_file_ids:
                 turn_payload["attached_file_ids"] = attached_file_ids
 
+            folder_id, project_id = self._extract_scope_ids(body, __metadata__)
             envelope: dict[str, object] = {
                 "schema_version": 1,
                 "event_id": event_id,
@@ -352,6 +382,8 @@ class Filter:
                 "occurred_at": occurred_at,
                 "native_user_id": user_id,
                 "native_chat_id": chat_id,
+                "native_project_id": project_id,
+                "native_folder_id": folder_id,
                 "native_message_id": assistant_id,
                 "payload": turn_payload,
             }
@@ -364,6 +396,8 @@ class Filter:
                     "occurred_at": occurred_at,
                     "native_user_id": user_id,
                     "native_chat_id": chat_id,
+                    "native_project_id": project_id,
+                    "native_folder_id": folder_id,
                     "native_message_id": assistant_id,
                     "payload": {
                         "source": self._EVENT_SOURCE,

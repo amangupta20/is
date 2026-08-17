@@ -56,6 +56,8 @@ def _serialize_artifact(
         current_version_num=art.current_version_num,
         created_at=(art.created_at or datetime.now(UTC)).isoformat(),
         updated_at=(art.updated_at or datetime.now(UTC)).isoformat(),
+        native_project_id=art.native_project_id,
+        native_folder_id=art.native_folder_id,
         versions=versions,
         download_url=f"{effective_base}/v1/artifacts/{art.id}/download",
         base64_data=base64_data,

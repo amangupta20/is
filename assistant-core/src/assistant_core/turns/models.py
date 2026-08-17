@@ -23,6 +23,8 @@ class CompletedTurn(Base):
         nullable=False,
     )
     native_chat_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    native_project_id: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
+    native_folder_id: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
     native_user_message_id: Mapped[str] = mapped_column(String(200), nullable=False)
     native_assistant_message_id: Mapped[str] = mapped_column(String(200), nullable=False)
     user_content: Mapped[str] = mapped_column(Text, nullable=False)

@@ -16,6 +16,8 @@ class ContextRequest(BaseModel):
 
     native_user_id: str = Field(min_length=1)
     native_chat_id: str | None = Field(default=None, max_length=200)
+    native_project_id: str | None = Field(default=None, max_length=200)
+    native_folder_id: str | None = Field(default=None, max_length=200)
     native_message_id: str | None = Field(default=None, max_length=200)
     request_text: str = Field(default="", max_length=16_000)
     max_tokens: int = Field(default=300_000, ge=0, le=500_000)

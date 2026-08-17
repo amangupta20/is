@@ -42,6 +42,8 @@ async def materialize_completed_turn(session: AsyncSession, event: EventInbox) -
             event_id=event.event_id,
             user_id=event.user_id,
             native_chat_id=event.native_chat_id,
+            native_project_id=event.native_project_id,
+            native_folder_id=event.native_folder_id,
             native_user_message_id=payload.user_message.id,
             native_assistant_message_id=payload.assistant_message.id,
             user_content=payload.user_message.content,

@@ -44,6 +44,8 @@ class PersonalContextSearchRequest(BaseModel):
 
     native_user_id: str = Field(min_length=1, max_length=200)
     native_chat_id: str | None = Field(default=None, min_length=1, max_length=200)
+    native_project_id: str | None = Field(default=None, min_length=1, max_length=200)
+    native_folder_id: str | None = Field(default=None, min_length=1, max_length=200)
     native_message_id: str | None = Field(default=None, min_length=1, max_length=200)
     query: str
     limit: int = Field(default=5, ge=1, le=10)
@@ -74,6 +76,8 @@ class PersonalContextPreview(BaseModel):
     preview: str
     source_native_chat_id: str | None
     source_native_message_id: str | None
+    source_native_project_id: str | None = None
+    source_native_folder_id: str | None = None
     filename: str | None = None
     native_file_id: str | None = None
     header_path: str | None = None
@@ -129,6 +133,8 @@ class PersonalContextNeighbor(BaseModel):
     content: str
     source_native_chat_id: str
     source_native_message_id: str
+    source_native_project_id: str | None = None
+    source_native_folder_id: str | None = None
 
 
 class PersonalContextReadResponse(BaseModel):
@@ -144,6 +150,8 @@ class PersonalContextReadResponse(BaseModel):
     evidence_quote: str | None
     source_native_chat_id: str | None
     source_native_message_id: str | None
+    source_native_project_id: str | None = None
+    source_native_folder_id: str | None = None
     filename: str | None = None
     native_file_id: str | None = None
     header_path: str | None = None
@@ -207,9 +215,25 @@ async def search_personal_context(
             preview=_compact_preview(record.statement),
             source_native_chat_id=None,
             source_native_message_id=None,
+            source_native_project_id=None,
+            source_native_folder_id=None,
         )
         ranked.append((1.0 / (RRF_K + rank), 0, str(record.id), preview))
+
+    target_chat_id = (body.native_chat_id or "").strip()
+    target_project_id = (body.native_project_id or "").strip()
+    target_folder_id = (body.native_folder_id or "").strip()
+
     for hit in conversation_hits:
+        score = hit.score
+        # Tier 2 Active Scope Boost: +0.15 for matching folder/project, +0.05 for current chat
+        if (target_folder_id and hit.native_folder_id == target_folder_id) or (
+            target_project_id and hit.native_project_id == target_project_id
+        ):
+            score += 0.15
+        elif target_chat_id and hit.native_chat_id == target_chat_id:
+            score += 0.05
+
         preview = PersonalContextPreview(
             source_id=hit.source_id,
             source_type="conversation",
@@ -218,8 +242,11 @@ async def search_personal_context(
             preview=_compact_preview(hit.content),
             source_native_chat_id=hit.native_chat_id,
             source_native_message_id=hit.native_message_id,
+            source_native_project_id=hit.native_project_id,
+            source_native_folder_id=hit.native_folder_id,
         )
-        ranked.append((hit.score, 1, str(hit.source_id), preview))
+        ranked.append((score, 1, str(hit.source_id), preview))
+
     for fhit in file_hits:
         preview = PersonalContextPreview(
             source_id=uuid.UUID(fhit.reference_id),
@@ -229,6 +256,8 @@ async def search_personal_context(
             preview=_compact_preview(fhit.content),
             source_native_chat_id=None,
             source_native_message_id=None,
+            source_native_project_id=None,
+            source_native_folder_id=None,
             filename=fhit.filename,
             native_file_id=fhit.native_file_id,
             header_path=fhit.header_path,
@@ -242,6 +271,8 @@ async def search_personal_context(
         "personal_context_search_completed",
         native_user_id=body.native_user_id,
         native_chat_id=body.native_chat_id,
+        native_project_id=body.native_project_id,
+        native_folder_id=body.native_folder_id,
         native_message_id=body.native_message_id,
         mode=mode,
         memory_result_count=len(memory_records),
@@ -283,6 +314,8 @@ async def read_personal_context(
                 evidence_quote=evidence.evidence_quote,
                 source_native_chat_id=turn.native_chat_id,
                 source_native_message_id=turn.native_user_message_id,
+                source_native_project_id=turn.native_project_id,
+                source_native_folder_id=turn.native_folder_id,
                 neighbors=[],
                 full_source_available=False,
             )
@@ -303,12 +336,16 @@ async def read_personal_context(
                     evidence_quote=None,
                     source_native_chat_id=selected.native_chat_id,
                     source_native_message_id=selected.native_message_id,
+                    source_native_project_id=selected.native_project_id,
+                    source_native_folder_id=selected.native_folder_id,
                     neighbors=[
                         PersonalContextNeighbor(
                             role=neighbor.role,
                             content=neighbor.content,
                             source_native_chat_id=neighbor.native_chat_id,
                             source_native_message_id=neighbor.native_message_id,
+                            source_native_project_id=neighbor.native_project_id,
+                            source_native_folder_id=neighbor.native_folder_id,
                         )
                         for neighbor in conversation_result.neighbors
                     ],

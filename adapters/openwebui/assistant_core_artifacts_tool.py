@@ -59,6 +59,22 @@ class Tools:
         identifier = container.get(key)
         return None if identifier is None else str(identifier)
 
+    @classmethod
+    def _extract_scope_ids(
+        cls, metadata: Mapping[object, object] | None
+    ) -> tuple[str | None, str | None]:
+        folder_id: str | None = None
+        project_id: str | None = None
+        if isinstance(metadata, Mapping):
+            folder_id = cls._optional_id(metadata, "folder_id")
+            project_id = cls._optional_id(metadata, "project_id")
+            chat = metadata.get("chat")
+            if folder_id is None and isinstance(chat, Mapping):
+                folder_id = cls._optional_id(chat, "folder_id")
+            if project_id is None and isinstance(chat, Mapping):
+                project_id = cls._optional_id(chat, "project_id")
+        return folder_id, project_id
+
     def _extract_openwebui_token(self, user: dict | None, request: object | None) -> str:
         """Extract user session token first so files are owned by the active user, falling back to admin key."""
         if request is not None:
@@ -204,6 +220,7 @@ class Tools:
         title: str,
         sheets_json: str,
         __user__: dict | None = None,
+        __metadata__: dict | None = None,
         __request__: object | None = None,
     ) -> str:
         """Create a styled multi-tab Excel spreadsheet (.xlsx) with auto-widths, formulas, and number formats.
@@ -211,11 +228,14 @@ class Tools:
         """
         try:
             native_user_id = self._optional_id(__user__, "id") or "unknown"
+            folder_id, project_id = self._extract_scope_ids(__metadata__)
             sheets_data = json.loads(sheets_json) if isinstance(sheets_json, str) else sheets_json
             payload = {
                 "native_user_id": native_user_id,
                 "title": title.strip(),
                 "artifact_type": "xlsx",
+                "native_project_id": project_id,
+                "native_folder_id": folder_id,
                 "workbook_spec": {
                     "title": title.strip(),
                     "sheets": sheets_data if isinstance(sheets_data, list) else [sheets_data],
@@ -245,6 +265,7 @@ class Tools:
         subtitle: str = "",
         theme: str = "slate",
         __user__: dict | None = None,
+        __metadata__: dict | None = None,
         __request__: object | None = None,
     ) -> str:
         """Create a styled Word document (.docx) with typography, callouts, images, and data tables.
@@ -253,11 +274,14 @@ class Tools:
         """
         try:
             native_user_id = self._optional_id(__user__, "id") or "unknown"
+            folder_id, project_id = self._extract_scope_ids(__metadata__)
             sections_data = json.loads(sections_json) if isinstance(sections_json, str) else sections_json
             payload = {
                 "native_user_id": native_user_id,
                 "title": title.strip(),
                 "artifact_type": "docx",
+                "native_project_id": project_id,
+                "native_folder_id": folder_id,
                 "document_spec": {
                     "title": title.strip(),
                     "subtitle": subtitle.strip() or None,
@@ -289,6 +313,7 @@ class Tools:
         subtitle: str = "",
         theme: str = "slate",
         __user__: dict | None = None,
+        __metadata__: dict | None = None,
         __request__: object | None = None,
     ) -> str:
         """Create a 16:9 widescreen PowerPoint presentation (.pptx) deck with images, native charts, and milestone timelines.
@@ -305,11 +330,14 @@ class Tools:
         """
         try:
             native_user_id = self._optional_id(__user__, "id") or "unknown"
+            folder_id, project_id = self._extract_scope_ids(__metadata__)
             slides_data = json.loads(slides_json) if isinstance(slides_json, str) else slides_json
             payload = {
                 "native_user_id": native_user_id,
                 "title": title.strip(),
                 "artifact_type": "pptx",
+                "native_project_id": project_id,
+                "native_folder_id": folder_id,
                 "presentation_spec": {
                     "title": title.strip(),
                     "subtitle": subtitle.strip() or None,
