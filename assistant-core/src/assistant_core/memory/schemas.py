@@ -1,5 +1,6 @@
 """Strict extraction boundary for explicit-memory candidates."""
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -20,6 +21,9 @@ class ExplicitMemoryCandidate(BaseModel):
     category: MemoryCategory
     statement: str = Field(min_length=1, max_length=2_000)
     evidence_quote: str = Field(min_length=1, max_length=1_000)
+    valid_from: datetime | None = Field(default=None)
+    expires_at: datetime | None = Field(default=None)
+    temporal_tag: str | None = Field(default=None, max_length=50)
 
     @field_validator("statement", "evidence_quote")
     @classmethod

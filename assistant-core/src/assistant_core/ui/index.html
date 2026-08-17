@@ -227,12 +227,20 @@
                 <option value="">All Categories</option>
                 <option value="preference">Preference</option>
                 <option value="fact">Fact</option>
-                <option value="constraint">Constraint</option>
-                <option value="profile">Profile</option>
+                <option value="instruction">Instruction</option>
+                <option value="project">Project</option>
+                <option value="decision">Decision</option>
+              </select>
+              <select id="memories-timeline-filter">
+                <option value="all">All Lifespans</option>
+                <option value="permanent">Permanent 🔒</option>
+                <option value="active_expiring">Active Ephemeral ⏳</option>
+                <option value="expired">Expired ⚪</option>
+                <option value="upcoming">Upcoming 📅</option>
               </select>
               <select id="memories-status-filter">
                 <option value="active">Active Only</option>
-                <option value="tombstoned">Tombstoned Only</option>
+                <option value="archived">Archived Only</option>
                 <option value="all">All States</option>
               </select>
               <button class="btn btn-secondary btn-sm" onclick="app.openConsolidationModal()">⚡ Consolidate</button>
@@ -249,7 +257,7 @@
                     <th>Statement</th>
                     <th>Category</th>
                     <th>User</th>
-                    <th>Confidence</th>
+                    <th>Validity / Expiry</th>
                     <th>Status</th>
                     <th>Created</th>
                     <th>Actions</th>
@@ -518,9 +526,26 @@
               <select id="memory-category-input">
                 <option value="preference">Preference</option>
                 <option value="fact">Fact</option>
-                <option value="constraint">Constraint</option>
-                <option value="profile">Profile</option>
+                <option value="instruction">Instruction</option>
+                <option value="project">Project</option>
+                <option value="decision">Decision</option>
               </select>
+            </div>
+            <div class="form-group flex-1">
+              <label for="memory-temporal-tag-input">Temporal Tag</label>
+              <select id="memory-temporal-tag-input">
+                <option value="">None (Permanent)</option>
+                <option value="deadline">Deadline</option>
+                <option value="temporary_preference">Temporary Preference</option>
+                <option value="scheduled_event">Scheduled Event</option>
+                <option value="transient_instruction">Transient Instruction</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label for="memory-expires-at-input">Expires At (Optional)</label>
+              <input type="datetime-local" id="memory-expires-at-input">
             </div>
             <div class="form-group flex-1">
               <label for="memory-confidence-input">Confidence (0.0 - 1.0)</label>

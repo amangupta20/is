@@ -3,7 +3,7 @@
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,6 +71,8 @@ async def get_or_create_profile(
             MemoryRecord.user_id == user_id,
             MemoryRecord.state == "active",
             MemoryRecord.category.in_(("preference", "instruction")),
+            MemoryRecord.expires_at.is_(None) | (MemoryRecord.expires_at > func.now()),
+            MemoryRecord.valid_from.is_(None) | (MemoryRecord.valid_from <= func.now()),
             live_memory_evidence_clause(),
         )
         .order_by(MemoryRecord.category.asc(), MemoryRecord.key.asc(), MemoryRecord.id.asc())

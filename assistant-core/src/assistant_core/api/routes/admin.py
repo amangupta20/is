@@ -83,6 +83,9 @@ class CreateMemoryRequest(BaseModel):
     category: str = Field(default="preference", min_length=1, max_length=100)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     evidence_quote: str | None = Field(default=None, max_length=2000)
+    valid_from: datetime | None = Field(default=None)
+    expires_at: datetime | None = Field(default=None)
+    temporal_tag: str | None = Field(default=None, max_length=50)
 
 
 class UpdateMemoryRequest(BaseModel):
@@ -90,6 +93,9 @@ class UpdateMemoryRequest(BaseModel):
     statement: str | None = Field(default=None, min_length=1, max_length=2000)
     category: str | None = Field(default=None, min_length=1, max_length=100)
     state: Literal["active", "tombstoned"] | None = None
+    valid_from: datetime | None = Field(default=None)
+    expires_at: datetime | None = Field(default=None)
+    temporal_tag: str | None = Field(default=None, max_length=50)
 
 
 class BatchDeleteRequest(BaseModel):
@@ -279,10 +285,14 @@ async def list_memories(
     query: str | None = None,
     category: str | None = None,
     status_filter: Literal["active", "archived", "all"] = "active",
+    timeline_filter: Literal[
+        "all", "permanent", "ephemeral", "expired", "active_expiring", "upcoming"
+    ] = "all",
     limit: int = 50,
     offset: int = 0,
 ) -> dict[str, Any]:
-    """Search and paginate memories with category and status filters."""
+    """Search and paginate memories with category, status, and timeline filters."""
+    now = datetime.now(UTC)
     async with request.app.state.session_factory() as session:
         stmt = (
             select(
@@ -294,6 +304,9 @@ async def list_memories(
                 MemoryRecord.created_at,
                 MemoryRecord.archived_at,
                 UserIdentity.native_user_id,
+                MemoryRecord.valid_from,
+                MemoryRecord.expires_at,
+                MemoryRecord.temporal_tag,
             )
             .join(UserIdentity, UserIdentity.id == MemoryRecord.user_id)
             .order_by(desc(MemoryRecord.created_at))
@@ -304,6 +317,27 @@ async def list_memories(
         elif status_filter == "archived":
             stmt = stmt.where(MemoryRecord.state != "active")
 
+        if timeline_filter == "permanent":
+            stmt = stmt.where(MemoryRecord.expires_at.is_(None))
+        elif timeline_filter == "ephemeral":
+            stmt = stmt.where(MemoryRecord.expires_at.is_not(None))
+        elif timeline_filter == "expired":
+            stmt = stmt.where(
+                MemoryRecord.expires_at.is_not(None),
+                MemoryRecord.expires_at <= now,
+            )
+        elif timeline_filter == "active_expiring":
+            stmt = stmt.where(
+                MemoryRecord.expires_at.is_not(None),
+                MemoryRecord.expires_at > now,
+                MemoryRecord.valid_from.is_(None) | (MemoryRecord.valid_from <= now),
+            )
+        elif timeline_filter == "upcoming":
+            stmt = stmt.where(
+                MemoryRecord.valid_from.is_not(None),
+                MemoryRecord.valid_from > now,
+            )
+
         if category:
             stmt = stmt.where(MemoryRecord.category == category)
 
@@ -313,6 +347,7 @@ async def list_memories(
                 or_(
                     MemoryRecord.statement.ilike(like_term),
                     MemoryRecord.category.ilike(like_term),
+                    MemoryRecord.temporal_tag.ilike(like_term),
                     UserIdentity.native_user_id.ilike(like_term),
                 )
             )
@@ -323,19 +358,46 @@ async def list_memories(
 
         rows = (await session.execute(stmt.limit(limit).offset(offset))).all()
 
-        items = [
-            {
-                "id": str(row[0]),
-                "statement": row[1],
-                "category": row[2],
-                "confidence": row[3],
-                "state": row[4],
-                "created_at": row[5].isoformat() if row[5] else None,
-                "archived_at": row[6].isoformat() if row[6] else None,
-                "native_user_id": row[7],
-            }
-            for row in rows
-        ]
+        items = []
+        for row in rows:
+            rec_id = row[0]
+            stmt_text = row[1]
+            cat = row[2]
+            conf = row[3]
+            state = row[4]
+            created = row[5]
+            archived = row[6]
+            native_uid = row[7]
+            vfrom = row[8] if len(row) > 8 else None
+            exp = row[9] if len(row) > 9 else None
+            tag = row[10] if len(row) > 10 else None
+
+            validity_status = "permanent"
+            if state != "active":
+                validity_status = "archived"
+            elif exp is not None and exp <= now:
+                validity_status = "expired"
+            elif vfrom is not None and vfrom > now:
+                validity_status = "upcoming"
+            elif exp is not None:
+                validity_status = "active_expiring"
+
+            items.append(
+                {
+                    "id": str(rec_id),
+                    "statement": stmt_text,
+                    "category": cat,
+                    "confidence": conf,
+                    "state": state,
+                    "created_at": created.isoformat() if created else None,
+                    "archived_at": archived.isoformat() if archived else None,
+                    "native_user_id": native_uid,
+                    "valid_from": vfrom.isoformat() if vfrom else None,
+                    "expires_at": exp.isoformat() if exp else None,
+                    "temporal_tag": tag,
+                    "validity_status": validity_status,
+                }
+            )
 
         return {"total": total, "items": items, "limit": limit, "offset": offset}
 
@@ -401,6 +463,9 @@ async def create_memory(body: CreateMemoryRequest, request: Request) -> dict[str
                 statement=body.statement,
                 confidence=1,
                 state="active",
+                valid_from=body.valid_from,
+                expires_at=body.expires_at,
+                temporal_tag=body.temporal_tag,
                 created_at=now,
             )
         )
@@ -421,6 +486,9 @@ async def create_memory(body: CreateMemoryRequest, request: Request) -> dict[str
             "statement": body.statement,
             "category": category,
             "state": "active",
+            "valid_from": body.valid_from.isoformat() if body.valid_from else None,
+            "expires_at": body.expires_at.isoformat() if body.expires_at else None,
+            "temporal_tag": body.temporal_tag,
             "created_at": now.isoformat(),
         }
 
@@ -429,7 +497,7 @@ async def create_memory(body: CreateMemoryRequest, request: Request) -> dict[str
 async def update_memory(
     memory_id: uuid.UUID, body: UpdateMemoryRequest, request: Request
 ) -> dict[str, Any]:
-    """Update memory statement, category, or active state."""
+    """Update memory statement, category, temporal bounds, or active state."""
     async with request.app.state.session_factory() as session:
         record = (
             await session.execute(select(MemoryRecord).where(MemoryRecord.id == memory_id))
@@ -448,6 +516,12 @@ async def update_memory(
             "decision",
         }:
             record.category = body.category
+        if body.valid_from is not None:
+            record.valid_from = body.valid_from
+        if body.expires_at is not None:
+            record.expires_at = body.expires_at
+        if body.temporal_tag is not None:
+            record.temporal_tag = body.temporal_tag
         if body.state is not None:
             if body.state == "tombstoned":
                 record.state = "archived"
@@ -462,6 +536,9 @@ async def update_memory(
             "statement": record.statement,
             "category": record.category,
             "state": record.state,
+            "valid_from": record.valid_from.isoformat() if record.valid_from else None,
+            "expires_at": record.expires_at.isoformat() if record.expires_at else None,
+            "temporal_tag": record.temporal_tag,
             "archived_at": record.archived_at.isoformat() if record.archived_at else None,
         }
 

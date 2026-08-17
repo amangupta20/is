@@ -144,6 +144,10 @@ class DashboardApp {
       this.loadMemories();
     });
 
+    document.getElementById('memories-timeline-filter').addEventListener('change', () => {
+      this.loadMemories();
+    });
+
     document.getElementById('memories-status-filter').addEventListener('change', () => {
       this.loadMemories();
     });
@@ -485,6 +489,7 @@ class DashboardApp {
   async loadMemories(searchQuery = null) {
     const query = searchQuery !== null ? searchQuery : document.getElementById('memories-search').value;
     const category = document.getElementById('memories-category-filter').value;
+    const timeline = document.getElementById('memories-timeline-filter')?.value || 'all';
     const status = document.getElementById('memories-status-filter').value;
 
     const tbody = document.getElementById('memories-table-body');
@@ -495,6 +500,7 @@ class DashboardApp {
         query: query || '',
         category: category || '',
         status_filter: status || 'active',
+        timeline_filter: timeline,
         limit: 50,
       });
 
@@ -508,7 +514,18 @@ class DashboardApp {
 
       tbody.innerHTML = data.items
         .map(
-          (m) => `
+          (m) => {
+            let validityBadge = '<span class="badge" style="background:rgba(255,255,255,0.06);color:#94a3b8;">Permanent 🔒</span>';
+            if (m.validity_status === 'expired') {
+              validityBadge = `<span class="badge badge-tombstoned" title="Expired at ${this.formatDate(m.expires_at)}">Expired ⚪</span>`;
+            } else if (m.validity_status === 'upcoming') {
+              validityBadge = `<span class="badge badge-pending" title="Valid from ${this.formatDate(m.valid_from)}">Upcoming 📅</span>`;
+            } else if (m.validity_status === 'active_expiring') {
+              const tagStr = m.temporal_tag ? ` [${m.temporal_tag}]` : '';
+              validityBadge = `<span class="badge badge-running" title="Expires ${this.formatDate(m.expires_at)}">Exp: ${this.formatDate(m.expires_at)}${tagStr} ⏳</span>`;
+            }
+
+            return `
         <tr>
           <td class="checkbox-cell">
             <input type="checkbox" class="row-checkbox" value="${m.id}" ${this.selectedMemories.has(m.id) ? 'checked' : ''} onchange="app.toggleRowSelection('memories', '${m.id}', this.checked)">
@@ -516,12 +533,12 @@ class DashboardApp {
           <td><strong>${this.escapeHtml(m.statement)}</strong></td>
           <td><span class="badge badge-${m.category}">${m.category}</span></td>
           <td><code>${this.escapeHtml(m.native_user_id)}</code></td>
-          <td>${Math.round(m.confidence * 100)}%</td>
+          <td>${validityBadge}</td>
           <td><span class="badge badge-${m.state}">${m.state}</span></td>
           <td><small class="text-muted">${this.formatDate(m.created_at)}</small></td>
           <td>
             <div style="display: flex; gap: 6px;">
-              <button class="btn-icon" title="Edit" onclick="app.openEditMemoryModal('${m.id}', '${this.escapeJsString(m.statement)}', '${m.category}', ${m.confidence}, '${this.escapeJsString(m.native_user_id)}')">
+              <button class="btn-icon" title="Edit" onclick="app.openEditMemoryModal('${m.id}', '${this.escapeJsString(m.statement)}', '${m.category}', ${m.confidence}, '${this.escapeJsString(m.native_user_id)}', '${m.expires_at || ''}', '${m.temporal_tag || ''}')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
               </button>
               ${m.state === 'active' ? `
@@ -532,7 +549,8 @@ class DashboardApp {
             </div>
           </td>
         </tr>
-      `
+      `;
+          }
         )
         .join('');
 
@@ -550,11 +568,13 @@ class DashboardApp {
     document.getElementById('memory-statement-input').value = '';
     document.getElementById('memory-category-input').value = 'preference';
     document.getElementById('memory-confidence-input').value = '1.0';
+    document.getElementById('memory-expires-at-input').value = '';
+    document.getElementById('memory-temporal-tag-input').value = '';
     document.getElementById('memory-evidence-input').value = '';
     document.getElementById('memory-modal').style.display = 'flex';
   }
 
-  openEditMemoryModal(id, statement, category, confidence, userId) {
+  openEditMemoryModal(id, statement, category, confidence, userId, expiresAt = '', temporalTag = '') {
     document.getElementById('memory-modal-title').innerText = 'Edit Memory';
     document.getElementById('memory-form-id').value = id;
     document.getElementById('memory-user-input').value = userId;
@@ -562,6 +582,8 @@ class DashboardApp {
     document.getElementById('memory-statement-input').value = statement;
     document.getElementById('memory-category-input').value = category;
     document.getElementById('memory-confidence-input').value = confidence;
+    document.getElementById('memory-expires-at-input').value = expiresAt ? expiresAt.substring(0, 16) : '';
+    document.getElementById('memory-temporal-tag-input').value = temporalTag || '';
     document.getElementById('memory-evidence-input').value = '';
     document.getElementById('memory-modal').style.display = 'flex';
   }
@@ -576,13 +598,21 @@ class DashboardApp {
     const statement = document.getElementById('memory-statement-input').value.trim();
     const category = document.getElementById('memory-category-input').value;
     const confidence = parseFloat(document.getElementById('memory-confidence-input').value);
+    const expiresAtRaw = document.getElementById('memory-expires-at-input').value;
+    const expiresAt = expiresAtRaw ? new Date(expiresAtRaw).toISOString() : null;
+    const temporalTag = document.getElementById('memory-temporal-tag-input').value || null;
     const evidence = document.getElementById('memory-evidence-input').value.trim() || null;
 
     try {
       if (id) {
         await this.api(`/v1/admin/memories/${id}`, {
           method: 'PATCH',
-          body: JSON.stringify({ statement, category }),
+          body: JSON.stringify({
+            statement,
+            category,
+            expires_at: expiresAt,
+            temporal_tag: temporalTag,
+          }),
         });
         this.showToast('Memory updated', 'success');
       } else {
@@ -593,11 +623,12 @@ class DashboardApp {
             statement,
             category,
             confidence,
+            expires_at: expiresAt,
+            temporal_tag: temporalTag,
             evidence_quote: evidence,
           }),
         });
         this.showToast('Memory created', 'success');
-      }
       this.closeMemoryModal();
       this.loadMemories();
     } catch {

@@ -54,6 +54,8 @@ async def search_explicit_memory(
             UserIdentity.native_user_id == native_user_id,
             MemoryRecord.kind == "explicit",
             MemoryRecord.state == "active",
+            MemoryRecord.expires_at.is_(None) | (MemoryRecord.expires_at > func.now()),
+            MemoryRecord.valid_from.is_(None) | (MemoryRecord.valid_from <= func.now()),
             live_memory_evidence_clause(),
         )
     )
@@ -186,6 +188,9 @@ async def apply_explicit_candidates(
                 key=candidate.key,
                 category=candidate.category,
                 statement=candidate.statement,
+                valid_from=candidate.valid_from,
+                expires_at=candidate.expires_at,
+                temporal_tag=candidate.temporal_tag,
                 kind="explicit",
                 confidence=1,
                 state="active",

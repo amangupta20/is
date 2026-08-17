@@ -47,6 +47,7 @@ class MemoryRecord(Base):
             postgresql_where=text("state = 'active'"),
         ),
         Index("ix_memory_record_user_id_key", "user_id", "key"),
+        Index("ix_memory_record_user_validity", "user_id", "state", "expires_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -69,6 +70,9 @@ class MemoryRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    temporal_tag: Mapped[str | None] = mapped_column(String(50), nullable=True)
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(

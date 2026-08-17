@@ -2,6 +2,7 @@
 
 import asyncio
 import uuid
+from datetime import datetime
 from time import perf_counter
 from typing import Literal
 
@@ -78,6 +79,9 @@ class PersonalContextPreview(BaseModel):
     source_native_message_id: str | None
     source_native_project_id: str | None = None
     source_native_folder_id: str | None = None
+    valid_from: datetime | None = None
+    expires_at: datetime | None = None
+    temporal_tag: str | None = None
     filename: str | None = None
     native_file_id: str | None = None
     header_path: str | None = None
@@ -152,6 +156,9 @@ class PersonalContextReadResponse(BaseModel):
     source_native_message_id: str | None
     source_native_project_id: str | None = None
     source_native_folder_id: str | None = None
+    valid_from: datetime | None = None
+    expires_at: datetime | None = None
+    temporal_tag: str | None = None
     filename: str | None = None
     native_file_id: str | None = None
     header_path: str | None = None
@@ -217,6 +224,9 @@ async def search_personal_context(
             source_native_message_id=None,
             source_native_project_id=None,
             source_native_folder_id=None,
+            valid_from=record.valid_from,
+            expires_at=record.expires_at,
+            temporal_tag=record.temporal_tag,
         )
         ranked.append((1.0 / (RRF_K + rank), 0, str(record.id), preview))
 
@@ -316,6 +326,9 @@ async def read_personal_context(
                 source_native_message_id=turn.native_user_message_id,
                 source_native_project_id=turn.native_project_id,
                 source_native_folder_id=turn.native_folder_id,
+                valid_from=record.valid_from,
+                expires_at=record.expires_at,
+                temporal_tag=record.temporal_tag,
                 neighbors=[],
                 full_source_available=False,
             )
