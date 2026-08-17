@@ -45,6 +45,10 @@ class Filter:
             default=True,
             description="Inject real-world date, time, day of week, and timezone into assistant context",
         )
+        auto_index_files: bool = Field(
+            default=False,
+            description="Automatically index chat-attached files into Assistant Core Document Store. Disabled by default to prevent KB/Vault sync files from duplicating.",
+        )
 
         @field_validator("max_context_tokens", mode="before")
         @classmethod
@@ -374,48 +378,46 @@ class Filter:
             occurred_at = datetime.now(UTC).isoformat(timespec="microseconds")
 
             attached_file_ids: list[str] = []
-            candidate_files: list[object] = []
-            # Only examine explicit user message attachments, never body-level files (which contain auto-retrieved RAG / KB docs)
-            if isinstance(user_matches[0].get("files"), list):
-                candidate_files.extend(user_matches[0]["files"])
+            if self.valves.auto_index_files and isinstance(user_matches[0].get("files"), list):
+                candidate_files: list[object] = list(user_matches[0]["files"])
 
-            for f in candidate_files:
-                if isinstance(f, Mapping):
-                    ftype = f.get("type")
-                    if isinstance(ftype, str) and ftype in (
-                        "collection",
-                        "knowledge",
-                        "web",
-                        "note",
-                        "folder",
-                        "doc",
-                    ):
-                        continue
-                    if (
-                        f.get("collection_name")
-                        or f.get("knowledge_id")
-                        or f.get("collection_id")
-                        or f.get("kb_id")
-                        or f.get("knowledge")
-                    ):
-                        continue
-                    fmeta = f.get("meta")
-                    if isinstance(fmeta, Mapping) and (
-                        fmeta.get("collection_name")
-                        or fmeta.get("knowledge_id")
-                        or fmeta.get("collection_id")
-                        or fmeta.get("kb_id")
-                        or fmeta.get("knowledge")
-                        or fmeta.get("source") in ("knowledge", "collection", "rag", "external")
-                    ):
-                        continue
-                    fid = f.get("id") or f.get("file_id")
-                    if (
-                        isinstance(fid, str)
-                        and fid.strip()
-                        and fid.strip() not in attached_file_ids
-                    ):
-                        attached_file_ids.append(fid.strip())
+                for f in candidate_files:
+                    if isinstance(f, Mapping):
+                        ftype = f.get("type")
+                        if isinstance(ftype, str) and ftype in (
+                            "collection",
+                            "knowledge",
+                            "web",
+                            "note",
+                            "folder",
+                            "doc",
+                        ):
+                            continue
+                        if (
+                            f.get("collection_name")
+                            or f.get("knowledge_id")
+                            or f.get("collection_id")
+                            or f.get("kb_id")
+                            or f.get("knowledge")
+                        ):
+                            continue
+                        fmeta = f.get("meta")
+                        if isinstance(fmeta, Mapping) and (
+                            fmeta.get("collection_name")
+                            or fmeta.get("knowledge_id")
+                            or fmeta.get("collection_id")
+                            or fmeta.get("kb_id")
+                            or fmeta.get("knowledge")
+                            or fmeta.get("source") in ("knowledge", "collection", "rag", "external")
+                        ):
+                            continue
+                        fid = f.get("id") or f.get("file_id")
+                        if (
+                            isinstance(fid, str)
+                            and fid.strip()
+                            and fid.strip() not in attached_file_ids
+                        ):
+                            attached_file_ids.append(fid.strip())
 
             turn_payload: dict[str, object] = {
                 "source": self._EVENT_SOURCE,
