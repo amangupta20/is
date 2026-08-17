@@ -61,6 +61,62 @@ def _fetch_kb_file_ids(
     return kb_file_ids
 
 
+def _extract_files_from_dict(
+    d: dict[str, Any],
+    kb_file_ids: set[str],
+    kb_hashes: set[str],
+    kb_filenames: set[str],
+) -> None:
+    """Recursively extract file paths, filenames, hashes, and IDs from arbitrary API payload dictionaries."""
+    fname = (
+        d.get("file_path")
+        or d.get("path")
+        or d.get("filename")
+        or d.get("name")
+        or d.get("source_path")
+        or d.get("target_path")
+    )
+    if fname and isinstance(fname, str) and ("." in fname or "/" in fname or "\\" in fname):
+        clean_fname = fname.strip()
+        base_fname = clean_fname.replace("\\", "/").split("/")[-1].strip()
+        if clean_fname:
+            kb_filenames.add(clean_fname)
+        if base_fname:
+            kb_filenames.add(base_fname)
+
+    f_hash = (
+        d.get("content_hash")
+        or d.get("hash")
+        or d.get("sha256")
+        or d.get("git_sha")
+        or d.get("sha")
+        or d.get("file_hash")
+    )
+    if f_hash and isinstance(f_hash, str) and len(f_hash.strip()) >= 7:
+        kb_hashes.add(f_hash.strip())
+
+    fid = d.get("file_id") or d.get("openwebui_file_id")
+    if fid and isinstance(fid, str) and fid.strip():
+        kb_file_ids.add(fid.strip())
+    elif d.get("id") and isinstance(d.get("id"), str) and (fname or d.get("meta") or d.get("hash")):
+        kb_file_ids.add(str(d["id"]).strip())
+
+    for k, v in d.items():
+        if isinstance(v, list):
+            for item in v:
+                if isinstance(item, dict):
+                    _extract_files_from_dict(item, kb_file_ids, kb_hashes, kb_filenames)
+                elif isinstance(item, str) and item.strip():
+                    clean_str = item.strip()
+                    if k in ("file_ids", "files"):
+                        kb_file_ids.add(clean_str)
+                    elif "." in clean_str or "/" in clean_str or "\\" in clean_str:
+                        kb_filenames.add(clean_str)
+                        kb_filenames.add(clean_str.replace("\\", "/").split("/")[-1].strip())
+        elif isinstance(v, dict):
+            _extract_files_from_dict(v, kb_file_ids, kb_hashes, kb_filenames)
+
+
 def fetch_all_kb_metadata_and_hashes(
     *,
     base_url: str,
@@ -103,92 +159,102 @@ def fetch_all_kb_metadata_and_hashes(
                 )
             if resp.status_code == 200:
                 data = resp.json()
+                kb_list: list[dict[str, Any]] = []
                 if isinstance(data, list):
-                    LOGGER.info("openwebui_knowledge_collections_count", count=len(data))
-                    for item in data:
-                        if not isinstance(item, dict):
-                            continue
-                        kb_id = item.get("id")
-                        kb_name = item.get("name")
-                        kb_detail = item
-                        if kb_id and (
-                            "files" not in item
-                            or not item.get("files")
-                            or "data" not in item
-                            or not item.get("data")
-                        ):
-                            try:
-                                kb_resp = client.get(
-                                    f"{clean_url}/api/v1/knowledge/{kb_id}", headers=headers
-                                )
-                                if kb_resp.status_code == 200:
-                                    detail_data = kb_resp.json()
-                                    if isinstance(detail_data, dict):
-                                        kb_detail = detail_data
-                            except Exception as kb_exc:  # noqa: BLE001
-                                LOGGER.info(
-                                    "fetch_kb_detail_failed", kb_id=kb_id, error=str(kb_exc)
-                                )
+                    kb_list = [item for item in data if isinstance(item, dict)]
+                elif isinstance(data, dict):
+                    if isinstance(data.get("items"), list):
+                        kb_list = [item for item in data["items"] if isinstance(item, dict)]
+                    elif isinstance(data.get("data"), list):
+                        kb_list = [item for item in data["data"] if isinstance(item, dict)]
+                    else:
+                        kb_list = [data]
 
-                        files = kb_detail.get("files")
-                        found_files_count = len(files) if isinstance(files, list) else 0
-                        LOGGER.info(
-                            "openwebui_kb_inspected",
-                            kb_id=kb_id,
-                            name=kb_name,
-                            files_count=found_files_count,
-                        )
-                        if isinstance(files, list):
-                            for f in files:
-                                if isinstance(f, dict):
-                                    fid = f.get("id")
-                                    if fid:
-                                        kb_file_ids.add(str(fid))
-                                    fname = f.get("name") or f.get("filename")
-                                    if fname:
-                                        kb_filenames.add(str(fname).strip())
-                                    meta = f.get("meta") or {}
-                                    if isinstance(meta, dict) and meta.get("hash"):
-                                        kb_hashes.add(str(meta["hash"]).strip())
-                                elif isinstance(f, str) and f:
-                                    kb_file_ids.add(f)
+                LOGGER.info(
+                    "openwebui_knowledge_collections_count",
+                    count=len(kb_list),
+                    collections=[item.get("name") for item in kb_list],
+                )
 
-                        data_field = kb_detail.get("data")
-                        if isinstance(data_field, dict):
-                            file_ids = data_field.get("file_ids")
-                            if isinstance(file_ids, list):
-                                for fid in file_ids:
-                                    if fid:
-                                        kb_file_ids.add(str(fid))
+                for item in kb_list:
+                    kb_id = item.get("id")
+                    kb_name = item.get("name")
+                    if kb_name:
+                        kb_filenames.add(str(kb_name).strip())
+
+                    _extract_files_from_dict(item, kb_file_ids, kb_hashes, kb_filenames)
+
+                    if kb_id:
+                        try:
+                            kb_resp = client.get(
+                                f"{clean_url}/api/v1/knowledge/{kb_id}", headers=headers
+                            )
+                            if kb_resp.status_code == 200:
+                                kb_data = kb_resp.json()
+                                if isinstance(kb_data, dict):
+                                    _extract_files_from_dict(
+                                        kb_data, kb_file_ids, kb_hashes, kb_filenames
+                                    )
+                        except Exception as kb_exc:  # noqa: BLE001
+                            LOGGER.info("fetch_kb_detail_failed", kb_id=kb_id, error=str(kb_exc))
+
+                        try:
+                            kb_files_resp = client.get(
+                                f"{clean_url}/api/v1/knowledge/{kb_id}/files", headers=headers
+                            )
+                            if kb_files_resp.status_code == 200:
+                                kb_files_data = kb_files_resp.json()
+                                if isinstance(kb_files_data, list):
+                                    for kbf in kb_files_data:
+                                        if isinstance(kbf, dict):
+                                            _extract_files_from_dict(
+                                                kbf, kb_file_ids, kb_hashes, kb_filenames
+                                            )
+                                elif isinstance(kb_files_data, dict):
+                                    _extract_files_from_dict(
+                                        kb_files_data, kb_file_ids, kb_hashes, kb_filenames
+                                    )
+                        except Exception as kbf_exc:  # noqa: BLE001
+                            LOGGER.info(
+                                "fetch_kb_files_endpoint_failed",
+                                kb_id=kb_id,
+                                error=str(kbf_exc),
+                            )
 
             # Also check GET /api/v1/files/ for any files linked to knowledge/collections
             try:
                 all_files_resp = client.get(f"{clean_url}/api/v1/files/", headers=headers)
                 if all_files_resp.status_code == 200:
-                    files_list = all_files_resp.json()
-                    if isinstance(files_list, list):
-                        LOGGER.info("openwebui_all_files_count", total_files=len(files_list))
-                        for f_entry in files_list:
-                            if not isinstance(f_entry, dict):
-                                continue
-                            f_meta = f_entry.get("meta") or {}
-                            if (
-                                isinstance(f_meta, dict)
-                                and (
-                                    f_meta.get("collection_name")
-                                    or f_meta.get("knowledge_id")
-                                    or f_entry.get("type") in ("knowledge", "collection")
-                                    or f_meta.get("type") in ("knowledge", "collection")
-                                )
-                            ):
-                                fid = f_entry.get("id")
-                                if fid:
-                                    kb_file_ids.add(str(fid))
-                                fname = f_entry.get("filename") or f_meta.get("name")
-                                if fname:
-                                    kb_filenames.add(str(fname).strip())
-                                if f_meta.get("hash"):
-                                    kb_hashes.add(str(f_meta["hash"]).strip())
+                    files_payload = all_files_resp.json()
+                    files_list: list[dict[str, Any]] = []
+                    if isinstance(files_payload, list):
+                        files_list = [f for f in files_payload if isinstance(f, dict)]
+                    elif isinstance(files_payload, dict):
+                        if isinstance(files_payload.get("items"), list):
+                            files_list = [
+                                f for f in files_payload["items"] if isinstance(f, dict)
+                            ]
+                        elif isinstance(files_payload.get("data"), list):
+                            files_list = [
+                                f for f in files_payload["data"] if isinstance(f, dict)
+                            ]
+
+                    LOGGER.info("openwebui_all_files_count", total_files=len(files_list))
+                    for f_entry in files_list:
+                        f_meta = f_entry.get("meta") or {}
+                        if (
+                            isinstance(f_meta, dict)
+                            and (
+                                f_meta.get("collection_name")
+                                or f_meta.get("knowledge_id")
+                                or f_meta.get("collection_id")
+                                or f_entry.get("type") in ("knowledge", "collection")
+                                or f_meta.get("type") in ("knowledge", "collection")
+                            )
+                        ):
+                            _extract_files_from_dict(
+                                f_entry, kb_file_ids, kb_hashes, kb_filenames
+                            )
             except Exception as files_exc:  # noqa: BLE001
                 LOGGER.info("fetch_all_files_list_failed", error=str(files_exc))
 
@@ -237,7 +303,14 @@ def fetch_all_kb_metadata_and_hashes(
 
     try:
         with httpx.Client(timeout=timeout_seconds) as oikb_client:
-            for path in ("/sync/history", "/history", "/sync/status", "/status"):
+            for path in (
+                "/sync/history",
+                "/history",
+                "/sync/status",
+                "/status",
+                "/files",
+                "/api/v1/history",
+            ):
                 try:
                     o_resp = oikb_client.get(
                         f"{target_oikb_url.rstrip('/')}{path}", headers=oikb_headers
@@ -245,47 +318,16 @@ def fetch_all_kb_metadata_and_hashes(
                     LOGGER.info("oikb_endpoint_response", path=path, status_code=o_resp.status_code)
                     if o_resp.status_code == 200:
                         o_data = o_resp.json()
-                        items_to_check: list[Any] = []
-                        if isinstance(o_data, list):
-                            items_to_check = o_data
-                        elif isinstance(o_data, dict):
-                            nested = (
-                                o_data.get("history")
-                                or o_data.get("files")
-                                or o_data.get("items")
-                                or [o_data]
+                        if isinstance(o_data, dict):
+                            _extract_files_from_dict(
+                                o_data, kb_file_ids, kb_hashes, kb_filenames
                             )
-                            if isinstance(nested, list):
-                                items_to_check = nested
-                            elif isinstance(nested, dict):
-                                items_to_check = [nested]
-
-                        LOGGER.info("oikb_sync_items_found", path=path, count=len(items_to_check))
-
-                        for o_item in items_to_check:
-                            if not isinstance(o_item, dict):
-                                continue
-                            fname = (
-                                o_item.get("file_path")
-                                or o_item.get("path")
-                                or o_item.get("filename")
-                                or o_item.get("name")
-                            )
-                            if fname and isinstance(fname, str):
-                                base_fname = fname.replace("\\", "/").split("/")[-1]
-                                kb_filenames.add(fname.strip())
-                                kb_filenames.add(base_fname.strip())
-                            f_hash = (
-                                o_item.get("content_hash")
-                                or o_item.get("hash")
-                                or o_item.get("sha256")
-                                or o_item.get("git_sha")
-                            )
-                            if f_hash and isinstance(f_hash, str):
-                                kb_hashes.add(f_hash.strip())
-                            fid = o_item.get("file_id") or o_item.get("id")
-                            if fid and isinstance(fid, str):
-                                kb_file_ids.add(fid.strip())
+                        elif isinstance(o_data, list):
+                            for el in o_data:
+                                if isinstance(el, dict):
+                                    _extract_files_from_dict(
+                                        el, kb_file_ids, kb_hashes, kb_filenames
+                                    )
                 except Exception as path_exc:  # noqa: BLE001
                     LOGGER.info("fetch_oikb_path_failed", path=path, error=str(path_exc))
     except Exception as oikb_exc:  # noqa: BLE001

@@ -292,3 +292,68 @@ def test_fetch_all_kb_metadata_and_hashes_discovers_oikb_files() -> None:
         assert "sha256-coin-change" in hashes
         assert "Coin Change.md" in fnames
         assert "10_LeetCode/Coin Change.md" in fnames
+
+
+def test_fetch_all_kb_metadata_dict_items() -> None:
+    """fetch_all_kb_metadata_and_hashes parses Open WebUI dict-wrapped items."""
+    import httpx
+
+    from assistant_core.files.client import fetch_all_kb_metadata_and_hashes
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        url_str = str(request.url)
+        if "/api/v1/knowledge/kb-123" in url_str:
+            return httpx.Response(
+                200,
+                json={
+                    "id": "kb-123",
+                    "files": [
+                        {
+                            "id": "f-101",
+                            "name": "Dynamic Programming.md",
+                            "meta": {"hash": "dp-sha256"},
+                        }
+                    ],
+                },
+            )
+        if "/api/v1/knowledge/" in url_str:
+            return httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "id": "kb-123",
+                            "name": "obsidian-vault",
+                        }
+                    ]
+                },
+            )
+        if "/api/v1/files/f-101" in url_str:
+            return httpx.Response(
+                200,
+                json={
+                    "id": "f-101",
+                    "filename": "Dynamic Programming.md",
+                    "meta": {"hash": "dp-sha256"},
+                },
+            )
+        if "/api/v1/files/" in url_str:
+            return httpx.Response(200, json={"items": []})
+        return httpx.Response(404)
+
+    real_client_cls = httpx.Client
+    transport = httpx.MockTransport(mock_handler)
+    with patch(
+        "assistant_core.files.client.httpx.Client",
+        side_effect=lambda **kwargs: real_client_cls(transport=transport, timeout=kwargs.get("timeout")),
+    ):
+        fids, hashes, fnames = fetch_all_kb_metadata_and_hashes(
+            base_url="http://open-webui:8080",
+            api_key=None,
+            oikb_url=None,
+        )
+
+        assert "f-101" in fids
+        assert "dp-sha256" in hashes
+        assert "Dynamic Programming.md" in fnames
+        assert "obsidian-vault" in fnames
