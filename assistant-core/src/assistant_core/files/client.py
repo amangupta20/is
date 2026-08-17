@@ -221,43 +221,6 @@ def fetch_all_kb_metadata_and_hashes(
                                 error=str(kbf_exc),
                             )
 
-            # Also check GET /api/v1/files/ for any files linked to knowledge/collections
-            try:
-                all_files_resp = client.get(f"{clean_url}/api/v1/files/", headers=headers)
-                if all_files_resp.status_code == 200:
-                    files_payload = all_files_resp.json()
-                    files_list: list[dict[str, Any]] = []
-                    if isinstance(files_payload, list):
-                        files_list = [f for f in files_payload if isinstance(f, dict)]
-                    elif isinstance(files_payload, dict):
-                        if isinstance(files_payload.get("items"), list):
-                            files_list = [
-                                f for f in files_payload["items"] if isinstance(f, dict)
-                            ]
-                        elif isinstance(files_payload.get("data"), list):
-                            files_list = [
-                                f for f in files_payload["data"] if isinstance(f, dict)
-                            ]
-
-                    LOGGER.info("openwebui_all_files_count", total_files=len(files_list))
-                    for f_entry in files_list:
-                        f_meta = f_entry.get("meta") or {}
-                        if (
-                            isinstance(f_meta, dict)
-                            and (
-                                f_meta.get("collection_name")
-                                or f_meta.get("knowledge_id")
-                                or f_meta.get("collection_id")
-                                or f_entry.get("type") in ("knowledge", "collection")
-                                or f_meta.get("type") in ("knowledge", "collection")
-                            )
-                        ):
-                            _extract_files_from_dict(
-                                f_entry, kb_file_ids, kb_hashes, kb_filenames
-                            )
-            except Exception as files_exc:  # noqa: BLE001
-                LOGGER.info("fetch_all_files_list_failed", error=str(files_exc))
-
             # Fetch file metadata and hashes for discovered KB files
             for fid in list(kb_file_ids):
                 try:

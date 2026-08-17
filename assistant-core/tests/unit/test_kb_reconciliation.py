@@ -357,3 +357,71 @@ def test_fetch_all_kb_metadata_dict_items() -> None:
         assert "dp-sha256" in hashes
         assert "Dynamic Programming.md" in fnames
         assert "obsidian-vault" in fnames
+
+
+def test_fetch_all_kb_metadata_excludes_manual_chat_uploads() -> None:
+    """fetch_all_kb_metadata_and_hashes only discovers KB files and does not scan global chat files."""
+    import httpx
+
+    from assistant_core.files.client import fetch_all_kb_metadata_and_hashes
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        url_str = str(request.url)
+        # Knowledge Base only contains vault files
+        if "/api/v1/knowledge/kb-vault" in url_str:
+            return httpx.Response(
+                200,
+                json={
+                    "id": "kb-vault",
+                    "files": [
+                        {
+                            "id": "vault-file-1",
+                            "name": "Coin Change.md",
+                            "meta": {"hash": "coin-change-sha"},
+                        }
+                    ],
+                },
+            )
+        if "/api/v1/knowledge/" in url_str:
+            return httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "id": "kb-vault",
+                            "name": "obsidian-vault",
+                        }
+                    ]
+                },
+            )
+        if "/api/v1/files/vault-file-1" in url_str:
+            return httpx.Response(
+                200,
+                json={
+                    "id": "vault-file-1",
+                    "filename": "Coin Change.md",
+                    "meta": {"hash": "coin-change-sha"},
+                },
+            )
+        return httpx.Response(404)
+
+    real_client_cls = httpx.Client
+    transport = httpx.MockTransport(mock_handler)
+    with patch(
+        "assistant_core.files.client.httpx.Client",
+        side_effect=lambda **kwargs: real_client_cls(transport=transport, timeout=kwargs.get("timeout")),
+    ):
+        fids, hashes, fnames = fetch_all_kb_metadata_and_hashes(
+            base_url="http://open-webui:8080",
+            api_key=None,
+            oikb_url=None,
+        )
+
+        assert "vault-file-1" in fids
+        assert "coin-change-sha" in hashes
+        assert "Coin Change.md" in fnames
+
+        # Manual chat uploads (e.g. excel sheets, pdfs) not in KB must NOT be present
+        assert "manual-chat-upload-id" not in fids
+        assert "venue.xlsx" not in fnames
+        assert "update.pdf" not in fnames
