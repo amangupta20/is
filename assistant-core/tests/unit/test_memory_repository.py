@@ -269,8 +269,9 @@ def test_consolidate_user_memories() -> None:
             ]
 
     class FakeScalarResult:
-        def __init__(self, items: list[MemoryRecord]) -> None:
+        def __init__(self, items: list[MemoryRecord], scalar: object = None) -> None:
             self._items = items
+            self._scalar = scalar
 
         def scalars(self) -> "FakeScalarResult":
             return self
@@ -278,17 +279,28 @@ def test_consolidate_user_memories() -> None:
         def all(self) -> list[MemoryRecord]:
             return self._items
 
+        def scalar_one_or_none(self) -> object:
+            return self._scalar
+
     class FakeSession:
         def __init__(self) -> None:
             self.statements: list[object] = []
-            self.first_call = True
+            self.added: list[object] = []
+            self.call_count = 0
 
         async def execute(self, statement: object) -> FakeScalarResult:
             self.statements.append(statement)
-            if self.first_call:
-                self.first_call = False
+            self.call_count += 1
+            if self.call_count == 1:
+                # user_stmt
+                return FakeScalarResult([], scalar=None)
+            if self.call_count == 2:
+                # memory records statement
                 return FakeScalarResult([record_old, record_new])
             return FakeScalarResult([])
+
+        def add(self, item: object) -> None:
+            self.added.append(item)
 
     session = FakeSession()
 
@@ -302,5 +314,8 @@ def test_consolidate_user_memories() -> None:
         assert applied[0]["superseded_id"] == str(id_old)
         assert applied[0]["superseding_statement"] == "User runs Arch Linux"
         assert record_old.state == "superseded"
+        assert len(session.added) == 1
+        assert session.added[0].status == "success"  # type: ignore[union-attr]
+        assert session.added[0].superseded_count == 1  # type: ignore[union-attr]
 
     anyio.run(run_test)

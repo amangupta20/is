@@ -318,7 +318,10 @@ async def _handle_consolidate_memories(
         return
     consolidator = get_memory_consolidator()
     applied = await consolidate_user_memories(
-        session, native_user_id=native_user_id, consolidator=consolidator
+        session,
+        native_user_id=native_user_id,
+        consolidator=consolidator,
+        trigger="worker_daily",
     )
     LOGGER.info(
         "memories_consolidated",

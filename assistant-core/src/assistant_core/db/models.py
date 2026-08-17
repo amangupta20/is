@@ -6,7 +6,12 @@ from assistant_core.events.models import EventInbox
 from assistant_core.files.models import FileDocument, FileReference, FileSegment
 from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
-from assistant_core.memory.models import ChatProfileSnapshot, MemoryEvidence, MemoryRecord
+from assistant_core.memory.models import (
+    ChatProfileSnapshot,
+    ConsolidationRun,
+    MemoryEvidence,
+    MemoryRecord,
+)
 from assistant_core.turns.models import CompletedTurn
 
 __all__ = [
@@ -14,6 +19,7 @@ __all__ = [
     "ArtifactVersion",
     "ChatProfileSnapshot",
     "CompletedTurn",
+    "ConsolidationRun",
     "ConversationReference",
     "ConversationSegment",
     "EventInbox",

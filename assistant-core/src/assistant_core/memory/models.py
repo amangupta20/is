@@ -1,11 +1,11 @@
-"""Source-linked explicit-memory ledger models."""
-
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -14,7 +14,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from assistant_core.db.base import Base
@@ -132,3 +132,39 @@ class ChatProfileSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class ConsolidationRun(Base):
+    """Historical execution log and diff ledger for memory consolidation runs."""
+
+    __tablename__ = "consolidation_run"
+    __table_args__ = (
+        Index(
+            "ix_consolidation_run_user_time",
+            "native_user_id",
+            "created_at",
+            postgresql_using="btree",
+        ),
+        Index(
+            "ix_consolidation_run_created_at",
+            "created_at",
+            postgresql_using="btree",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("assistant_core.user_identity.id"), nullable=True
+    )
+    native_user_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    trigger: Mapped[str] = mapped_column(String(50), nullable=False, default="manual_admin")
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="success")
+    memories_scanned: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    superseded_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    details: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+

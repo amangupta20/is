@@ -212,6 +212,7 @@ class DashboardApp {
       files: { title: 'Documents', sub: 'Inspect indexed files, full markdown texts, and chunk segment trees.' },
       conversations: { title: 'Conversations', sub: 'Search and inspect indexed conversation turns.' },
       jobs: { title: 'Worker Jobs', sub: 'Monitor asynchronous indexing and re-queue dead jobs.' },
+      consolidation: { title: 'Consolidation History', sub: 'Audit logs of AI conflict resolution, supersessions, and evolutionary memory diffs.' },
       artifacts: { title: 'Artifacts', sub: 'Inspect and launch web editing for generated spreadsheets and documents.' },
       playground: { title: 'Search Playground', sub: 'Interactive hybrid RRF retrieval tester and prompt context preview.' },
     };
@@ -238,6 +239,9 @@ class DashboardApp {
         break;
       case 'jobs':
         this.loadJobs();
+        break;
+      case 'consolidation':
+        this.loadConsolidationRuns();
         break;
       case 'artifacts':
         this.loadArtifacts();
@@ -267,6 +271,13 @@ class DashboardApp {
         document.getElementById('stat-artifacts').innerText = data.artifacts.active;
         document.getElementById('stat-artifacts-sub').innerText = `${data.artifacts.total_versions} total versions recorded`;
         document.getElementById('badge-artifacts').innerText = data.artifacts.active;
+      }
+
+      if (data.consolidation) {
+        const consBadge = document.getElementById('badge-consolidation');
+        if (consBadge) {
+          consBadge.innerText = data.consolidation.total_runs;
+        }
       }
 
       document.getElementById('stat-jobs').innerText = `${data.jobs.queued} queued`;
@@ -881,7 +892,7 @@ class DashboardApp {
   }
 
   // ------------------------------------------------------------------------
-  // Memory Consolidation
+  // Memory Consolidation & History
   // ------------------------------------------------------------------------
   openConsolidationModal() {
     document.getElementById('consolidation-user-id').value = '';
@@ -933,6 +944,7 @@ class DashboardApp {
 
       resultsBox.style.display = 'block';
       this.loadMemories();
+      this.loadConsolidationRuns();
       this.loadOverview();
     } catch (err) {
       resultsTitle.innerText = 'Consolidation Failed';
@@ -942,6 +954,127 @@ class DashboardApp {
       btn.disabled = false;
       btn.innerText = 'Run Consolidation Again';
     }
+  }
+
+  async loadConsolidationRuns(page = 1) {
+    const user = document.getElementById('consolidation-user-filter')?.value.trim() || '';
+    const trigger = document.getElementById('consolidation-trigger-filter')?.value || '';
+
+    const tbody = document.getElementById('consolidation-table-body');
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="8" class="loading-cell">Loading consolidation history...</td></tr>';
+
+    try {
+      const params = new URLSearchParams({
+        page: page,
+        page_size: 50,
+      });
+      if (user) params.set('native_user_id', user);
+      if (trigger) params.set('trigger', trigger);
+
+      const data = await this.api(`/v1/admin/consolidation-runs?${params.toString()}`);
+
+      if (!data.items || data.items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="loading-cell">No consolidation runs recorded yet.</td></tr>';
+        return;
+      }
+
+      const triggerLabels = {
+        manual_admin: '<span class="badge">👤 Manual Admin</span>',
+        worker_daily: '<span class="badge badge-category">🤖 Daily Worker</span>',
+      };
+
+      const statusBadges = {
+        success: '<span class="badge badge-active">Success</span>',
+        no_changes: '<span class="badge">No Changes</span>',
+        failed: '<span class="badge badge-tombstoned">Failed</span>',
+      };
+
+      tbody.innerHTML = data.items
+        .map(
+          (r) => `
+        <tr>
+          <td><small>${this.formatDate(r.created_at)}</small></td>
+          <td>${triggerLabels[r.trigger] || `<span class="badge">${r.trigger}</span>`}</td>
+          <td><code>${this.escapeHtml(r.native_user_id)}</code></td>
+          <td>${statusBadges[r.status] || `<span class="badge">${r.status}</span>`}</td>
+          <td><strong>${r.memories_scanned}</strong></td>
+          <td>${r.superseded_count > 0 ? `<strong class="text-success">${r.superseded_count} superseded</strong>` : '<span class="text-muted">0</span>'}</td>
+          <td><small class="text-muted">${r.duration_ms}ms</small></td>
+          <td>
+            <button class="btn btn-secondary btn-sm" onclick="app.openConsolidationDiffModal('${r.id}')">
+              Inspect Diff 🔍
+            </button>
+          </td>
+        </tr>
+      `
+        )
+        .join('');
+    } catch {
+      tbody.innerHTML = '<tr><td colspan="8" class="loading-cell text-danger">Failed to load consolidation runs.</td></tr>';
+    }
+  }
+
+  async openConsolidationDiffModal(runId) {
+    try {
+      const data = await this.api(`/v1/admin/consolidation-runs/${runId}`);
+
+      const triggerLabel = data.trigger === 'manual_admin' ? 'Manual Admin 👤' : (data.trigger === 'worker_daily' ? 'Daily Background Worker 🤖' : data.trigger);
+
+      const metaBar = document.getElementById('diff-modal-meta-bar');
+      metaBar.innerHTML = `
+        <div class="diff-meta-item"><span class="diff-meta-label">User ID:</span> <span class="diff-meta-value"><code>${this.escapeHtml(data.native_user_id)}</code></span></div>
+        <div class="diff-meta-item"><span class="diff-meta-label">Trigger:</span> <span class="diff-meta-value">${triggerLabel}</span></div>
+        <div class="diff-meta-item"><span class="diff-meta-label">Executed At:</span> <span class="diff-meta-value">${this.formatDate(data.created_at)}</span></div>
+        <div class="diff-meta-item"><span class="diff-meta-label">Memories Scanned:</span> <span class="diff-meta-value">${data.memories_scanned}</span></div>
+        <div class="diff-meta-item"><span class="diff-meta-label">Superseded:</span> <span class="diff-meta-value ${data.superseded_count > 0 ? 'text-success' : ''}">${data.superseded_count}</span></div>
+        <div class="diff-meta-item"><span class="diff-meta-label">Duration:</span> <span class="diff-meta-value">${data.duration_ms}ms</span></div>
+      `;
+
+      const changesList = document.getElementById('diff-modal-changes-list');
+      if (!data.details || data.details.length === 0) {
+        changesList.innerHTML = `
+          <div class="diff-empty-state">
+            <p><strong>No contradictions or updates detected during this run.</strong></p>
+            <p class="text-secondary" style="font-size: 12px; margin-top: 6px;">All ${data.memories_scanned} evaluated active memories were verified to be mutually consistent.</p>
+          </div>
+        `;
+      } else {
+        changesList.innerHTML = data.details
+          .map(
+            (d, idx) => `
+          <div class="diff-card">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="badge" style="font-weight: 700;">Resolution #${idx + 1}</span>
+            </div>
+            <div class="diff-comparison-row">
+              <div class="diff-box diff-box-superseded">
+                <div class="diff-box-header">🔴 Superseded (Obsolete)</div>
+                <div>${this.escapeHtml(d.superseded_statement)}</div>
+              </div>
+              <div class="diff-box diff-box-superseding">
+                <div class="diff-box-header">🟢 Superseding (Authoritative)</div>
+                <div>${this.escapeHtml(d.superseding_statement)}</div>
+              </div>
+            </div>
+            <div class="diff-reason-box">
+              <div class="diff-reason-title">💡 AI Decision Rationale</div>
+              <div>${this.escapeHtml(d.reason)}</div>
+            </div>
+          </div>
+        `
+          )
+          .join('');
+      }
+
+      document.getElementById('consolidation-diff-modal').style.display = 'flex';
+    } catch (err) {
+      this.showToast(`Failed to load consolidation run: ${err.message}`, 'error');
+    }
+  }
+
+  closeConsolidationDiffModal() {
+    document.getElementById('consolidation-diff-modal').style.display = 'none';
   }
 
   // ------------------------------------------------------------------------

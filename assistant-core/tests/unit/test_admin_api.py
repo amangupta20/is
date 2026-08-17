@@ -129,6 +129,8 @@ def test_admin_overview_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
             _FakeResult(scalar=120),  # indexed passages
             _FakeResult(scalar=4),  # active artifacts
             _FakeResult(scalar=9),  # total artifact versions
+            _FakeResult(scalar=3),  # total consolidation runs
+            _FakeResult(scalar=2),  # total consolidation superseded count
             _FakeResult(rows=[("queued", 2), ("dead", 1)]),  # job counts
         ]
     )
@@ -143,6 +145,8 @@ def test_admin_overview_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
     assert data["files"]["total_characters"] == 25000
     assert data["artifacts"]["active"] == 4
     assert data["artifacts"]["total_versions"] == 9
+    assert data["consolidation"]["total_runs"] == 3
+    assert data["consolidation"]["total_superseded"] == 2
     assert data["jobs"]["queued"] == 2
     assert data["jobs"]["dead"] == 1
 
@@ -407,8 +411,9 @@ def test_admin_consolidation_and_playground() -> None:
 
     session = _FakeSession(
         [
-            # For POST /v1/admin/memories/consolidate (1 query returning list of records for user)
-            _FakeResult(scalars_list=[fake_record]),
+            # For POST /v1/admin/memories/consolidate
+            _FakeResult(scalar=None),  # 1. user identity lookup
+            _FakeResult(scalars_list=[fake_record]),  # 2. memory records lookup
             # For POST /v1/admin/playground/search:
             # 1. search_explicit_memory
             _FakeResult(scalars_list=[fake_record]),

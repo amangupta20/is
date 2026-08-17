@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import desc, func, or_, select, update
@@ -38,7 +38,12 @@ from assistant_core.jobs.worker import (
     get_memory_consolidator,
 )
 from assistant_core.memory.consolidator import MemoryConsolidationError
-from assistant_core.memory.models import ChatProfileSnapshot, MemoryEvidence, MemoryRecord
+from assistant_core.memory.models import (
+    ChatProfileSnapshot,
+    ConsolidationRun,
+    MemoryEvidence,
+    MemoryRecord,
+)
 from assistant_core.memory.profile import get_or_create_profile
 from assistant_core.memory.repository import (
     consolidate_user_memories,
@@ -235,6 +240,16 @@ async def get_overview_telemetry(request: Request) -> dict[str, Any]:
             await session.execute(select(func.count(ArtifactVersion.id)))
         ).scalar_one()
 
+        # Consolidation
+        total_consolidation_runs = (
+            await session.execute(select(func.count(ConsolidationRun.id)))
+        ).scalar_one()
+        total_consolidation_superseded = (
+            await session.execute(
+                select(func.coalesce(func.sum(ConsolidationRun.superseded_count), 0))
+            )
+        ).scalar_one()
+
         # Jobs
         job_counts = dict(
             (
@@ -264,6 +279,10 @@ async def get_overview_telemetry(request: Request) -> dict[str, Any]:
             "artifacts": {
                 "active": active_artifacts,
                 "total_versions": total_artifact_versions,
+            },
+            "consolidation": {
+                "total_runs": total_consolidation_runs,
+                "total_superseded": total_consolidation_superseded,
             },
             "jobs": {
                 "queued": job_counts.get("queued", 0),
@@ -1114,7 +1133,10 @@ async def trigger_memory_consolidation(
 
             for u in users:
                 applied = await consolidate_user_memories(
-                    session, native_user_id=u, consolidator=consolidator
+                    session,
+                    native_user_id=u,
+                    consolidator=consolidator,
+                    trigger="manual_admin",
                 )
                 applied_all.extend(applied)
 
@@ -1131,6 +1153,95 @@ async def trigger_memory_consolidation(
         "total_superseded": len(applied_all),
         "details": applied_all,
     }
+
+
+@router.get("/consolidation-runs", dependencies=[Depends(require_admin_session)])
+async def list_consolidation_runs(
+    request: Request,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    native_user_id: str | None = Query(default=None),
+    trigger: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """List historical memory consolidation runs with audit details."""
+    async with request.app.state.session_factory() as session:
+        query = select(ConsolidationRun)
+        count_query = select(func.count(ConsolidationRun.id))
+
+        if native_user_id:
+            query = query.where(ConsolidationRun.native_user_id == native_user_id)
+            count_query = count_query.where(ConsolidationRun.native_user_id == native_user_id)
+
+        if trigger:
+            query = query.where(ConsolidationRun.trigger == trigger)
+            count_query = count_query.where(ConsolidationRun.trigger == trigger)
+
+        total = (await session.execute(count_query)).scalar_one()
+
+        offset = (page - 1) * page_size
+        runs = list(
+            (
+                await session.execute(
+                    query.order_by(ConsolidationRun.created_at.desc())
+                    .offset(offset)
+                    .limit(page_size)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        items = [
+            {
+                "id": str(r.id),
+                "user_id": str(r.user_id) if r.user_id else None,
+                "native_user_id": r.native_user_id,
+                "trigger": r.trigger,
+                "status": r.status,
+                "memories_scanned": r.memories_scanned,
+                "superseded_count": r.superseded_count,
+                "details": r.details,
+                "error_message": r.error_message,
+                "duration_ms": r.duration_ms,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in runs
+        ]
+
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
+
+
+@router.get("/consolidation-runs/{run_id}", dependencies=[Depends(require_admin_session)])
+async def get_consolidation_run(run_id: uuid.UUID, request: Request) -> dict[str, Any]:
+    """Get single consolidation run by ID with full diff details."""
+    async with request.app.state.session_factory() as session:
+        run = (
+            await session.execute(
+                select(ConsolidationRun).where(ConsolidationRun.id == run_id)
+            )
+        ).scalar_one_or_none()
+
+        if run is None:
+            raise HTTPException(status_code=404, detail="consolidation run not found")
+
+        return {
+            "id": str(run.id),
+            "user_id": str(run.user_id) if run.user_id else None,
+            "native_user_id": run.native_user_id,
+            "trigger": run.trigger,
+            "status": run.status,
+            "memories_scanned": run.memories_scanned,
+            "superseded_count": run.superseded_count,
+            "details": run.details,
+            "error_message": run.error_message,
+            "duration_ms": run.duration_ms,
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+        }
 
 
 @router.post("/playground/search", dependencies=[Depends(require_admin_session)])

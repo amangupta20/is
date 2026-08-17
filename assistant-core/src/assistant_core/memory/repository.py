@@ -1,7 +1,6 @@
-"""Application and inspection of source-linked explicit-memory candidates."""
-
 import re
 import uuid
+from time import perf_counter
 from typing import Any
 
 from sqlalchemy import exists, func, select, update
@@ -11,7 +10,11 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from assistant_core.identity.models import UserIdentity
 from assistant_core.memory.consolidator import TaskModelMemoryConsolidator
-from assistant_core.memory.models import MemoryEvidence, MemoryRecord
+from assistant_core.memory.models import (
+    ConsolidationRun,
+    MemoryEvidence,
+    MemoryRecord,
+)
 from assistant_core.memory.schemas import ExplicitMemoryCandidate
 from assistant_core.turns.models import CompletedTurn
 
@@ -216,8 +219,14 @@ async def consolidate_user_memories(
     *,
     native_user_id: str,
     consolidator: TaskModelMemoryConsolidator,
+    trigger: str = "manual_admin",
 ) -> list[dict[str, Any]]:
-    """Find and apply supersession decisions across active memories for a native user."""
+    """Find and apply supersession decisions across active memories for a native user and record an audit log."""
+    started_at = perf_counter()
+    user_stmt = select(UserIdentity).where(UserIdentity.native_user_id == native_user_id)
+    user_obj = (await session.execute(user_stmt)).scalar_one_or_none()
+    user_id = user_obj.id if user_obj is not None else None
+
     statement = (
         select(MemoryRecord)
         .join(UserIdentity, MemoryRecord.user_id == UserIdentity.id)
@@ -230,6 +239,19 @@ async def consolidate_user_memories(
     )
     records = list((await session.execute(statement)).scalars().all())
     if len(records) <= 1:
+        duration_ms = (perf_counter() - started_at) * 1000
+        run_log = ConsolidationRun(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            native_user_id=native_user_id,
+            trigger=trigger,
+            status="no_changes",
+            memories_scanned=len(records),
+            superseded_count=0,
+            details=[],
+            duration_ms=round(duration_ms, 2),
+        )
+        session.add(run_log)
         return []
 
     memory_dicts = [
@@ -245,6 +267,19 @@ async def consolidate_user_memories(
 
     decisions = consolidator.consolidate(memory_dicts)
     if not decisions:
+        duration_ms = (perf_counter() - started_at) * 1000
+        run_log = ConsolidationRun(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            native_user_id=native_user_id,
+            trigger=trigger,
+            status="no_changes",
+            memories_scanned=len(records),
+            superseded_count=0,
+            details=[],
+            duration_ms=round(duration_ms, 2),
+        )
+        session.add(run_log)
         return []
 
     record_by_id = {r.id: r for r in records}
@@ -281,4 +316,17 @@ async def consolidate_user_memories(
             }
         )
 
+    duration_ms = (perf_counter() - started_at) * 1000
+    run_log = ConsolidationRun(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        native_user_id=native_user_id,
+        trigger=trigger,
+        status="success" if applied else "no_changes",
+        memories_scanned=len(records),
+        superseded_count=len(applied),
+        details=applied,
+        duration_ms=round(duration_ms, 2),
+    )
+    session.add(run_log)
     return applied
