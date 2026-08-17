@@ -422,7 +422,7 @@ async def _handle_index_file(session: AsyncSession, payload: dict[str, JsonValue
     )
 
     # Fetch file metadata and extracted content from Open WebUI
-    filename, mime_type, content = await asyncio.to_thread(
+    file_info = await asyncio.to_thread(
         fetch_openwebui_file,
         base_url=settings.open_webui_url,
         api_key=settings.open_webui_api_key.get_secret_value()
@@ -431,6 +431,11 @@ async def _handle_index_file(session: AsyncSession, payload: dict[str, JsonValue
         file_id=file_id,
         timeout_seconds=settings.file_indexing_timeout_seconds,
     )
+    if file_info is None:
+        LOGGER.info("file_index_skipped_kb_document", file_id=file_id, user_id=str(user_id))
+        return
+
+    filename, mime_type, content = file_info
 
     materialization = await materialize_file_passages(
         session,

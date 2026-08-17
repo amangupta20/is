@@ -59,6 +59,32 @@ def test_handle_index_file_success() -> None:
         assert mock_mat.called
 
 
+def test_handle_index_file_skips_kb_document() -> None:
+    """When fetch_openwebui_file returns None (KB document), indexing is skipped without error."""
+    user_id = uuid.uuid4()
+    file_id = "test-kb-doc-456"
+    payload = {
+        "file_id": file_id,
+        "user_id": str(user_id),
+    }
+
+    session = FakeSession()
+
+    with (
+        patch("assistant_core.jobs.worker.fetch_openwebui_file") as mock_fetch,
+        patch("assistant_core.jobs.worker.materialize_file_passages") as mock_mat,
+    ):
+        mock_fetch.return_value = None  # Skipped KB document
+
+        async def exercise() -> None:
+            await _handle_index_file(session, payload)  # type: ignore[arg-type]
+
+        anyio.run(exercise)
+        assert mock_fetch.called
+        assert not mock_mat.called
+        assert not session.committed
+
+
 def test_handle_index_file_fetch_error() -> None:
     user_id = uuid.uuid4()
     file_id = "test-file-123"

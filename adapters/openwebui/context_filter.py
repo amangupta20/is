@@ -334,8 +334,7 @@ class Filter:
 
             attached_file_ids: list[str] = []
             candidate_files: list[object] = []
-            if isinstance(body.get("files"), list):
-                candidate_files.extend(body["files"])
+            # Only examine explicit user message attachments, never body-level files (which contain auto-retrieved RAG / KB docs)
             if isinstance(user_matches[0].get("files"), list):
                 candidate_files.extend(user_matches[0]["files"])
 
@@ -356,6 +355,17 @@ class Filter:
                         or f.get("knowledge_id")
                         or f.get("collection_id")
                         or f.get("kb_id")
+                        or f.get("knowledge")
+                    ):
+                        continue
+                    fmeta = f.get("meta")
+                    if isinstance(fmeta, Mapping) and (
+                        fmeta.get("collection_name")
+                        or fmeta.get("knowledge_id")
+                        or fmeta.get("collection_id")
+                        or fmeta.get("kb_id")
+                        or fmeta.get("knowledge")
+                        or fmeta.get("source") in ("knowledge", "collection", "rag", "external")
                     ):
                         continue
                     fid = f.get("id") or f.get("file_id")

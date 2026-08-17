@@ -777,7 +777,7 @@ def test_outlet_mapping_system_exit_still_propagates() -> None:
 
 
 def test_outlet_captures_attached_file_ids(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Attached files from body or message are extracted and included in the event payload."""
+    """Attached files from user message are extracted while body-level RAG files are ignored."""
     filter_ = Filter()
     delivered_payload: dict[str, object] = {}
 
@@ -791,19 +791,21 @@ def test_outlet_captures_attached_file_ids(monkeypatch: pytest.MonkeyPatch) -> N
         user_content="Here is the architecture doc.",
         assistant_content="I see the details.",
     )
+    # Body-level files represent auto-retrieved Knowledge Base / RAG docs and must be ignored
     body["files"] = [
-        {"id": "file-top-level-1", "type": "file"},
+        {"id": "kb-rag-auto-retrieved-1", "type": "file"},
         {"id": "kb-obsidian-1", "type": "collection", "collection_name": "obsidian-vault"},
         {"id": "kb-obsidian-2", "type": "knowledge"},
     ]
-    # Also attach in user message
+    # Explicit user message attachments
     body["messages"][0]["files"] = [
-        {"id": "file-msg-level-2", "type": "file"},
-        {"id": "file-top-level-1"},
+        {"id": "file-user-attached-1", "type": "file"},
+        {"id": "file-user-attached-2"},
         {"id": "kb-obsidian-3", "collection_id": "vault-1"},
+        {"id": "kb-obsidian-4", "meta": {"collection_name": "vault-2"}},
     ]
 
     assert anyio.run(filter_.outlet, body, user, metadata) is body
     payload = delivered_payload.get("payload")
     assert isinstance(payload, dict)
-    assert payload.get("attached_file_ids") == ["file-top-level-1", "file-msg-level-2"]
+    assert payload.get("attached_file_ids") == ["file-user-attached-1", "file-user-attached-2"]

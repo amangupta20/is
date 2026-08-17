@@ -22,11 +22,11 @@ def fetch_openwebui_file(
     api_key: str | None,
     file_id: str,
     timeout_seconds: float = 30.0,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str] | None:
     """Fetch (filename, mime_type, markdown_content) for a given Open WebUI file ID.
 
     Returns:
-        tuple[filename, mime_type, markdown_content]
+        tuple[filename, mime_type, markdown_content] if direct user file, or None if knowledge base document.
     """
     clean_url = base_url.rstrip("/")
     headers = {}
@@ -50,8 +50,37 @@ def fetch_openwebui_file(
             f"Failed to fetch metadata for file {file_id}: {exc}", status_code=status
         ) from exc
 
-    filename = str(data.get("filename") or data.get("meta", {}).get("name") or file_id)
-    mime_type = str(data.get("meta", {}).get("content_type") or "text/plain")
+    raw_meta = data.get("meta")
+    meta_dict: dict[str, Any] = raw_meta if isinstance(raw_meta, dict) else {}
+
+    # Check if the file is part of an Open WebUI Knowledge Base / Collection
+    meta_src = str(meta_dict.get("source") or "")
+    data_src = str(data.get("source") or "")
+    meta_tp = str(meta_dict.get("type") or "")
+    data_tp = str(data.get("type") or "")
+    is_kb_file = bool(
+        meta_dict.get("collection_name")
+        or data.get("collection_name")
+        or meta_dict.get("knowledge_id")
+        or data.get("knowledge_id")
+        or meta_dict.get("kb_id")
+        or data.get("kb_id")
+        or meta_src in ("knowledge", "collection", "rag", "external")
+        or data_src in ("knowledge", "collection", "rag", "external")
+        or meta_tp in ("collection", "knowledge", "doc", "web", "note", "folder")
+        or data_tp in ("collection", "knowledge", "doc", "web", "note", "folder")
+    )
+    if is_kb_file:
+        LOGGER.info(
+            "skipping_knowledge_base_file",
+            file_id=file_id,
+            filename=str(data.get("filename") or meta_dict.get("name") or file_id),
+            collection_name=meta_dict.get("collection_name") or data.get("collection_name"),
+        )
+        return None
+
+    filename = str(data.get("filename") or meta_dict.get("name") or file_id)
+    mime_type = str(meta_dict.get("content_type") or "text/plain")
 
     # Check if extracted markdown content is already present in data.content
     content = ""
