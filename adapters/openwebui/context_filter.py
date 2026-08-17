@@ -12,6 +12,7 @@ import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 from pydantic import BaseModel, Field, field_validator
@@ -36,6 +37,14 @@ class Filter:
         timeout_seconds: float = Field(default=1.5, ge=0.1, le=5.0)
         max_context_tokens: str = Field(default="300000")
         priority: int = Field(default=-100)
+        user_timezone: str = Field(
+            default="Asia/Kolkata",
+            description="IANA timezone identifier for real-time datetime anchor (e.g. Asia/Kolkata for IST, America/New_York, UTC)",
+        )
+        inject_temporal_anchor: bool = Field(
+            default=True,
+            description="Inject real-world date, time, day of week, and timezone into assistant context",
+        )
 
         @field_validator("max_context_tokens", mode="before")
         @classmethod
@@ -195,6 +204,26 @@ class Filter:
                 project_id = cls._plain_id(chat.get("project_id"))
         return folder_id, project_id
 
+    def _format_temporal_anchor(self) -> str:
+        """Format real-world datetime anchor in user's configured timezone (e.g. IST)."""
+        if not self.valves.inject_temporal_anchor:
+            return ""
+        try:
+            tz = ZoneInfo(self.valves.user_timezone)
+        except Exception:  # noqa: BLE001
+            tz = ZoneInfo("Asia/Kolkata")
+        local_now = datetime.now(tz)
+        formatted_time = local_now.strftime("%A, %d %B %Y, %I:%M %p %Z")
+        return (
+            "<current_datetime>\n"
+            f"Current Real-World Time: {formatted_time} ({self.valves.user_timezone})\n"
+            f"Temporal Grounding: Today is {local_now.strftime('%A, %d %B %Y')}. "
+            "All relative timeframes (such as 'today', 'yesterday', 'this week', 'last week', "
+            "'in X days', deadlines, and elapsed time between user sessions) must be "
+            "evaluated against this real-world date and time.\n"
+            "</current_datetime>"
+        )
+
     async def inlet(
         self,
         body: dict,
@@ -204,15 +233,6 @@ class Filter:
         """Insert optional context at the cache-stable system-prefix boundary."""
         messages = body.get("messages")
         if not isinstance(messages, list) or not __user__ or "id" not in __user__:
-            return body
-
-        if any(
-            isinstance(message, Mapping)
-            and message.get("role") == "system"
-            and isinstance(message.get("content"), str)
-            and message["content"].startswith("<assistant_context>\n")
-            for message in messages
-        ):
             return body
 
         latest_user_index = next(
@@ -229,6 +249,7 @@ class Filter:
         metadata = __metadata__ or {}
         request_text = str(messages[latest_user_index].get("content", ""))[:16_000]
         folder_id, project_id = self._extract_scope_ids(body, metadata)
+        context_text: str | None = None
         try:
             response = await self._post_context(
                 {
@@ -243,10 +264,30 @@ class Filter:
             )
             context_text = response.get("context_text") if isinstance(response, dict) else None
         except Exception:  # noqa: BLE001 - optional context must fail open for every companion failure.
+            context_text = None
+
+        temporal_anchor = self._format_temporal_anchor()
+
+        sections: list[str] = []
+        if temporal_anchor:
+            sections.append(temporal_anchor)
+        if isinstance(context_text, str) and context_text.strip():
+            sections.append(context_text.strip())
+
+        if not sections:
             return body
 
-        if not isinstance(context_text, str) or not context_text.strip():
-            return body
+        rendered_context = f"<assistant_context>\n{chr(10).join(sections)}\n</assistant_context>"
+
+        for msg in messages:
+            if (
+                isinstance(msg, Mapping)
+                and msg.get("role") == "system"
+                and isinstance(msg.get("content"), str)
+                and msg["content"].startswith("<assistant_context>\n")
+            ):
+                msg["content"] = rendered_context
+                return body
 
         prefix_end = 0
         while (
@@ -260,7 +301,7 @@ class Filter:
             prefix_end,
             {
                 "role": "system",
-                "content": f"<assistant_context>\n{context_text}\n</assistant_context>",
+                "content": rendered_context,
             },
         )
         return body

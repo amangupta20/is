@@ -77,8 +77,9 @@ def test_filter_valves_reject_noncanonical_or_out_of_range_budgets(value: object
 
 
 def test_empty_context_leaves_the_native_body_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An intentionally empty response does not alter the native prompt."""
+    """An intentionally empty response does not alter the native prompt when temporal anchor is off."""
     filter_ = Filter()
+    filter_.valves.inject_temporal_anchor = False
     body = {"messages": [{"role": "user", "content": "hello"}]}
     original = copy.deepcopy(body)
 
@@ -91,8 +92,9 @@ def test_empty_context_leaves_the_native_body_unchanged(monkeypatch: pytest.Monk
 
 
 def test_timeout_leaves_the_native_body_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A bounded companion timeout is invisible to the native chat request."""
+    """A bounded companion timeout is invisible to the native chat request when temporal anchor is off."""
     filter_ = Filter()
+    filter_.valves.inject_temporal_anchor = False
     body = {"messages": [{"role": "user", "content": "hello"}]}
     original = copy.deepcopy(body)
 
@@ -109,6 +111,7 @@ def test_malformed_response_leaves_the_native_body_unchanged(
 ) -> None:
     """A successful but invalid companion payload is also fail-open."""
     filter_ = Filter()
+    filter_.valves.inject_temporal_anchor = False
     body = {"messages": [{"role": "user", "content": "hello"}]}
     original = copy.deepcopy(body)
 
@@ -129,6 +132,7 @@ def test_filter_signs_exact_compact_sorted_bytes_sent_to_companion(
     filter_.valves = Filter.Valves(
         assistant_core_url="http://companion.test",
         hmac_secret=secret,
+        inject_temporal_anchor=False,
     )
     expected_payload = {
         "native_user_id": "u-1",
@@ -172,11 +176,43 @@ def test_filter_signs_exact_compact_sorted_bytes_sent_to_companion(
     )
 
 
+def test_inlet_injects_temporal_anchor_in_configured_timezone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inlet automatically injects real-world datetime anchor in user's IST timezone."""
+    filter_ = Filter()
+    filter_.valves = Filter.Valves(
+        user_timezone="Asia/Kolkata",
+        inject_temporal_anchor=True,
+    )
+    body = {
+        "messages": [
+            {"role": "user", "content": "I am working on problem 4 today."},
+        ]
+    }
+
+    async def empty_context(_: dict) -> dict:
+        return {"context_text": ""}
+
+    monkeypatch.setattr(filter_, "_post_context", empty_context)
+
+    result = anyio.run(lambda: filter_.inlet(body, __user__={"id": "u-1"}))
+    assert len(result["messages"]) == 2
+    system_msg = result["messages"][0]
+    assert system_msg["role"] == "system"
+    assert "<assistant_context>" in system_msg["content"]
+    assert "<current_datetime>" in system_msg["content"]
+    assert "Asia/Kolkata" in system_msg["content"]
+    assert "IST" in system_msg["content"]
+    assert "Temporal Grounding:" in system_msg["content"]
+
+
 def test_nonempty_context_is_inserted_at_the_fixed_system_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Frozen context follows leading system policy and precedes conversation history."""
     filter_ = Filter()
+    filter_.valves.inject_temporal_anchor = False
     body = {
         "messages": [
             {"role": "system", "content": "Native policy"},
