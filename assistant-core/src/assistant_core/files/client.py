@@ -84,9 +84,19 @@ def fetch_all_kb_metadata_and_hashes(
     kb_filenames: set[str] = set()
 
     # 1. Query Open WebUI Knowledge Bases and Files registry
+    LOGGER.info(
+        "kb_reconciliation_scanning_openwebui",
+        url=clean_url,
+        has_api_key=bool(api_key),
+    )
     try:
         with httpx.Client(timeout=timeout_seconds) as client:
             resp = client.get(f"{clean_url}/api/v1/knowledge/", headers=headers)
+            LOGGER.info(
+                "openwebui_knowledge_registry_response",
+                status_code=resp.status_code,
+                body_preview=resp.text[:300] if resp.text else "",
+            )
             if resp.status_code in (401, 403):
                 raise RuntimeError(
                     f"Open WebUI authentication failed (HTTP {resp.status_code}). Please configure ASSISTANT_OPEN_WEBUI_API_KEY in environment."
@@ -94,10 +104,12 @@ def fetch_all_kb_metadata_and_hashes(
             if resp.status_code == 200:
                 data = resp.json()
                 if isinstance(data, list):
+                    LOGGER.info("openwebui_knowledge_collections_count", count=len(data))
                     for item in data:
                         if not isinstance(item, dict):
                             continue
                         kb_id = item.get("id")
+                        kb_name = item.get("name")
                         kb_detail = item
                         if kb_id and (
                             "files" not in item
@@ -114,11 +126,18 @@ def fetch_all_kb_metadata_and_hashes(
                                     if isinstance(detail_data, dict):
                                         kb_detail = detail_data
                             except Exception as kb_exc:  # noqa: BLE001
-                                LOGGER.debug(
+                                LOGGER.info(
                                     "fetch_kb_detail_failed", kb_id=kb_id, error=str(kb_exc)
                                 )
 
                         files = kb_detail.get("files")
+                        found_files_count = len(files) if isinstance(files, list) else 0
+                        LOGGER.info(
+                            "openwebui_kb_inspected",
+                            kb_id=kb_id,
+                            name=kb_name,
+                            files_count=found_files_count,
+                        )
                         if isinstance(files, list):
                             for f in files:
                                 if isinstance(f, dict):
@@ -148,6 +167,7 @@ def fetch_all_kb_metadata_and_hashes(
                 if all_files_resp.status_code == 200:
                     files_list = all_files_resp.json()
                     if isinstance(files_list, list):
+                        LOGGER.info("openwebui_all_files_count", total_files=len(files_list))
                         for f_entry in files_list:
                             if not isinstance(f_entry, dict):
                                 continue
@@ -170,7 +190,7 @@ def fetch_all_kb_metadata_and_hashes(
                                 if f_meta.get("hash"):
                                     kb_hashes.add(str(f_meta["hash"]).strip())
             except Exception as files_exc:  # noqa: BLE001
-                LOGGER.debug("fetch_all_files_list_failed", error=str(files_exc))
+                LOGGER.info("fetch_all_files_list_failed", error=str(files_exc))
 
             # Fetch file metadata and hashes for discovered KB files
             for fid in list(kb_file_ids):
@@ -197,7 +217,7 @@ def fetch_all_kb_metadata_and_hashes(
                                 c_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
                                 kb_hashes.add(c_hash)
                 except Exception as file_exc:  # noqa: BLE001
-                    LOGGER.debug("fetch_kb_file_detail_failed", file_id=fid, error=str(file_exc))
+                    LOGGER.info("fetch_kb_file_detail_failed", file_id=fid, error=str(file_exc))
 
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("fetch_all_kb_metadata_failed", error=str(exc))
@@ -209,6 +229,12 @@ def fetch_all_kb_metadata_and_hashes(
         oikb_headers["Authorization"] = f"Bearer {oikb_api_key}"
         oikb_headers["X-API-Key"] = oikb_api_key
 
+    LOGGER.info(
+        "kb_reconciliation_scanning_oikb",
+        url=target_oikb_url,
+        has_api_key=bool(oikb_api_key),
+    )
+
     try:
         with httpx.Client(timeout=timeout_seconds) as oikb_client:
             for path in ("/sync/history", "/history", "/sync/status", "/status"):
@@ -216,6 +242,7 @@ def fetch_all_kb_metadata_and_hashes(
                     o_resp = oikb_client.get(
                         f"{target_oikb_url.rstrip('/')}{path}", headers=oikb_headers
                     )
+                    LOGGER.info("oikb_endpoint_response", path=path, status_code=o_resp.status_code)
                     if o_resp.status_code == 200:
                         o_data = o_resp.json()
                         items_to_check: list[Any] = []
@@ -232,6 +259,8 @@ def fetch_all_kb_metadata_and_hashes(
                                 items_to_check = nested
                             elif isinstance(nested, dict):
                                 items_to_check = [nested]
+
+                        LOGGER.info("oikb_sync_items_found", path=path, count=len(items_to_check))
 
                         for o_item in items_to_check:
                             if not isinstance(o_item, dict):
@@ -258,9 +287,16 @@ def fetch_all_kb_metadata_and_hashes(
                             if fid and isinstance(fid, str):
                                 kb_file_ids.add(fid.strip())
                 except Exception as path_exc:  # noqa: BLE001
-                    LOGGER.debug("fetch_oikb_path_failed", path=path, error=str(path_exc))
+                    LOGGER.info("fetch_oikb_path_failed", path=path, error=str(path_exc))
     except Exception as oikb_exc:  # noqa: BLE001
-        LOGGER.debug("fetch_oikb_metadata_failed", error=str(oikb_exc))
+        LOGGER.warning("fetch_oikb_metadata_failed", error=str(oikb_exc))
+
+    LOGGER.info(
+        "kb_metadata_scan_completed",
+        total_kb_file_ids=len(kb_file_ids),
+        total_kb_hashes=len(kb_hashes),
+        total_kb_filenames=len(kb_filenames),
+    )
 
     return kb_file_ids, kb_hashes, kb_filenames
 

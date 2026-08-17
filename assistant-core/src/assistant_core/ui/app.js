@@ -1163,9 +1163,11 @@ class DashboardApp {
         })
         .join('');
 
-      this.renderPagination(pagination, data.total, data.page, data.page_size, (p) => this.loadKBReconciliationRuns(p));
-    } catch {
-      tbody.innerHTML = '<tr><td colspan="7" class="loading-cell text-danger">Failed to load reconciliation logs.</td></tr>';
+      if (pagination) {
+        pagination.innerHTML = `<small class="text-muted">Showing ${data.items.length} of ${data.total} run(s)</small>`;
+      }
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="7" class="loading-cell text-danger">Failed to load reconciliation logs: ${this.escapeHtml(err.message)}</td></tr>`;
     }
   }
 
@@ -1177,10 +1179,25 @@ class DashboardApp {
     try {
       const data = await this.api(`/v1/admin/files/reconcile-kb/runs/${runId}`);
       detailsBox.style.display = 'block';
-      detailsTitle.innerText = `Run ${data.id.slice(0, 8)} Details — ${data.pruned_count} document(s) pruned from Assistant Core`;
+      detailsTitle.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span>Run <code>${data.id.slice(0, 8)}</code> Details — ${data.pruned_count} document(s) pruned</span>
+          <small class="text-muted">${data.kb_files_scanned} KB file(s) evaluated</small>
+        </div>
+      `;
+
+      if (data.status === 'failed') {
+        detailsList.innerHTML = `<div class="text-danger" style="padding: 8px;"><strong>Failure Error:</strong> ${this.escapeHtml(data.error_message || 'Unknown error')}</div>`;
+        return;
+      }
 
       if (!data.details || data.details.length === 0) {
-        detailsList.innerHTML = '<p class="text-muted" style="padding: 8px 0;">No documents were pruned in this run (no KB matches in Document Store).</p>';
+        detailsList.innerHTML = `
+          <div style="padding: 10px; color: var(--text-secondary);">
+            <p><strong>Scan Completed:</strong> 0 duplicate files found in Assistant Core Documents.</p>
+            <p style="font-size: 11px; margin-top: 4px;">Total KB / Vault files identified during scan: <strong>${data.kb_files_scanned}</strong>.</p>
+          </div>
+        `;
         return;
       }
 
