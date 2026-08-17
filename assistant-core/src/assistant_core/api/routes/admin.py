@@ -29,8 +29,17 @@ from assistant_core.conversation.embedder import (
 from assistant_core.conversation.models import ConversationReference, ConversationSegment
 from assistant_core.conversation.repository import search_conversation_context
 from assistant_core.events.models import EventInbox
-from assistant_core.files.models import FileDocument, FileReference, FileSegment
-from assistant_core.files.repository import search_file_passages, tombstone_file_references
+from assistant_core.files.models import (
+    FileDocument,
+    FileReference,
+    FileSegment,
+    KBReconciliationRun,
+)
+from assistant_core.files.repository import (
+    reconcile_and_log_kb_documents,
+    search_file_passages,
+    tombstone_file_references,
+)
 from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
 from assistant_core.jobs.worker import (
@@ -250,6 +259,16 @@ async def get_overview_telemetry(request: Request) -> dict[str, Any]:
             )
         ).scalar_one()
 
+        # KB Reconciliation
+        total_kb_runs = (
+            await session.execute(select(func.count(KBReconciliationRun.id)))
+        ).scalar_one()
+        total_kb_pruned = (
+            await session.execute(
+                select(func.coalesce(func.sum(KBReconciliationRun.pruned_count), 0))
+            )
+        ).scalar_one()
+
         # Jobs
         job_counts = dict(
             (
@@ -283,6 +302,10 @@ async def get_overview_telemetry(request: Request) -> dict[str, Any]:
             "consolidation": {
                 "total_runs": total_consolidation_runs,
                 "total_superseded": total_consolidation_superseded,
+            },
+            "kb_reconciliation": {
+                "total_runs": total_kb_runs,
+                "total_pruned": total_kb_pruned,
             },
             "jobs": {
                 "queued": job_counts.get("queued", 0),
@@ -1237,6 +1260,116 @@ async def get_consolidation_run(run_id: uuid.UUID, request: Request) -> dict[str
             "status": run.status,
             "memories_scanned": run.memories_scanned,
             "superseded_count": run.superseded_count,
+            "details": run.details,
+            "error_message": run.error_message,
+            "duration_ms": run.duration_ms,
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Knowledge Base Document Reconciliation & History
+# ---------------------------------------------------------------------------
+
+
+@router.post("/files/reconcile-kb", dependencies=[Depends(require_admin_session)])
+async def trigger_kb_reconciliation(request: Request) -> dict[str, Any]:
+    """Trigger immediate on-demand Knowledge Base document reconciliation."""
+    settings = request.app.state.settings
+    api_key = (
+        settings.open_webui_api_key.get_secret_value()
+        if settings.open_webui_api_key
+        else None
+    )
+
+    async with request.app.state.session_factory() as session:
+        run = await reconcile_and_log_kb_documents(
+            session,
+            base_url=settings.open_webui_url,
+            api_key=api_key,
+            trigger="manual_admin",
+            timeout_seconds=settings.file_indexing_timeout_seconds,
+        )
+        return {
+            "id": str(run.id),
+            "trigger": run.trigger,
+            "status": run.status,
+            "kb_files_scanned": run.kb_files_scanned,
+            "pruned_count": run.pruned_count,
+            "details": run.details,
+            "error_message": run.error_message,
+            "duration_ms": run.duration_ms,
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+        }
+
+
+@router.get("/files/reconcile-kb/runs", dependencies=[Depends(require_admin_session)])
+async def list_kb_reconciliation_runs(
+    request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    trigger: str | None = None,
+) -> dict[str, Any]:
+    """List paginated history of KB document reconciliation runs."""
+    async with request.app.state.session_factory() as session:
+        query = select(KBReconciliationRun)
+        count_query = select(func.count(KBReconciliationRun.id))
+
+        if trigger:
+            query = query.where(KBReconciliationRun.trigger == trigger)
+            count_query = count_query.where(KBReconciliationRun.trigger == trigger)
+
+        total = (await session.execute(count_query)).scalar_one()
+
+        runs_stmt = (
+            query.order_by(desc(KBReconciliationRun.created_at))
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        runs = (await session.execute(runs_stmt)).scalars().all()
+
+        items = [
+            {
+                "id": str(r.id),
+                "trigger": r.trigger,
+                "status": r.status,
+                "kb_files_scanned": r.kb_files_scanned,
+                "pruned_count": r.pruned_count,
+                "details": r.details,
+                "error_message": r.error_message,
+                "duration_ms": r.duration_ms,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in runs
+        ]
+
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
+
+
+@router.get("/files/reconcile-kb/runs/{run_id}", dependencies=[Depends(require_admin_session)])
+async def get_kb_reconciliation_run(run_id: uuid.UUID, request: Request) -> dict[str, Any]:
+    """Get single KB reconciliation run details."""
+    async with request.app.state.session_factory() as session:
+        run = (
+            await session.execute(
+                select(KBReconciliationRun).where(KBReconciliationRun.id == run_id)
+            )
+        ).scalar_one_or_none()
+
+        if run is None:
+            raise HTTPException(status_code=404, detail="kb reconciliation run not found")
+
+        return {
+            "id": str(run.id),
+            "trigger": run.trigger,
+            "status": run.status,
+            "kb_files_scanned": run.kb_files_scanned,
+            "pruned_count": run.pruned_count,
             "details": run.details,
             "error_message": run.error_message,
             "duration_ms": run.duration_ms,

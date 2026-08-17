@@ -3,7 +3,12 @@
 from assistant_core.artifacts.models import Artifact, ArtifactVersion, OnlyOfficeSession
 from assistant_core.conversation.models import ConversationReference, ConversationSegment
 from assistant_core.events.models import EventInbox
-from assistant_core.files.models import FileDocument, FileReference, FileSegment
+from assistant_core.files.models import (
+    FileDocument,
+    FileReference,
+    FileSegment,
+    KBReconciliationRun,
+)
 from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
 from assistant_core.memory.models import (
@@ -27,6 +32,7 @@ __all__ = [
     "FileReference",
     "FileSegment",
     "Job",
+    "KBReconciliationRun",
     "MemoryEvidence",
     "MemoryRecord",
     "OnlyOfficeSession",

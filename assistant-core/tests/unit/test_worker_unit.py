@@ -388,9 +388,13 @@ def test_missing_embedding_configuration_keeps_worker_available_for_lexical_back
     async def enqueue_consolidation(_session: object) -> int:
         return 0
 
+    async def enqueue_kb_reconcile(_session: object) -> int:
+        return 0
+
     monkeypatch.setattr(worker, "create_database", lambda _url: (Engine(), Factory()))
     monkeypatch.setattr(worker, "enqueue_missing_conversation_jobs", enqueue)
     monkeypatch.setattr(worker, "enqueue_daily_consolidation_jobs", enqueue_consolidation)
+    monkeypatch.setattr(worker, "enqueue_reconcile_kb_job", enqueue_kb_reconcile)
 
     async def exercise() -> None:
         stop_event = asyncio.Event()
@@ -917,6 +921,10 @@ def test_worker_builds_database_from_settings_and_always_disposes(
         assert _session is session
         return 1
 
+    async def enqueue_kb_reconcile(_session: object) -> int:
+        assert _session is session
+        return 1
+
     monkeypatch.setattr(
         worker,
         "get_settings",
@@ -931,6 +939,7 @@ def test_worker_builds_database_from_settings_and_always_disposes(
     monkeypatch.setattr(worker, "create_database", create_database, raising=False)
     monkeypatch.setattr(worker, "enqueue_missing_conversation_jobs", enqueue)
     monkeypatch.setattr(worker, "enqueue_daily_consolidation_jobs", enqueue_consolidation)
+    monkeypatch.setattr(worker, "enqueue_reconcile_kb_job", enqueue_kb_reconcile)
 
     async def exercise() -> None:
         stop_event = asyncio.Event()

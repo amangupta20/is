@@ -131,6 +131,8 @@ def test_admin_overview_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
             _FakeResult(scalar=9),  # total artifact versions
             _FakeResult(scalar=3),  # total consolidation runs
             _FakeResult(scalar=2),  # total consolidation superseded count
+            _FakeResult(scalar=1),  # total kb reconciliation runs
+            _FakeResult(scalar=4),  # total kb reconciliation pruned count
             _FakeResult(rows=[("queued", 2), ("dead", 1)]),  # job counts
         ]
     )
@@ -147,6 +149,8 @@ def test_admin_overview_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
     assert data["artifacts"]["total_versions"] == 9
     assert data["consolidation"]["total_runs"] == 3
     assert data["consolidation"]["total_superseded"] == 2
+    assert data["kb_reconciliation"]["total_runs"] == 1
+    assert data["kb_reconciliation"]["total_pruned"] == 4
     assert data["jobs"]["queued"] == 2
     assert data["jobs"]["dead"] == 1
 

@@ -1078,6 +1078,133 @@ class DashboardApp {
   }
 
   // ------------------------------------------------------------------------
+  // Knowledge Base Document Reconciliation & History
+  // ------------------------------------------------------------------------
+  async triggerKBReconciliation() {
+    this.showToast('Starting Knowledge Base reconciliation scan...', 'info');
+    try {
+      const res = await this.api('/v1/admin/files/reconcile-kb', { method: 'POST' });
+      if (res.status === 'failed') {
+        this.showToast(`Reconciliation failed: ${res.error_message || 'Unknown error'}`, 'error');
+      } else if (res.pruned_count > 0) {
+        this.showToast(`Reconciliation complete: Pruned ${res.pruned_count} Knowledge Base document(s)`, 'success');
+      } else {
+        this.showToast(`Reconciliation complete: All ${res.kb_files_scanned} KB files scanned, no duplicates found`, 'success');
+      }
+      this.loadFiles(1);
+      this.loadOverview();
+      const modal = document.getElementById('kb-reconciliation-modal');
+      if (modal && modal.style.display === 'flex') {
+        this.loadKBReconciliationRuns(1);
+      }
+    } catch (err) {
+      this.showToast(`Reconciliation error: ${err.message}`, 'error');
+    }
+  }
+
+  openKBReconciliationLogsModal() {
+    document.getElementById('kb-reconciliation-modal').style.display = 'flex';
+    document.getElementById('kb-run-details-box').style.display = 'none';
+    this.loadKBReconciliationRuns(1);
+  }
+
+  closeKBReconciliationLogsModal() {
+    document.getElementById('kb-reconciliation-modal').style.display = 'none';
+  }
+
+  async loadKBReconciliationRuns(page = 1) {
+    const tbody = document.getElementById('kb-runs-table-body');
+    const pagination = document.getElementById('kb-runs-pagination');
+    const triggerFilter = document.getElementById('kb-runs-trigger-filter')?.value || 'all';
+
+    tbody.innerHTML = '<tr><td colspan="7" class="loading-cell">Loading reconciliation logs...</td></tr>';
+
+    try {
+      const params = new URLSearchParams({ page: page.toString(), page_size: '10' });
+      if (triggerFilter !== 'all') {
+        params.set('trigger', triggerFilter);
+      }
+
+      const data = await this.api(`/v1/admin/files/reconcile-kb/runs?${params.toString()}`);
+
+      if (!data.items || data.items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="loading-cell">No reconciliation runs recorded yet.</td></tr>';
+        pagination.innerHTML = '';
+        return;
+      }
+
+      tbody.innerHTML = data.items
+        .map((r) => {
+          const triggerBadge = r.trigger === 'manual_admin'
+            ? '<span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">👤 Manual Admin</span>'
+            : '<span class="badge" style="background: rgba(168, 85, 247, 0.15); color: #a855f7;">🤖 Hourly Worker</span>';
+
+          const statusBadge = r.status === 'success'
+            ? '<span class="badge badge-success">Success</span>'
+            : (r.status === 'no_changes'
+              ? '<span class="badge" style="background: rgba(100, 116, 139, 0.2); color: #94a3b8;">No Changes</span>'
+              : '<span class="badge badge-danger">Failed</span>');
+
+          return `
+            <tr>
+              <td><code>${this.formatDate(r.created_at)}</code></td>
+              <td>${triggerBadge}</td>
+              <td>${statusBadge}</td>
+              <td><strong>${r.kb_files_scanned}</strong></td>
+              <td><span class="${r.pruned_count > 0 ? 'text-success font-semibold' : 'text-muted'}">${r.pruned_count}</span></td>
+              <td><small class="text-muted">${r.duration_ms}ms</small></td>
+              <td>
+                <button class="btn btn-secondary btn-sm" onclick="app.viewKBRunDetails('${r.id}')">
+                  ${r.pruned_count > 0 ? '🔍 Inspect Pruned (' + r.pruned_count + ')' : 'View Details'}
+                </button>
+              </td>
+            </tr>
+          `;
+        })
+        .join('');
+
+      this.renderPagination(pagination, data.total, data.page, data.page_size, (p) => this.loadKBReconciliationRuns(p));
+    } catch {
+      tbody.innerHTML = '<tr><td colspan="7" class="loading-cell text-danger">Failed to load reconciliation logs.</td></tr>';
+    }
+  }
+
+  async viewKBRunDetails(runId) {
+    const detailsBox = document.getElementById('kb-run-details-box');
+    const detailsTitle = document.getElementById('kb-run-details-title');
+    const detailsList = document.getElementById('kb-run-details-list');
+
+    try {
+      const data = await this.api(`/v1/admin/files/reconcile-kb/runs/${runId}`);
+      detailsBox.style.display = 'block';
+      detailsTitle.innerText = `Run ${data.id.slice(0, 8)} Details — ${data.pruned_count} document(s) pruned from Assistant Core`;
+
+      if (!data.details || data.details.length === 0) {
+        detailsList.innerHTML = '<p class="text-muted" style="padding: 8px 0;">No documents were pruned in this run (no KB matches in Document Store).</p>';
+        return;
+      }
+
+      detailsList.innerHTML = data.details
+        .map(
+          (d, idx) => `
+        <div style="padding: 8px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <strong>#${idx + 1} ${this.escapeHtml(d.filename)}</strong><br>
+            <small class="text-muted">ID: <code>${this.escapeHtml(d.native_file_id)}</code> | Match: <span class="badge" style="background: rgba(239, 68, 68, 0.15); color: #ef4444;">${this.escapeHtml(d.match_type)}</span></small>
+          </div>
+          <div style="text-align: right;">
+            <span class="badge badge-danger">Pruned from Docs</span>
+          </div>
+        </div>
+      `
+        )
+        .join('');
+    } catch (err) {
+      this.showToast(`Failed to load run details: ${err.message}`, 'error');
+    }
+  }
+
+  // ------------------------------------------------------------------------
   // Search Playground
   // ------------------------------------------------------------------------
   async runPlaygroundSearch() {

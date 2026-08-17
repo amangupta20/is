@@ -2,12 +2,14 @@
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     CheckConstraint,
     Computed,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -17,7 +19,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import TSVECTOR, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from assistant_core.db.base import Base
@@ -160,3 +162,34 @@ class FileDocument(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     tombstoned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class KBReconciliationRun(Base):
+    """Historical execution log for Knowledge Base document reconciliation audits."""
+
+    __tablename__ = "kb_reconciliation_run"
+    __table_args__ = (
+        Index(
+            "ix_kb_reconciliation_run_created_at",
+            "created_at",
+            postgresql_using="btree",
+        ),
+        Index(
+            "ix_kb_reconciliation_run_trigger",
+            "trigger",
+            postgresql_using="btree",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    trigger: Mapped[str] = mapped_column(String(50), nullable=False, default="manual_admin")
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="success")
+    kb_files_scanned: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pruned_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    details: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+

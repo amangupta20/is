@@ -812,39 +812,11 @@ def test_outlet_mapping_system_exit_still_propagates() -> None:
         )
 
 
-def test_outlet_ignores_files_when_auto_index_files_is_disabled(
+def test_outlet_captures_attached_file_ids_and_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """By default auto_index_files is False so no KB/Vault or chat files are sent for document indexing."""
+    """Attached files from user message and openwebui_token are captured for background reconciliation."""
     filter_ = Filter()
-    assert filter_.valves.auto_index_files is False
-
-    delivered_payload: dict[str, object] = {}
-
-    async def mock_post_signed(_path: str, payload: dict[str, object]) -> dict[str, object]:
-        delivered_payload.update(payload)
-        return {"status": "accepted"}
-
-    monkeypatch.setattr(filter_, "_post_signed", mock_post_signed)
-
-    body, user, metadata = _outlet_fixture(
-        user_content="Syncing vault with trigger_sync",
-        assistant_content="Vault synced successfully.",
-    )
-    body["messages"][0]["files"] = [
-        {"id": "vault-file-1", "type": "file", "name": "Coin Change.md"},
-    ]
-
-    assert anyio.run(filter_.outlet, body, user, metadata) is body
-    payload = delivered_payload.get("payload")
-    assert isinstance(payload, dict)
-    assert "attached_file_ids" not in payload
-
-
-def test_outlet_captures_attached_file_ids_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When auto_index_files is True, explicit chat attachments are extracted while collection docs are ignored."""
-    filter_ = Filter()
-    filter_.valves.auto_index_files = True
     delivered_payload: dict[str, object] = {}
 
     async def mock_post_signed(_path: str, payload: dict[str, object]) -> dict[str, object]:
@@ -857,21 +829,14 @@ def test_outlet_captures_attached_file_ids_when_enabled(monkeypatch: pytest.Monk
         user_content="Here is the architecture doc.",
         assistant_content="I see the details.",
     )
-    # Body-level files represent auto-retrieved Knowledge Base / RAG docs and must be ignored
-    body["files"] = [
-        {"id": "kb-rag-auto-retrieved-1", "type": "file"},
-        {"id": "kb-obsidian-1", "type": "collection", "collection_name": "obsidian-vault"},
-        {"id": "kb-obsidian-2", "type": "knowledge"},
-    ]
-    # Explicit user message attachments
+    user["token"] = "jwt-session-token-123"
     body["messages"][0]["files"] = [
         {"id": "file-user-attached-1", "type": "file"},
         {"id": "file-user-attached-2"},
-        {"id": "kb-obsidian-3", "collection_id": "vault-1"},
-        {"id": "kb-obsidian-4", "meta": {"collection_name": "vault-2"}},
     ]
 
     assert anyio.run(filter_.outlet, body, user, metadata) is body
     payload = delivered_payload.get("payload")
     assert isinstance(payload, dict)
     assert payload.get("attached_file_ids") == ["file-user-attached-1", "file-user-attached-2"]
+    assert payload.get("openwebui_token") == "jwt-session-token-123"

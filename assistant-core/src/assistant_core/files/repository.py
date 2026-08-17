@@ -1,14 +1,24 @@
+import asyncio
 import hashlib
 import uuid
 from datetime import UTC, datetime
+from time import perf_counter
 from typing import Any
 
+import structlog
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assistant_core.files.chunking import CHUNKING_VERSION, chunk_markdown
-from assistant_core.files.models import FileDocument, FileReference, FileSegment
+from assistant_core.files.client import fetch_all_kb_metadata_and_hashes
+from assistant_core.files.models import (
+    FileDocument,
+    FileReference,
+    FileSegment,
+    KBReconciliationRun,
+)
 from assistant_core.files.schemas import (
     FileHit,
     FileMaterializationResult,
@@ -17,6 +27,8 @@ from assistant_core.files.schemas import (
 )
 from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
+
+LOGGER = structlog.get_logger("assistant_core.files.repository")
 
 RRF_K = 60
 
@@ -609,3 +621,123 @@ async def get_dead_jobs(session: AsyncSession, limit: int = 10) -> list[dict[str
         }
         for r in rows
     ]
+
+
+async def reconcile_and_log_kb_documents(
+    session: AsyncSession,
+    *,
+    base_url: str,
+    api_key: str | None,
+    trigger: str = "worker_hourly",
+    timeout_seconds: float = 30.0,
+) -> KBReconciliationRun:
+    """Fetch latest Knowledge Base metadata/hashes, match with Assistant Core FileDocuments, prune matches, and persist audit record."""
+    started_at = perf_counter()
+    now = datetime.now(UTC)
+    run_id = uuid.uuid4()
+
+    try:
+        kb_file_ids, kb_hashes, kb_filenames = await asyncio.to_thread(
+            fetch_all_kb_metadata_and_hashes,
+            base_url=base_url,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception as exc:  # noqa: BLE001
+        duration_ms = (perf_counter() - started_at) * 1000
+        run_log = KBReconciliationRun(
+            id=run_id,
+            trigger=trigger,
+            status="failed",
+            kb_files_scanned=0,
+            pruned_count=0,
+            details=[],
+            error_message=str(exc),
+            duration_ms=round(duration_ms, 2),
+            created_at=now,
+        )
+        session.add(run_log)
+        await session.commit()
+        return run_log
+
+    # Fetch all active documents in Assistant Core
+    doc_stmt = select(
+        FileDocument.id,
+        FileDocument.native_file_id,
+        FileDocument.filename,
+        FileDocument.content_sha256,
+        FileDocument.user_id,
+    ).where(FileDocument.tombstoned_at.is_(None))
+    docs = (await session.execute(doc_stmt)).all()
+
+    pruned_items: list[dict[str, Any]] = []
+    pruned_native_ids: list[str] = []
+
+    for doc_id, native_fid, fname, c_sha, uid in docs:
+        match_type = None
+        if native_fid in kb_file_ids:
+            match_type = "kb_file_id"
+        elif c_sha in kb_hashes:
+            match_type = "kb_content_sha256"
+        elif (
+            fname in kb_filenames
+            and fname.lower().endswith((".md", ".txt", ".pdf"))
+            and native_fid.startswith("kb-")
+        ):
+            match_type = "kb_filename"
+
+        if match_type:
+            pruned_items.append(
+                {
+                    "document_id": str(doc_id),
+                    "native_file_id": native_fid,
+                    "filename": fname,
+                    "content_sha256": c_sha,
+                    "user_id": str(uid),
+                    "match_type": match_type,
+                    "reason": f"Document matched active Knowledge Base ({match_type})",
+                }
+            )
+            pruned_native_ids.append(native_fid)
+
+    if pruned_native_ids:
+        # Delete references
+        await session.execute(
+            sa_delete(FileReference).where(FileReference.native_file_id.in_(pruned_native_ids))
+        )
+        # Delete documents
+        await session.execute(
+            sa_delete(FileDocument).where(FileDocument.native_file_id.in_(pruned_native_ids))
+        )
+        # Prune orphaned segments
+        orphan_stmt = sa_delete(FileSegment).where(
+            ~FileSegment.id.in_(select(FileReference.segment_id))
+        )
+        await session.execute(orphan_stmt)
+
+    duration_ms = (perf_counter() - started_at) * 1000
+    status = "success" if pruned_items else "no_changes"
+    run_log = KBReconciliationRun(
+        id=run_id,
+        trigger=trigger,
+        status=status,
+        kb_files_scanned=len(kb_file_ids),
+        pruned_count=len(pruned_items),
+        details=pruned_items,
+        error_message=None,
+        duration_ms=round(duration_ms, 2),
+        created_at=now,
+    )
+    session.add(run_log)
+    await session.commit()
+
+    LOGGER.info(
+        "kb_reconciliation_completed",
+        run_id=str(run_id),
+        trigger=trigger,
+        kb_files_scanned=len(kb_file_ids),
+        pruned_count=len(pruned_items),
+        duration_ms=round(duration_ms, 2),
+    )
+    return run_log
+

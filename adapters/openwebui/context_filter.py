@@ -46,8 +46,8 @@ class Filter:
             description="Inject real-world date, time, day of week, and timezone into assistant context",
         )
         auto_index_files: bool = Field(
-            default=False,
-            description="Automatically index chat-attached files into Assistant Core Document Store. Disabled by default to prevent KB/Vault sync files from duplicating.",
+            default=True,
+            description="Automatically index manual chat-attached files into Assistant Core Document Store. Knowledge Base & Vault files are automatically excluded.",
         )
 
         @field_validator("max_context_tokens", mode="before")
@@ -228,6 +228,37 @@ class Filter:
             "</current_datetime>"
         )
 
+    @staticmethod
+    def _get_local_kb_file_ids() -> set[str]:
+        """Query Open WebUI's local Knowledge Base registry to identify all KB/Vault files."""
+        try:
+            from open_webui.models.knowledge import Knowledges  # type: ignore[import-not-found]
+
+            kb_list = Knowledges.get_knowledge_bases()
+            kb_file_ids: set[str] = set()
+            for kb in kb_list or []:
+                files = getattr(kb, "files", None)
+                if files is None and isinstance(kb, Mapping):
+                    files = kb.get("files")
+                if isinstance(files, list):
+                    for f in files:
+                        if isinstance(f, Mapping) and f.get("id"):
+                            kb_file_ids.add(str(f["id"]))
+                        elif isinstance(f, str) and f:
+                            kb_file_ids.add(f)
+                data = getattr(kb, "data", None)
+                if data is None and isinstance(kb, Mapping):
+                    data = kb.get("data")
+                if isinstance(data, Mapping):
+                    fids = data.get("file_ids")
+                    if isinstance(fids, list):
+                        for fid in fids:
+                            if fid:
+                                kb_file_ids.add(str(fid))
+            return kb_file_ids
+        except Exception:  # noqa: BLE001
+            return set()
+
     async def inlet(
         self,
         body: dict,
@@ -351,15 +382,20 @@ class Filter:
             messages = body.get("messages")
             if not isinstance(messages, list):
                 return body
+
             user_matches = [
-                message
-                for message in messages
-                if isinstance(message, Mapping) and message.get("id") == user_message_id
+                m
+                for m in messages
+                if isinstance(m, Mapping)
+                and m.get("id") == user_message_id
+                and m.get("role") == "user"
             ]
             assistant_matches = [
-                message
-                for message in messages
-                if isinstance(message, Mapping) and message.get("id") == assistant_id
+                m
+                for m in messages
+                if isinstance(m, Mapping)
+                and m.get("id") == assistant_id
+                and m.get("role") == "assistant"
             ]
             if len(user_matches) != 1 or len(assistant_matches) != 1:
                 return body
@@ -378,46 +414,17 @@ class Filter:
             occurred_at = datetime.now(UTC).isoformat(timespec="microseconds")
 
             attached_file_ids: list[str] = []
-            if self.valves.auto_index_files and isinstance(user_matches[0].get("files"), list):
-                candidate_files: list[object] = list(user_matches[0]["files"])
-
-                for f in candidate_files:
+            if isinstance(user_matches[0].get("files"), list):
+                for f in user_matches[0]["files"]:
                     if isinstance(f, Mapping):
-                        ftype = f.get("type")
-                        if isinstance(ftype, str) and ftype in (
-                            "collection",
-                            "knowledge",
-                            "web",
-                            "note",
-                            "folder",
-                            "doc",
-                        ):
-                            continue
-                        if (
-                            f.get("collection_name")
-                            or f.get("knowledge_id")
-                            or f.get("collection_id")
-                            or f.get("kb_id")
-                            or f.get("knowledge")
-                        ):
-                            continue
-                        fmeta = f.get("meta")
-                        if isinstance(fmeta, Mapping) and (
-                            fmeta.get("collection_name")
-                            or fmeta.get("knowledge_id")
-                            or fmeta.get("collection_id")
-                            or fmeta.get("kb_id")
-                            or fmeta.get("knowledge")
-                            or fmeta.get("source") in ("knowledge", "collection", "rag", "external")
-                        ):
-                            continue
                         fid = f.get("id") or f.get("file_id")
-                        if (
-                            isinstance(fid, str)
-                            and fid.strip()
-                            and fid.strip() not in attached_file_ids
-                        ):
-                            attached_file_ids.append(fid.strip())
+                        fid_str = str(fid).strip() if fid else ""
+                        if fid_str and fid_str not in attached_file_ids:
+                            attached_file_ids.append(fid_str)
+
+            openwebui_token: str | None = None
+            if isinstance(__user__, Mapping) and isinstance(__user__.get("token"), str):
+                openwebui_token = str(__user__["token"])
 
             turn_payload: dict[str, object] = {
                 "source": self._EVENT_SOURCE,
@@ -426,6 +433,8 @@ class Filter:
             }
             if attached_file_ids:
                 turn_payload["attached_file_ids"] = attached_file_ids
+            if openwebui_token:
+                turn_payload["openwebui_token"] = openwebui_token
 
             folder_id, project_id = self._extract_scope_ids(body, __metadata__)
             envelope: dict[str, object] = {

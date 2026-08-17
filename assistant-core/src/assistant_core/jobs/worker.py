@@ -38,6 +38,7 @@ from assistant_core.files.client import OpenWebUIFileFetchError, fetch_openwebui
 from assistant_core.files.repository import (
     get_file_segment_content,
     materialize_file_passages,
+    reconcile_and_log_kb_documents,
     store_file_segment_embedding,
     tombstone_file_references,
 )
@@ -330,6 +331,47 @@ async def _handle_consolidate_memories(
     )
 
 
+async def _handle_reconcile_kb_files(
+    session: AsyncSession, payload: dict[str, JsonValue]
+) -> None:
+    """Reconcile active Knowledge Base files against Assistant Core Document Store."""
+    settings = get_settings()
+    trigger = str(payload.get("trigger") or "worker_hourly")
+    api_key = (
+        settings.open_webui_api_key.get_secret_value()
+        if settings.open_webui_api_key
+        else None
+    )
+    await reconcile_and_log_kb_documents(
+        session,
+        base_url=settings.open_webui_url,
+        api_key=api_key,
+        trigger=trigger,
+        timeout_seconds=settings.file_indexing_timeout_seconds,
+    )
+
+
+async def enqueue_reconcile_kb_job(
+    session: AsyncSession, trigger: str = "worker_hourly"
+) -> int:
+    """Enqueue periodic KB reconciliation job."""
+    hourly_key = f"reconcile_kb:{datetime.now(UTC).strftime('%Y-%m-%d-%H')}"
+    res = await session.execute(
+        insert(Job)
+        .values(
+            id=uuid.uuid4(),
+            identity_key=hourly_key,
+            kind="reconcile_kb_files",
+            status="queued",
+            payload={"trigger": trigger},
+            attempts=0,
+        )
+        .on_conflict_do_nothing(index_elements=[Job.identity_key])
+        .returning(Job.id)
+    )
+    return 1 if res.scalar_one_or_none() is not None else 0
+
+
 async def _handle_index_conversation(session: AsyncSession, payload: dict[str, JsonValue]) -> None:
     """Commit lexical passages first, then enrich only missing vectors."""
     turn_id = _turn_id_from_payload(payload)
@@ -511,6 +553,8 @@ async def handle(
         await _handle_index_conversation(session, payload)
     elif kind == "index_file":
         await _handle_index_file(session, payload)
+    elif kind == "reconcile_kb_files":
+        await _handle_reconcile_kb_files(session, payload)
     else:
         raise UnsupportedJobKindError(UNSUPPORTED_KIND_ERROR)
 
@@ -579,11 +623,13 @@ async def run_worker(stop_event: asyncio.Event | None = None) -> None:
         async with session_factory() as session:
             backfill_count = await enqueue_missing_conversation_jobs(session)
             consolidation_count = await enqueue_daily_consolidation_jobs(session)
+            kb_reconcile_count = await enqueue_reconcile_kb_job(session)
             await session.commit()
         LOGGER.info(
             "worker_startup_jobs_enqueued",
             conversation_backfill=backfill_count,
             daily_consolidation=consolidation_count,
+            kb_reconcile=kb_reconcile_count,
         )
 
         for signum in (signal.SIGINT, signal.SIGTERM):
@@ -603,9 +649,10 @@ async def run_worker(stop_event: asyncio.Event | None = None) -> None:
                 try:
                     async with session_factory() as session:
                         await enqueue_daily_consolidation_jobs(session)
+                        await enqueue_reconcile_kb_job(session)
                         await session.commit()
                 except Exception:  # noqa: BLE001
-                    LOGGER.warning("periodic_consolidation_enqueue_failed")
+                    LOGGER.warning("periodic_jobs_enqueue_failed")
 
             async with session_factory() as session:
                 processed = await process_one(session)
