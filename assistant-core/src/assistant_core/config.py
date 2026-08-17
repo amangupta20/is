@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     artifacts_dir: str = Field(default="/data/artifacts", min_length=1, max_length=1024)
     onlyoffice_url: str | None = Field(default=None, min_length=1, max_length=2_048)
     onlyoffice_jwt_secret: SecretStr | None = None
+    oikb_url: str | None = Field(default="http://oikb:8080", min_length=1, max_length=2_048)
+    oikb_api_key: SecretStr | None = None
     log_level: str = "INFO"
     otlp_endpoint: str | None = None
 
@@ -49,6 +51,7 @@ class Settings(BaseSettings):
         "embedding_base_url",
         "embedding_model",
         "onlyoffice_url",
+        "oikb_url",
         "otlp_endpoint",
         mode="before",
     )
@@ -63,6 +66,7 @@ class Settings(BaseSettings):
         "task_model_api_key",
         "embedding_api_key",
         "onlyoffice_jwt_secret",
+        "oikb_api_key",
         "admin_token",
         mode="before",
     )

@@ -628,6 +628,8 @@ async def reconcile_and_log_kb_documents(
     *,
     base_url: str,
     api_key: str | None,
+    oikb_url: str | None = None,
+    oikb_api_key: str | None = None,
     trigger: str = "worker_hourly",
     timeout_seconds: float = 30.0,
 ) -> KBReconciliationRun:
@@ -641,6 +643,8 @@ async def reconcile_and_log_kb_documents(
             fetch_all_kb_metadata_and_hashes,
             base_url=base_url,
             api_key=api_key,
+            oikb_url=oikb_url,
+            oikb_api_key=oikb_api_key,
             timeout_seconds=timeout_seconds,
         )
     except Exception as exc:  # noqa: BLE001

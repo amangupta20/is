@@ -65,9 +65,11 @@ def fetch_all_kb_metadata_and_hashes(
     *,
     base_url: str,
     api_key: str | None,
+    oikb_url: str | None = None,
+    oikb_api_key: str | None = None,
     timeout_seconds: float = 30.0,
 ) -> tuple[set[str], set[str], set[str]]:
-    """Fetch all file IDs, content SHA256 hashes, and filenames belonging to Open WebUI Knowledge Bases.
+    """Fetch all file IDs, content SHA256 hashes, and filenames belonging to Open WebUI Knowledge Bases and oikb.
 
     Returns:
         tuple[set(kb_file_ids), set(kb_content_hashes), set(kb_filenames)]
@@ -81,6 +83,7 @@ def fetch_all_kb_metadata_and_hashes(
     kb_hashes: set[str] = set()
     kb_filenames: set[str] = set()
 
+    # 1. Query Open WebUI Knowledge Bases and Files registry
     try:
         with httpx.Client(timeout=timeout_seconds) as client:
             resp = client.get(f"{clean_url}/api/v1/knowledge/", headers=headers)
@@ -88,60 +91,56 @@ def fetch_all_kb_metadata_and_hashes(
                 raise RuntimeError(
                     f"Open WebUI authentication failed (HTTP {resp.status_code}). Please configure ASSISTANT_OPEN_WEBUI_API_KEY in environment."
                 )
-            if resp.status_code != 200:
-                raise RuntimeError(
-                    f"Open WebUI knowledge registry request failed with HTTP {resp.status_code}"
-                )
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list):
+                    for item in data:
+                        if not isinstance(item, dict):
+                            continue
+                        kb_id = item.get("id")
+                        kb_detail = item
+                        if kb_id and (
+                            "files" not in item
+                            or not item.get("files")
+                            or "data" not in item
+                            or not item.get("data")
+                        ):
+                            try:
+                                kb_resp = client.get(
+                                    f"{clean_url}/api/v1/knowledge/{kb_id}", headers=headers
+                                )
+                                if kb_resp.status_code == 200:
+                                    detail_data = kb_resp.json()
+                                    if isinstance(detail_data, dict):
+                                        kb_detail = detail_data
+                            except Exception as kb_exc:  # noqa: BLE001
+                                LOGGER.debug(
+                                    "fetch_kb_detail_failed", kb_id=kb_id, error=str(kb_exc)
+                                )
 
-            data = resp.json()
-            if not isinstance(data, list):
-                return kb_file_ids, kb_hashes, kb_filenames
+                        files = kb_detail.get("files")
+                        if isinstance(files, list):
+                            for f in files:
+                                if isinstance(f, dict):
+                                    fid = f.get("id")
+                                    if fid:
+                                        kb_file_ids.add(str(fid))
+                                    fname = f.get("name") or f.get("filename")
+                                    if fname:
+                                        kb_filenames.add(str(fname).strip())
+                                    meta = f.get("meta") or {}
+                                    if isinstance(meta, dict) and meta.get("hash"):
+                                        kb_hashes.add(str(meta["hash"]).strip())
+                                elif isinstance(f, str) and f:
+                                    kb_file_ids.add(f)
 
-            for item in data:
-                if not isinstance(item, dict):
-                    continue
-                kb_id = item.get("id")
-                kb_detail = item
-                if kb_id and (
-                    "files" not in item
-                    or not item.get("files")
-                    or "data" not in item
-                    or not item.get("data")
-                ):
-                    try:
-                        kb_resp = client.get(
-                            f"{clean_url}/api/v1/knowledge/{kb_id}", headers=headers
-                        )
-                        if kb_resp.status_code == 200:
-                            detail_data = kb_resp.json()
-                            if isinstance(detail_data, dict):
-                                kb_detail = detail_data
-                    except Exception as kb_exc:  # noqa: BLE001
-                        LOGGER.debug("fetch_kb_detail_failed", kb_id=kb_id, error=str(kb_exc))
-
-                files = kb_detail.get("files")
-                if isinstance(files, list):
-                    for f in files:
-                        if isinstance(f, dict):
-                            fid = f.get("id")
-                            if fid:
-                                kb_file_ids.add(str(fid))
-                            fname = f.get("name") or f.get("filename")
-                            if fname:
-                                kb_filenames.add(str(fname).strip())
-                            meta = f.get("meta") or {}
-                            if isinstance(meta, dict) and meta.get("hash"):
-                                kb_hashes.add(str(meta["hash"]).strip())
-                        elif isinstance(f, str) and f:
-                            kb_file_ids.add(f)
-
-                data_field = kb_detail.get("data")
-                if isinstance(data_field, dict):
-                    file_ids = data_field.get("file_ids")
-                    if isinstance(file_ids, list):
-                        for fid in file_ids:
-                            if fid:
-                                kb_file_ids.add(str(fid))
+                        data_field = kb_detail.get("data")
+                        if isinstance(data_field, dict):
+                            file_ids = data_field.get("file_ids")
+                            if isinstance(file_ids, list):
+                                for fid in file_ids:
+                                    if fid:
+                                        kb_file_ids.add(str(fid))
 
             # Also check GET /api/v1/files/ for any files linked to knowledge/collections
             try:
@@ -153,7 +152,6 @@ def fetch_all_kb_metadata_and_hashes(
                             if not isinstance(f_entry, dict):
                                 continue
                             f_meta = f_entry.get("meta") or {}
-                            # If file is marked as knowledge or belongs to a collection/knowledge base
                             if (
                                 isinstance(f_meta, dict)
                                 and (
@@ -203,6 +201,66 @@ def fetch_all_kb_metadata_and_hashes(
 
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("fetch_all_kb_metadata_failed", error=str(exc))
+
+    # 2. Query oikb directly (Obsidian/OpenWebUI KB Sync service)
+    target_oikb_url = oikb_url or "http://oikb:8080"
+    oikb_headers: dict[str, str] = {}
+    if oikb_api_key:
+        oikb_headers["Authorization"] = f"Bearer {oikb_api_key}"
+        oikb_headers["X-API-Key"] = oikb_api_key
+
+    try:
+        with httpx.Client(timeout=timeout_seconds) as oikb_client:
+            for path in ("/sync/history", "/history", "/sync/status", "/status"):
+                try:
+                    o_resp = oikb_client.get(
+                        f"{target_oikb_url.rstrip('/')}{path}", headers=oikb_headers
+                    )
+                    if o_resp.status_code == 200:
+                        o_data = o_resp.json()
+                        items_to_check: list[Any] = []
+                        if isinstance(o_data, list):
+                            items_to_check = o_data
+                        elif isinstance(o_data, dict):
+                            nested = (
+                                o_data.get("history")
+                                or o_data.get("files")
+                                or o_data.get("items")
+                                or [o_data]
+                            )
+                            if isinstance(nested, list):
+                                items_to_check = nested
+                            elif isinstance(nested, dict):
+                                items_to_check = [nested]
+
+                        for o_item in items_to_check:
+                            if not isinstance(o_item, dict):
+                                continue
+                            fname = (
+                                o_item.get("file_path")
+                                or o_item.get("path")
+                                or o_item.get("filename")
+                                or o_item.get("name")
+                            )
+                            if fname and isinstance(fname, str):
+                                base_fname = fname.replace("\\", "/").split("/")[-1]
+                                kb_filenames.add(fname.strip())
+                                kb_filenames.add(base_fname.strip())
+                            f_hash = (
+                                o_item.get("content_hash")
+                                or o_item.get("hash")
+                                or o_item.get("sha256")
+                                or o_item.get("git_sha")
+                            )
+                            if f_hash and isinstance(f_hash, str):
+                                kb_hashes.add(f_hash.strip())
+                            fid = o_item.get("file_id") or o_item.get("id")
+                            if fid and isinstance(fid, str):
+                                kb_file_ids.add(fid.strip())
+                except Exception as path_exc:  # noqa: BLE001
+                    LOGGER.debug("fetch_oikb_path_failed", path=path, error=str(path_exc))
+    except Exception as oikb_exc:  # noqa: BLE001
+        LOGGER.debug("fetch_oikb_metadata_failed", error=str(oikb_exc))
 
     return kb_file_ids, kb_hashes, kb_filenames
 

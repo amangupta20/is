@@ -342,10 +342,17 @@ async def _handle_reconcile_kb_files(
         if settings.open_webui_api_key
         else None
     )
+    oikb_api_key = (
+        settings.oikb_api_key.get_secret_value()
+        if settings.oikb_api_key
+        else None
+    )
     await reconcile_and_log_kb_documents(
         session,
         base_url=settings.open_webui_url,
         api_key=api_key,
+        oikb_url=settings.oikb_url,
+        oikb_api_key=oikb_api_key,
         trigger=trigger,
         timeout_seconds=settings.file_indexing_timeout_seconds,
     )

@@ -249,3 +249,46 @@ def test_get_kb_reconciliation_run_detail_and_not_found() -> None:
     client_empty = _make_test_client(fake_session_empty)
     resp_404 = client_empty.get(f"/v1/admin/files/reconcile-kb/runs/{uuid.uuid4()}")
     assert resp_404.status_code == 404
+
+
+def test_fetch_all_kb_metadata_and_hashes_discovers_oikb_files() -> None:
+    """fetch_all_kb_metadata_and_hashes retrieves files directly from oikb sync endpoints."""
+    import httpx
+
+    from assistant_core.files.client import fetch_all_kb_metadata_and_hashes
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        url_str = str(request.url)
+        if "/api/v1/knowledge/" in url_str:
+            return httpx.Response(200, json=[])
+        if "/api/v1/files/" in url_str:
+            return httpx.Response(200, json=[])
+        if "/sync/history" in url_str or "/history" in url_str:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "file_path": "10_LeetCode/Coin Change.md",
+                        "content_hash": "sha256-coin-change",
+                        "file_id": "oikb-file-1",
+                    }
+                ],
+            )
+        return httpx.Response(404)
+
+    real_client_cls = httpx.Client
+    transport = httpx.MockTransport(mock_handler)
+    with patch(
+        "assistant_core.files.client.httpx.Client",
+        side_effect=lambda **kwargs: real_client_cls(transport=transport, timeout=kwargs.get("timeout")),
+    ):
+        fids, hashes, fnames = fetch_all_kb_metadata_and_hashes(
+            base_url="http://open-webui:8080",
+            api_key=None,
+            oikb_url="http://oikb:8080",
+        )
+
+        assert "oikb-file-1" in fids
+        assert "sha256-coin-change" in hashes
+        assert "Coin Change.md" in fnames
+        assert "10_LeetCode/Coin Change.md" in fnames
