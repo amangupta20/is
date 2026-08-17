@@ -1,11 +1,12 @@
-"""Open WebUI REST API client for fetching file metadata and extracted content."""
-
+import time
 from typing import Any
 
 import httpx
 import structlog
 
 LOGGER = structlog.get_logger("assistant_core.files.client")
+
+_KB_REGISTRY_CACHE: tuple[float, set[str]] = (0.0, set())
 
 
 class OpenWebUIFileFetchError(Exception):
@@ -14,6 +15,49 @@ class OpenWebUIFileFetchError(Exception):
     def __init__(self, message: str, status_code: int | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+def _fetch_kb_file_ids(
+    clean_url: str,
+    headers: dict[str, str],
+    timeout_seconds: float = 10.0,
+) -> set[str]:
+    """Fetch and cache file IDs belonging to any Open WebUI Knowledge Base."""
+    global _KB_REGISTRY_CACHE
+    now = time.time()
+    cache_time, cached_ids = _KB_REGISTRY_CACHE
+    if now - cache_time < 30.0 and cached_ids:
+        return cached_ids
+
+    kb_file_ids: set[str] = set()
+    try:
+        with httpx.Client(timeout=min(timeout_seconds, 10.0)) as client:
+            resp = client.get(f"{clean_url}/api/v1/knowledge/", headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list):
+                    for item in data:
+                        if not isinstance(item, dict):
+                            continue
+                        files = item.get("files")
+                        if isinstance(files, list):
+                            for f in files:
+                                if isinstance(f, dict) and f.get("id"):
+                                    kb_file_ids.add(str(f["id"]))
+                                elif isinstance(f, str) and f:
+                                    kb_file_ids.add(f)
+                        data_field = item.get("data")
+                        if isinstance(data_field, dict):
+                            file_ids = data_field.get("file_ids")
+                            if isinstance(file_ids, list):
+                                for fid in file_ids:
+                                    if fid:
+                                        kb_file_ids.add(str(fid))
+        _KB_REGISTRY_CACHE = (now, kb_file_ids)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.debug("openwebui_knowledge_registry_lookup_failed", error=str(exc))
+
+    return kb_file_ids
 
 
 def fetch_openwebui_file(
@@ -58,6 +102,9 @@ def fetch_openwebui_file(
     data_src = str(data.get("source") or "")
     meta_tp = str(meta_dict.get("type") or "")
     data_tp = str(data.get("type") or "")
+    meta_tags = meta_dict.get("tags") or []
+    tag_strings = {str(t).lower() for t in meta_tags} if isinstance(meta_tags, list) else set()
+
     is_kb_file = bool(
         meta_dict.get("collection_name")
         or data.get("collection_name")
@@ -65,11 +112,20 @@ def fetch_openwebui_file(
         or data.get("knowledge_id")
         or meta_dict.get("kb_id")
         or data.get("kb_id")
+        or meta_dict.get("collection_id")
+        or data.get("collection_id")
         or meta_src in ("knowledge", "collection", "rag", "external")
         or data_src in ("knowledge", "collection", "rag", "external")
         or meta_tp in ("collection", "knowledge", "doc", "web", "note", "folder")
         or data_tp in ("collection", "knowledge", "doc", "web", "note", "folder")
+        or bool(tag_strings & {"knowledge", "collection", "kb", "rag"})
     )
+
+    if not is_kb_file:
+        kb_file_ids = _fetch_kb_file_ids(clean_url, headers, timeout_seconds)
+        if file_id in kb_file_ids:
+            is_kb_file = True
+
     if is_kb_file:
         LOGGER.info(
             "skipping_knowledge_base_file",
