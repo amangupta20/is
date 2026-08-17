@@ -105,32 +105,22 @@ def test_handle_index_file_fetch_error() -> None:
             anyio.run(exercise)
 
 
-def test_fetch_openwebui_file_skips_when_in_kb_registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When a file is listed in Open WebUI's /api/v1/knowledge/ endpoint, fetch_openwebui_file returns None."""
+def test_fetch_openwebui_file_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """fetch_openwebui_file retrieves filename, mime_type, and markdown content."""
     import httpx
 
     from assistant_core.files.client import fetch_openwebui_file
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/v1/files/kb-file-id":
+        if request.url.path == "/api/v1/files/chat-file-id":
             return httpx.Response(
                 200,
                 json={
-                    "id": "kb-file-id",
-                    "filename": "Decode Ways.md",
-                    "meta": {"content_type": "application/octet-stream"},
+                    "id": "chat-file-id",
+                    "filename": "guidelines.pdf",
+                    "meta": {"content_type": "application/pdf"},
+                    "data": {"content": "Extracted PDF text content"},
                 },
-            )
-        if request.url.path == "/api/v1/knowledge/":
-            return httpx.Response(
-                200,
-                json=[
-                    {
-                        "id": "kb-collection-1",
-                        "name": "LeetCode KB",
-                        "files": [{"id": "kb-file-id", "filename": "Decode Ways.md"}],
-                    }
-                ],
             )
         return httpx.Response(404)
 
@@ -144,7 +134,10 @@ def test_fetch_openwebui_file_skips_when_in_kb_registry(monkeypatch: pytest.Monk
     result = fetch_openwebui_file(
         base_url="http://openwebui:8080",
         api_key=None,
-        file_id="kb-file-id",
+        file_id="chat-file-id",
     )
-    assert result is None
+    assert result is not None
+    assert result[0] == "guidelines.pdf"
+    assert result[1] == "application/pdf"
+    assert result[2] == "Extracted PDF text content"
 
