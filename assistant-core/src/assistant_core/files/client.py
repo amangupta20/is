@@ -84,11 +84,14 @@ def fetch_all_kb_metadata_and_hashes(
     try:
         with httpx.Client(timeout=timeout_seconds) as client:
             resp = client.get(f"{clean_url}/api/v1/knowledge/", headers=headers)
-            if resp.status_code != 200:
-                LOGGER.warning(
-                    "openwebui_knowledge_registry_fetch_status", status_code=resp.status_code
+            if resp.status_code in (401, 403):
+                raise RuntimeError(
+                    f"Open WebUI authentication failed (HTTP {resp.status_code}). Please configure ASSISTANT_OPEN_WEBUI_API_KEY in environment."
                 )
-                return kb_file_ids, kb_hashes, kb_filenames
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"Open WebUI knowledge registry request failed with HTTP {resp.status_code}"
+                )
 
             data = resp.json()
             if not isinstance(data, list):
@@ -97,7 +100,26 @@ def fetch_all_kb_metadata_and_hashes(
             for item in data:
                 if not isinstance(item, dict):
                     continue
-                files = item.get("files")
+                kb_id = item.get("id")
+                kb_detail = item
+                if kb_id and (
+                    "files" not in item
+                    or not item.get("files")
+                    or "data" not in item
+                    or not item.get("data")
+                ):
+                    try:
+                        kb_resp = client.get(
+                            f"{clean_url}/api/v1/knowledge/{kb_id}", headers=headers
+                        )
+                        if kb_resp.status_code == 200:
+                            detail_data = kb_resp.json()
+                            if isinstance(detail_data, dict):
+                                kb_detail = detail_data
+                    except Exception as kb_exc:  # noqa: BLE001
+                        LOGGER.debug("fetch_kb_detail_failed", kb_id=kb_id, error=str(kb_exc))
+
+                files = kb_detail.get("files")
                 if isinstance(files, list):
                     for f in files:
                         if isinstance(f, dict):
@@ -112,13 +134,45 @@ def fetch_all_kb_metadata_and_hashes(
                                 kb_hashes.add(str(meta["hash"]).strip())
                         elif isinstance(f, str) and f:
                             kb_file_ids.add(f)
-                data_field = item.get("data")
+
+                data_field = kb_detail.get("data")
                 if isinstance(data_field, dict):
                     file_ids = data_field.get("file_ids")
                     if isinstance(file_ids, list):
                         for fid in file_ids:
                             if fid:
                                 kb_file_ids.add(str(fid))
+
+            # Also check GET /api/v1/files/ for any files linked to knowledge/collections
+            try:
+                all_files_resp = client.get(f"{clean_url}/api/v1/files/", headers=headers)
+                if all_files_resp.status_code == 200:
+                    files_list = all_files_resp.json()
+                    if isinstance(files_list, list):
+                        for f_entry in files_list:
+                            if not isinstance(f_entry, dict):
+                                continue
+                            f_meta = f_entry.get("meta") or {}
+                            # If file is marked as knowledge or belongs to a collection/knowledge base
+                            if (
+                                isinstance(f_meta, dict)
+                                and (
+                                    f_meta.get("collection_name")
+                                    or f_meta.get("knowledge_id")
+                                    or f_entry.get("type") in ("knowledge", "collection")
+                                    or f_meta.get("type") in ("knowledge", "collection")
+                                )
+                            ):
+                                fid = f_entry.get("id")
+                                if fid:
+                                    kb_file_ids.add(str(fid))
+                                fname = f_entry.get("filename") or f_meta.get("name")
+                                if fname:
+                                    kb_filenames.add(str(fname).strip())
+                                if f_meta.get("hash"):
+                                    kb_hashes.add(str(f_meta["hash"]).strip())
+            except Exception as files_exc:  # noqa: BLE001
+                LOGGER.debug("fetch_all_files_list_failed", error=str(files_exc))
 
             # Fetch file metadata and hashes for discovered KB files
             for fid in list(kb_file_ids):
