@@ -629,6 +629,7 @@ class DashboardApp {
           }),
         });
         this.showToast('Memory created', 'success');
+      }
       this.closeMemoryModal();
       this.loadMemories();
     } catch {
