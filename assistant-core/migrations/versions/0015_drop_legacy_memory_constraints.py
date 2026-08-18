@@ -20,31 +20,37 @@ def upgrade() -> None:
     """Explicitly drop legacy category and state constraints and recreate them."""
     op.execute(sa.text("SET search_path TO assistant_core, extensions, public"))
 
-    # Drop all variations of category check constraints
+    # Drop all variations of category check constraints individually
     op.execute(
         sa.text(
-            """
-            ALTER TABLE assistant_core.memory_record
-            DROP CONSTRAINT IF EXISTS ck_memory_record_memory_record_category;
-            ALTER TABLE assistant_core.memory_record
-            DROP CONSTRAINT IF EXISTS memory_record_category;
-            ALTER TABLE assistant_core.memory_record
-            DROP CONSTRAINT IF EXISTS ck_memory_record_memory_record_category_len;
-            ALTER TABLE assistant_core.memory_record
-            DROP CONSTRAINT IF EXISTS memory_record_category_len;
-            """
+            "ALTER TABLE assistant_core.memory_record DROP CONSTRAINT IF EXISTS ck_memory_record_memory_record_category"
+        )
+    )
+    op.execute(
+        sa.text(
+            "ALTER TABLE assistant_core.memory_record DROP CONSTRAINT IF EXISTS memory_record_category"
+        )
+    )
+    op.execute(
+        sa.text(
+            "ALTER TABLE assistant_core.memory_record DROP CONSTRAINT IF EXISTS ck_memory_record_memory_record_category_len"
+        )
+    )
+    op.execute(
+        sa.text(
+            "ALTER TABLE assistant_core.memory_record DROP CONSTRAINT IF EXISTS memory_record_category_len"
         )
     )
 
-    # Drop all variations of state check constraints
+    # Drop all variations of state check constraints individually
     op.execute(
         sa.text(
-            """
-            ALTER TABLE assistant_core.memory_record
-            DROP CONSTRAINT IF EXISTS ck_memory_record_memory_record_state;
-            ALTER TABLE assistant_core.memory_record
-            DROP CONSTRAINT IF EXISTS memory_record_state;
-            """
+            "ALTER TABLE assistant_core.memory_record DROP CONSTRAINT IF EXISTS ck_memory_record_memory_record_state"
+        )
+    )
+    op.execute(
+        sa.text(
+            "ALTER TABLE assistant_core.memory_record DROP CONSTRAINT IF EXISTS memory_record_state"
         )
     )
 
@@ -57,18 +63,15 @@ def upgrade() -> None:
         schema="assistant_core",
     )
 
-    # Add updated clean constraints
+    # Add updated clean constraints individually
     op.execute(
         sa.text(
-            """
-            ALTER TABLE assistant_core.memory_record
-            ADD CONSTRAINT ck_memory_record_memory_record_category_len
-            CHECK (char_length(category) >= 2 AND char_length(category) <= 50);
-
-            ALTER TABLE assistant_core.memory_record
-            ADD CONSTRAINT ck_memory_record_memory_record_state
-            CHECK (state IN ('active', 'superseded', 'archived', 'expired'));
-            """
+            "ALTER TABLE assistant_core.memory_record ADD CONSTRAINT ck_memory_record_memory_record_category_len CHECK (char_length(category) >= 2 AND char_length(category) <= 50)"
+        )
+    )
+    op.execute(
+        sa.text(
+            "ALTER TABLE assistant_core.memory_record ADD CONSTRAINT ck_memory_record_memory_record_state CHECK (state IN ('active', 'superseded', 'archived', 'expired'))"
         )
     )
 
@@ -79,17 +82,21 @@ def downgrade() -> None:
 
     op.execute(
         sa.text(
-            """
-            ALTER TABLE assistant_core.memory_record
-            DROP CONSTRAINT IF EXISTS ck_memory_record_memory_record_category_len;
-            ALTER TABLE assistant_core.memory_record
-            DROP CONSTRAINT IF EXISTS ck_memory_record_memory_record_state;
-            ALTER TABLE assistant_core.memory_record
-            ADD CONSTRAINT ck_memory_record_memory_record_category
-            CHECK (category IN ('fact', 'preference', 'instruction', 'project', 'decision'));
-            ALTER TABLE assistant_core.memory_record
-            ADD CONSTRAINT ck_memory_record_memory_record_state
-            CHECK (state IN ('active', 'superseded', 'archived'));
-            """
+            "ALTER TABLE assistant_core.memory_record DROP CONSTRAINT IF EXISTS ck_memory_record_memory_record_category_len"
+        )
+    )
+    op.execute(
+        sa.text(
+            "ALTER TABLE assistant_core.memory_record DROP CONSTRAINT IF EXISTS ck_memory_record_memory_record_state"
+        )
+    )
+    op.execute(
+        sa.text(
+            "ALTER TABLE assistant_core.memory_record ADD CONSTRAINT ck_memory_record_memory_record_category CHECK (category IN ('fact', 'preference', 'instruction', 'project', 'decision'))"
+        )
+    )
+    op.execute(
+        sa.text(
+            "ALTER TABLE assistant_core.memory_record ADD CONSTRAINT ck_memory_record_memory_record_state CHECK (state IN ('active', 'superseded', 'archived'))"
         )
     )
