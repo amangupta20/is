@@ -2,7 +2,7 @@
 
 import asyncio
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from time import perf_counter
 from typing import Literal
 
@@ -25,7 +25,14 @@ from assistant_core.files.repository import (
     read_file_passage_context,
     search_file_passages,
 )
-from assistant_core.memory.repository import read_explicit_memory, search_explicit_memory
+from assistant_core.memory.repository import (
+    forget_direct_memory,
+    list_user_memories,
+    read_explicit_memory,
+    save_direct_memory,
+    search_explicit_memory,
+    update_direct_memory,
+)
 
 router = APIRouter(prefix="/v1/personal-context", tags=["personal-context"])
 LOGGER = structlog.get_logger("assistant_core.personal_context")
@@ -167,6 +174,108 @@ class PersonalContextReadResponse(BaseModel):
     next_chunk: str | None = None
     neighbors: list[PersonalContextNeighbor] = Field(default_factory=list)
     full_source_available: bool = False
+
+
+class MemoryItemResponse(BaseModel):
+    """Normalized active memory representation for tool inspection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: uuid.UUID
+    key: str
+    category: str
+    statement: str
+    temporal_tag: str | None = None
+    expires_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MemoryListRequest(BaseModel):
+    """Direct in-chat memory retrieval query."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    native_user_id: str = Field(min_length=1, max_length=200)
+    query: str | None = None
+    category: str | None = None
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class MemoryListResponse(BaseModel):
+    """Active memory items matching query."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    memories: list[MemoryItemResponse]
+    total: int
+
+
+class MemorySaveRequest(BaseModel):
+    """Direct in-chat explicit memory creation or replacement."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    native_user_id: str = Field(min_length=1, max_length=200)
+    key: str = Field(min_length=1, max_length=200)
+    statement: str = Field(min_length=1, max_length=2000)
+    category: str = Field(default="fact", min_length=2, max_length=50)
+    temporal_tag: str | None = Field(default=None, max_length=50)
+    expires_at: datetime | None = None
+
+
+class MemorySaveResponse(BaseModel):
+    """Outcome of direct memory creation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    memory: MemoryItemResponse
+    created: bool
+    message: str
+
+
+class MemoryUpdateRequest(BaseModel):
+    """Direct in-chat memory update."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    native_user_id: str = Field(min_length=1, max_length=200)
+    memory_id: uuid.UUID
+    statement: str | None = Field(default=None, max_length=2000)
+    category: str | None = Field(default=None, max_length=50)
+    temporal_tag: str | None = Field(default=None, max_length=50)
+    expires_at: datetime | None = None
+    clear_expiration: bool = False
+
+
+class MemoryUpdateResponse(BaseModel):
+    """Outcome of direct memory modification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    memory: MemoryItemResponse
+    message: str
+
+
+class MemoryForgetRequest(BaseModel):
+    """Direct in-chat memory invalidation / archive request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    native_user_id: str = Field(min_length=1, max_length=200)
+    memory_id: uuid.UUID | None = None
+    key: str | None = None
+    reason: str | None = None
+
+
+class MemoryForgetResponse(BaseModel):
+    """Outcome of direct memory removal."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    archived_count: int
+    archived_ids: list[uuid.UUID]
+    message: str
 
 
 async def _embed_query(request: Request, query: str) -> list[float] | None:
@@ -440,4 +549,166 @@ async def read_full_document(
         total_chunks=file_content.total_chunks,
         total_characters=file_content.total_characters,
         content=file_content.content,
+    )
+
+
+@router.post(
+    "/memory/list",
+    dependencies=[Depends(require_adapter_signature)],
+    response_model=MemoryListResponse,
+)
+async def list_memories(
+    body: MemoryListRequest, request: Request
+) -> MemoryListResponse:
+    """Retrieve active memories for the authenticated user."""
+    async with request.app.state.session_factory() as session:
+        records = await list_user_memories(
+            session,
+            native_user_id=body.native_user_id,
+            query=body.query,
+            category=body.category,
+            status="active",
+            limit=body.limit,
+        )
+
+    items = [
+        MemoryItemResponse(
+            id=r.id,
+            key=r.key,
+            category=r.category,
+            statement=r.statement,
+            temporal_tag=r.temporal_tag,
+            expires_at=r.expires_at,
+            created_at=r.created_at or datetime.now(UTC),
+            updated_at=r.updated_at or datetime.now(UTC),
+        )
+        for r in records
+    ]
+    return MemoryListResponse(memories=items, total=len(items))
+
+
+@router.post(
+    "/memory/save",
+    dependencies=[Depends(require_adapter_signature)],
+    response_model=MemorySaveResponse,
+)
+async def save_memory(
+    body: MemorySaveRequest, request: Request
+) -> MemorySaveResponse:
+    """Create or update an explicit memory directly via chat tool call."""
+    async with request.app.state.session_factory() as session:
+        record, created = await save_direct_memory(
+            session,
+            native_user_id=body.native_user_id,
+            key=body.key,
+            statement=body.statement,
+            category=body.category,
+            temporal_tag=body.temporal_tag,
+            expires_at=body.expires_at,
+        )
+        await session.commit()
+
+    msg = f"Memory {'saved' if created else 'updated'} successfully (`{record.key}`)"
+    LOGGER.info(
+        "personal_context_memory_saved",
+        native_user_id=body.native_user_id,
+        memory_id=str(record.id),
+        key=record.key,
+        category=record.category,
+        created=created,
+    )
+    return MemorySaveResponse(
+        memory=MemoryItemResponse(
+            id=record.id,
+            key=record.key,
+            category=record.category,
+            statement=record.statement,
+            temporal_tag=record.temporal_tag,
+            expires_at=record.expires_at,
+            created_at=record.created_at or datetime.now(UTC),
+            updated_at=record.updated_at or datetime.now(UTC),
+        ),
+        created=created,
+        message=msg,
+    )
+
+
+@router.post(
+    "/memory/update",
+    dependencies=[Depends(require_adapter_signature)],
+    response_model=MemoryUpdateResponse,
+)
+async def update_memory(
+    body: MemoryUpdateRequest, request: Request
+) -> MemoryUpdateResponse:
+    """Modify an active memory record by ID."""
+    async with request.app.state.session_factory() as session:
+        record = await update_direct_memory(
+            session,
+            native_user_id=body.native_user_id,
+            memory_id=body.memory_id,
+            statement=body.statement,
+            category=body.category,
+            temporal_tag=body.temporal_tag,
+            expires_at=body.expires_at,
+            clear_expiration=body.clear_expiration,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="Active memory record not found")
+        await session.commit()
+
+    LOGGER.info(
+        "personal_context_memory_updated",
+        native_user_id=body.native_user_id,
+        memory_id=str(record.id),
+        key=record.key,
+        category=record.category,
+    )
+    return MemoryUpdateResponse(
+        memory=MemoryItemResponse(
+            id=record.id,
+            key=record.key,
+            category=record.category,
+            statement=record.statement,
+            temporal_tag=record.temporal_tag,
+            expires_at=record.expires_at,
+            created_at=record.created_at or datetime.now(UTC),
+            updated_at=record.updated_at or datetime.now(UTC),
+        ),
+        message=f"Memory `{record.id}` updated successfully",
+    )
+
+
+@router.post(
+    "/memory/forget",
+    dependencies=[Depends(require_adapter_signature)],
+    response_model=MemoryForgetResponse,
+)
+async def forget_memory(
+    body: MemoryForgetRequest, request: Request
+) -> MemoryForgetResponse:
+    """Archive one or more active memories by ID or key."""
+    async with request.app.state.session_factory() as session:
+        records = await forget_direct_memory(
+            session,
+            native_user_id=body.native_user_id,
+            memory_id=body.memory_id,
+            key=body.key,
+            reason=body.reason,
+        )
+        if not records:
+            raise HTTPException(status_code=404, detail="No active matching memory records found to archive")
+        await session.commit()
+
+    archived_ids = [r.id for r in records]
+    LOGGER.info(
+        "personal_context_memory_forgotten",
+        native_user_id=body.native_user_id,
+        archived_count=len(archived_ids),
+        reason=body.reason,
+    )
+    return MemoryForgetResponse(
+        archived_count=len(archived_ids),
+        archived_ids=archived_ids,
+        message=f"Archived {len(archived_ids)} memory record(s)",
     )

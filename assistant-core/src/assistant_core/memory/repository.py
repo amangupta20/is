@@ -1,6 +1,6 @@
 import re
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
 
@@ -416,3 +416,188 @@ async def consolidate_user_memories(
     )
     session.add(run_log)
     return applied
+
+
+async def list_user_memories(
+    session: AsyncSession,
+    *,
+    native_user_id: str,
+    query: str | None = None,
+    category: str | None = None,
+    status: str = "active",
+    limit: int = 20,
+) -> list[MemoryRecord]:
+    """List memory records for a user with optional query and category filters."""
+    user_stmt = select(UserIdentity.id).where(UserIdentity.native_user_id == native_user_id)
+    user_id = (await session.execute(user_stmt)).scalar_one_or_none()
+    if user_id is None:
+        return []
+
+    stmt = (
+        select(MemoryRecord)
+        .where(
+            MemoryRecord.user_id == user_id,
+            MemoryRecord.state == status,
+        )
+        .order_by(MemoryRecord.updated_at.desc(), MemoryRecord.created_at.desc())
+    )
+
+    if category and category.strip():
+        stmt = stmt.where(MemoryRecord.category == category.strip().lower())
+
+    if query and query.strip():
+        like_pattern = f"%{query.strip()}%"
+        stmt = stmt.where(
+            MemoryRecord.statement.ilike(like_pattern) | MemoryRecord.key.ilike(like_pattern)
+        )
+
+    stmt = stmt.limit(min(max(1, limit), 100))
+    records = list((await session.execute(stmt)).scalars().all())
+    return records
+
+
+async def save_direct_memory(
+    session: AsyncSession,
+    *,
+    native_user_id: str,
+    key: str,
+    statement: str,
+    category: str = "fact",
+    temporal_tag: str | None = None,
+    expires_at: datetime | None = None,
+) -> tuple[MemoryRecord, bool]:
+    """Create or supersede an explicit memory directly via tool invocation."""
+    user_stmt = select(UserIdentity).where(UserIdentity.native_user_id == native_user_id)
+    user = (await session.execute(user_stmt)).scalar_one_or_none()
+    if user is None:
+        user = UserIdentity(id=uuid.uuid4(), native_user_id=native_user_id)
+        session.add(user)
+        await session.flush()
+
+    clean_key = ".".join(re.findall(r"[a-z0-9_-]+", key.strip().lower())) or "general.note"
+    clean_cat = "".join(re.findall(r"[a-z0-9_-]+", category.strip().lower()))[:50] or "fact"
+    clean_tag = temporal_tag.strip().lower() if temporal_tag and temporal_tag.strip() else None
+
+    # Check for existing active record with same key
+    existing_stmt = select(MemoryRecord).where(
+        MemoryRecord.user_id == user.id,
+        MemoryRecord.key == clean_key,
+        MemoryRecord.state == "active",
+    ).with_for_update()
+    active_rec = (await session.execute(existing_stmt)).scalar_one_or_none()
+
+    if active_rec is not None and active_rec.statement == statement.strip():
+        # Update existing record's metadata
+        active_rec.category = clean_cat
+        active_rec.temporal_tag = clean_tag
+        active_rec.expires_at = expires_at
+        return active_rec, False
+
+    replacement_id = uuid.uuid4()
+    if active_rec is not None:
+        await session.execute(
+            update(MemoryRecord)
+            .where(MemoryRecord.id == active_rec.id)
+            .values(
+                state="superseded",
+                superseded_at=func.now(),
+                superseded_by_id=replacement_id,
+            )
+        )
+
+    new_rec = MemoryRecord(
+        id=replacement_id,
+        user_id=user.id,
+        key=clean_key,
+        category=clean_cat,
+        statement=statement.strip(),
+        temporal_tag=clean_tag,
+        expires_at=expires_at,
+        kind="explicit",
+        confidence=1,
+        state="active",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    session.add(new_rec)
+    await session.flush()
+    return new_rec, True
+
+
+async def update_direct_memory(
+    session: AsyncSession,
+    *,
+    native_user_id: str,
+    memory_id: uuid.UUID,
+    statement: str | None = None,
+    category: str | None = None,
+    temporal_tag: str | None = None,
+    expires_at: datetime | None = None,
+    clear_expiration: bool = False,
+) -> MemoryRecord | None:
+    """Modify an active memory record's statement, category, or temporal metadata."""
+    user_stmt = select(UserIdentity.id).where(UserIdentity.native_user_id == native_user_id)
+    user_id = (await session.execute(user_stmt)).scalar_one_or_none()
+    if user_id is None:
+        return None
+
+    stmt = select(MemoryRecord).where(
+        MemoryRecord.id == memory_id,
+        MemoryRecord.user_id == user_id,
+        MemoryRecord.state == "active",
+    ).with_for_update()
+    rec = (await session.execute(stmt)).scalar_one_or_none()
+    if rec is None:
+        return None
+
+    if statement and statement.strip():
+        rec.statement = statement.strip()
+    if category and category.strip():
+        clean_cat = "".join(re.findall(r"[a-z0-9_-]+", category.strip().lower()))[:50]
+        if len(clean_cat) >= 2:
+            rec.category = clean_cat
+    if temporal_tag is not None:
+        rec.temporal_tag = temporal_tag.strip().lower() if temporal_tag.strip() else None
+    if clear_expiration:
+        rec.expires_at = None
+    elif expires_at is not None:
+        rec.expires_at = expires_at
+
+    await session.flush()
+    return rec
+
+
+async def forget_direct_memory(
+    session: AsyncSession,
+    *,
+    native_user_id: str,
+    memory_id: uuid.UUID | None = None,
+    key: str | None = None,
+    reason: str | None = None,
+) -> list[MemoryRecord]:
+    """Archive one or more active memories by ID or key."""
+    user_stmt = select(UserIdentity.id).where(UserIdentity.native_user_id == native_user_id)
+    user_id = (await session.execute(user_stmt)).scalar_one_or_none()
+    if user_id is None:
+        return []
+
+    if memory_id is None and (key is None or not key.strip()):
+        return []
+
+    stmt = select(MemoryRecord).where(
+        MemoryRecord.user_id == user_id,
+        MemoryRecord.state == "active",
+    ).with_for_update()
+
+    if memory_id is not None:
+        stmt = stmt.where(MemoryRecord.id == memory_id)
+    elif key:
+        stmt = stmt.where(MemoryRecord.key == key.strip().lower())
+
+    records = list((await session.execute(stmt)).scalars().all())
+    for rec in records:
+        rec.state = "archived"
+        rec.archived_at = func.now()
+
+    await session.flush()
+    return records
