@@ -157,10 +157,21 @@ class TaskModelMemoryConsolidator:
             if not isinstance(content, str):
                 raise TypeError("Content is not string")
 
-            # Handle backward compatibility if model returns legacy {"decisions": [...]}
-            raw_parsed = response.json()["choices"][0]["message"]["content"]
+            raw = content.strip()
+            if raw.startswith("```"):
+                lines = raw.splitlines()
+                if lines and lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip().startswith("```"):
+                    lines = lines[:-1]
+                raw = "\n".join(lines).strip()
+
             import json
-            parsed_dict = json.loads(raw_parsed)
+            parsed_dict = json.loads(raw)
+            if not isinstance(parsed_dict, dict):
+                raise TypeError("Parsed JSON is not an object")
+
+            # Handle backward compatibility if model returns legacy {"decisions": [...]}
             if "decisions" in parsed_dict and "supersessions" not in parsed_dict:
                 parsed_dict["supersessions"] = parsed_dict.pop("decisions")
             if "validity_updates" not in parsed_dict:

@@ -383,20 +383,21 @@ async def consolidate_user_memories(
         rec = record_by_id.get(r.memory_id)
         if not rec or rec.state != "active":
             continue
-        if rec.category == r.new_category:
+        clean_cat = r.new_category.strip().lower().replace(" ", "_")[:50]
+        if len(clean_cat) < 2 or rec.category == clean_cat:
             continue
         old_cat = rec.category
         await session.execute(
-            update(MemoryRecord).where(MemoryRecord.id == rec.id).values(category=r.new_category)
+            update(MemoryRecord).where(MemoryRecord.id == rec.id).values(category=clean_cat)
         )
-        rec.category = r.new_category
+        rec.category = clean_cat
         applied.append(
             {
                 "type": "reclassification",
                 "memory_id": str(rec.id),
                 "statement": rec.statement,
                 "old_category": old_cat,
-                "new_category": r.new_category,
+                "new_category": clean_cat,
                 "reason": r.reason,
             }
         )

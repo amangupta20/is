@@ -17,15 +17,33 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Drop rigid category check constraint and support dynamic category slugs."""
+    """Drop rigid category check constraint, support dynamic category slugs, and allow expired state."""
     op.execute(sa.text("SET search_path TO assistant_core, extensions, public"))
 
-    # Drop the legacy category enum constraint
+    # Drop all possible category check constraints
     op.execute(
         sa.text(
             """
             ALTER TABLE assistant_core.memory_record
             DROP CONSTRAINT IF EXISTS memory_record_category;
+            ALTER TABLE assistant_core.memory_record
+            DROP CONSTRAINT IF EXISTS ck_memory_record_memory_record_category;
+            ALTER TABLE assistant_core.memory_record
+            DROP CONSTRAINT IF EXISTS memory_record_category_len;
+            ALTER TABLE assistant_core.memory_record
+            DROP CONSTRAINT IF EXISTS ck_memory_record_memory_record_category_len;
+            """
+        )
+    )
+
+    # Drop all possible state check constraints
+    op.execute(
+        sa.text(
+            """
+            ALTER TABLE assistant_core.memory_record
+            DROP CONSTRAINT IF EXISTS memory_record_state;
+            ALTER TABLE assistant_core.memory_record
+            DROP CONSTRAINT IF EXISTS ck_memory_record_memory_record_state;
             """
         )
     )
@@ -39,37 +57,39 @@ def upgrade() -> None:
         schema="assistant_core",
     )
 
-    # Add length sanity constraint
+    # Add updated constraints
     op.execute(
         sa.text(
             """
             ALTER TABLE assistant_core.memory_record
-            ADD CONSTRAINT memory_record_category_len
+            ADD CONSTRAINT ck_memory_record_memory_record_category_len
             CHECK (char_length(category) >= 2 AND char_length(category) <= 50);
+
+            ALTER TABLE assistant_core.memory_record
+            ADD CONSTRAINT ck_memory_record_memory_record_state
+            CHECK (state IN ('active', 'superseded', 'archived', 'expired'));
             """
         )
     )
 
 
 def downgrade() -> None:
-    """Restore legacy category check constraint."""
+    """Restore legacy category and state check constraints."""
     op.execute(sa.text("SET search_path TO assistant_core, extensions, public"))
 
     op.execute(
         sa.text(
             """
             ALTER TABLE assistant_core.memory_record
-            DROP CONSTRAINT IF EXISTS memory_record_category_len;
-            """
-        )
-    )
-
-    op.execute(
-        sa.text(
-            """
+            DROP CONSTRAINT IF EXISTS ck_memory_record_memory_record_category_len;
             ALTER TABLE assistant_core.memory_record
-            ADD CONSTRAINT memory_record_category
+            DROP CONSTRAINT IF EXISTS ck_memory_record_memory_record_state;
+            ALTER TABLE assistant_core.memory_record
+            ADD CONSTRAINT ck_memory_record_memory_record_category
             CHECK (category IN ('fact', 'preference', 'instruction', 'project', 'decision'));
+            ALTER TABLE assistant_core.memory_record
+            ADD CONSTRAINT ck_memory_record_memory_record_state
+            CHECK (state IN ('active', 'superseded', 'archived'));
             """
         )
     )

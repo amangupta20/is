@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any, Literal
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete as sa_delete
@@ -59,6 +60,8 @@ from assistant_core.memory.repository import (
     search_explicit_memory,
 )
 from assistant_core.turns.models import CompletedTurn
+
+LOGGER = structlog.get_logger("assistant_core.admin")
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
 
@@ -1191,9 +1194,16 @@ async def trigger_memory_consolidation(
 
             await session.commit()
     except MemoryConsolidationError as exc:
+        LOGGER.error("memory_consolidation_llm_failed", error=str(exc))
         raise HTTPException(
             status_code=502,
             detail=f"Memory consolidation failed during LLM evaluation: {exc}",
+        ) from None
+    except Exception as exc:
+        LOGGER.exception("memory_consolidation_unexpected_failed", error=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Memory consolidation failed: {exc}",
         ) from None
 
     return {
