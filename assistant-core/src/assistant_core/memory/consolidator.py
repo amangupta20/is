@@ -1,6 +1,5 @@
-"""Task-model memory consolidation, taxonomy reorganization, and validity lifecycle resolution."""
-
 import uuid
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 import httpx
@@ -15,9 +14,11 @@ Given a list of active personal memories for a user, perform a comprehensive rev
    - The newer authoritative memory must supersede the older obsolete memory.
 
 2. Validity Updates (Temporal Lifecycle & In-Flight Context):
-   - Review memories describing in-progress milestones, job applications, temporary tasks, or short-term workarounds that were marked Permanent.
-   - For in-flight processes (e.g. "User applied for a position at Company X", "Currently debugging Supabase container restart issue"), set a realistic expiration window (e.g. 30 to 60 days from creation) and assign a clear temporal_tag (e.g. "job_application", "in_progress", "active_task", "deadline").
-   - If an expiring memory has already completed or is fully resolved, set action to "expire_now".
+   - Review memories describing in-progress milestones, job applications, temporary tasks, or short-term workarounds that were marked Permanent or have inaccurate expiration.
+   - If a memory contains an explicit date, scheduled event, interview, or deadline (e.g. 'scheduled for August 19, 2026'), calculate and set expires_at directly to that date or 1-2 days after (e.g. '2026-08-20T00:00:00Z').
+   - If the stated event date has already passed relative to Current Reference UTC Time, set action to 'expire_now'.
+   - Only use default windows (like 14 to 30 days) when NO specific date or deadline is stated in the memory.
+   - For permanent personal preferences, instructions, or lasting facts, action should be 'mark_permanent'.
 
 3. Reclassifications (Cohesive Domain Taxonomy):
    - Review categories to ensure memories are grouped into clean, descriptive domain slugs (e.g. "career", "infrastructure", "homelab", "preference", "fact", "project", "tooling", "learning", "finance", "health").
@@ -113,6 +114,8 @@ class TaskModelMemoryConsolidator:
     def consolidate(
         self,
         memories: list[dict[str, Any]],
+        *,
+        reference_time: datetime | None = None,
     ) -> ConsolidationResult:
         """Submit active memories to the task model and parse supersessions, validity updates, and reclassifications."""
         if len(memories) <= 1:
@@ -135,12 +138,16 @@ class TaskModelMemoryConsolidator:
             for m in memories
         ]
 
+        ref_time = reference_time or datetime.now(UTC)
+        ref_time_str = ref_time.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%SZ")
+        system_content = f"{CONSOLIDATION_RUBRIC}\n\nCurrent Reference UTC Time: {ref_time_str}"
+
         request_body: dict[str, Any] = {
             "model": self._model,
             "temperature": 0,
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": CONSOLIDATION_RUBRIC},
+                {"role": "system", "content": system_content},
                 {
                     "role": "user",
                     "content": f"Active user memories for consolidation review:\n{formatted_memories}",

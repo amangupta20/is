@@ -1,7 +1,6 @@
-"""OpenAI-compatible extraction of source-linked explicit memory candidates."""
-
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -10,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from assistant_core.memory.schemas import ExplicitMemoryCandidate
 
 MEMORY_EXTRACTION_FAILED_ERROR = "memory_extraction_failed"
-EXTRACTION_RUBRIC = """Extract directly stated durable facts, preferences, instructions, projects, decisions, or ongoing life/work context from the captured user text. Return a JSON object with a candidates array only. Every candidate must contain the required fields: key (lowercase dotted identifier, e.g. career.datazip_application, infra.supabase_backup, profile.response_style), category (a concise lowercase domain slug, e.g. "fact", "preference", "decision", "project", "career", "infrastructure", "homelab", "tooling", "learning", "finance", "health"), statement, and evidence_quote (exact source quote). If the statement represents an in-progress milestone, temporary task, deadline, or time-bound situation, you may optionally include temporal_tag ("in_progress", "job_application", "deadline", "temporary_preference", "scheduled_event", "transient_task") and expires_at (ISO 8601 timestamp string). For permanent personal facts and preferences, omit expires_at. Produce no candidate for transient requests, pasted logs, quoted third-party text, assistant claims, secrets, or uncertainty."""
+EXTRACTION_RUBRIC = """Extract directly stated durable facts, preferences, instructions, projects, decisions, or ongoing life/work context from the captured user text. Return a JSON object with a candidates array only. Every candidate must contain the required fields: key (lowercase dotted identifier, e.g. career.datazip_application, infra.supabase_backup, profile.response_style), category (a concise lowercase domain slug, e.g. "fact", "preference", "decision", "project", "career", "infrastructure", "homelab", "tooling", "learning", "finance", "health"), statement, and evidence_quote (exact source quote). If the statement represents an in-progress milestone, temporary task, deadline, or time-bound situation, you may optionally include temporal_tag ("in_progress", "job_application", "deadline", "temporary_preference", "scheduled_event", "transient_task") and expires_at (ISO 8601 timestamp string). If a specific date, deadline, interview, or event date is mentioned in the statement (e.g. 'scheduled for August 19, 2026' or 'deadline is next Monday'), calculate expires_at directly to the end of that date or the day after in UTC (e.g. '2026-08-20T00:00:00Z'). For permanent personal facts and preferences, omit expires_at. Produce no candidate for transient requests, pasted logs, quoted third-party text, assistant claims, secrets, or uncertainty."""
 
 
 class MemoryExtractionError(ValueError):
@@ -23,6 +22,7 @@ class CompletedTurnData:
 
     id: uuid.UUID
     user_content: str
+    occurred_at: datetime | None = None
 
 
 class _ExtractionResponse(BaseModel):
@@ -51,17 +51,27 @@ class TaskModelMemoryExtractor:
         self._timeout_seconds = timeout_seconds
         self._transport = transport
 
-    def extract(self, turn: CompletedTurnData) -> list[ExplicitMemoryCandidate]:
+    def extract(
+        self,
+        turn: CompletedTurnData,
+        *,
+        reference_time: datetime | None = None,
+    ) -> list[ExplicitMemoryCandidate]:
         """Extract validated candidates without exposing provider diagnostics."""
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
+
+        ref_time = turn.occurred_at or reference_time or datetime.now(UTC)
+        ref_time_str = ref_time.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%SZ")
+        system_content = f"{EXTRACTION_RUBRIC}\n\nCurrent Reference UTC Time: {ref_time_str}"
+
         request_body: dict[str, Any] = {
             "model": self._model,
             "temperature": 0,
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": EXTRACTION_RUBRIC},
+                {"role": "system", "content": system_content},
                 {"role": "user", "content": turn.user_content},
             ],
         }

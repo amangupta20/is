@@ -277,7 +277,11 @@ async def _handle_extract_memory(session: AsyncSession, payload: dict[str, JsonV
     turn = await session.get(CompletedTurn, turn_id)
     if turn is None or turn.tombstoned_at is not None:
         raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
-    turn_data = CompletedTurnData(id=turn.id, user_content=turn.user_content)
+    turn_data = CompletedTurnData(
+        id=turn.id,
+        user_content=turn.user_content,
+        occurred_at=turn.occurred_at,
+    )
     await session.rollback()
     candidates = await asyncio.to_thread(get_memory_extractor().extract, turn_data)
     fresh_turn = await session.get(CompletedTurn, turn_id)
