@@ -101,7 +101,7 @@ class TaskModelMemoryConsolidator:
         base_url: str,
         api_key: str | None,
         model: str,
-        timeout_seconds: float = 20.0,
+        timeout_seconds: float = 60.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._url = f"{base_url.rstrip('/')}/chat/completions"

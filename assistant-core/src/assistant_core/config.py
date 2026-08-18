@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     task_model_base_url: str | None = Field(default=None, min_length=1, max_length=2_048)
     task_model_api_key: SecretStr | None = None
     task_model_model: str | None = Field(default=None, min_length=1, max_length=200)
-    task_model_timeout_seconds: float = Field(default=15, ge=1, le=120)
+    task_model_timeout_seconds: float = Field(default=60.0, ge=1, le=300)
     embedding_base_url: str | None = Field(default=None, min_length=1, max_length=2_048)
     embedding_api_key: SecretStr | None = None
     embedding_model: str | None = Field(default=None, min_length=1, max_length=200)

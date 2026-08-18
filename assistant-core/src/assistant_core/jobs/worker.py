@@ -128,11 +128,12 @@ def get_memory_consolidator(settings: Settings | None = None) -> TaskModelMemory
     resolved_settings = settings or get_settings()
     base_url, model = _task_model_configuration(resolved_settings)
     api_key = resolved_settings.task_model_api_key
+    timeout = max(60.0, resolved_settings.task_model_timeout_seconds)
     return TaskModelMemoryConsolidator(
         base_url=base_url,
         api_key=api_key.get_secret_value() if api_key is not None else None,
         model=model,
-        timeout_seconds=resolved_settings.task_model_timeout_seconds,
+        timeout_seconds=timeout,
     )
 
 
