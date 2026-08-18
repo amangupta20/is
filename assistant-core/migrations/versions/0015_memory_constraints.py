@@ -1,6 +1,6 @@
 """Drop legacy check constraints on memory_record table.
 
-Revision ID: 0015_drop_legacy_memory_constraints
+Revision ID: 0015_memory_constraints
 Revises: 0014_dynamic_memory_categories
 Create Date: 2026-08-18 16:35:00.000000
 """
@@ -10,7 +10,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0015_drop_legacy_memory_constraints"
+revision: str = "0015_memory_constraints"
 down_revision: str | None = "0014_dynamic_memory_categories"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
