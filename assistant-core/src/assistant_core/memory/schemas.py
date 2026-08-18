@@ -1,11 +1,8 @@
-"""Strict extraction boundary for explicit-memory candidates."""
-
 from datetime import datetime
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-MemoryCategory = Literal["fact", "preference", "instruction", "project", "decision"]
+MemoryCategory = str
 
 
 class ExplicitMemoryCandidate(BaseModel):
@@ -18,7 +15,12 @@ class ExplicitMemoryCandidate(BaseModel):
         max_length=200,
         pattern=r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$",
     )
-    category: MemoryCategory
+    category: str = Field(
+        min_length=2,
+        max_length=50,
+        pattern=r"^[a-z][a-z0-9_-]*$",
+        description="Cohesive lowercase category slug (e.g. career, infrastructure, preference, homelab, learning, project)",
+    )
     statement: str = Field(min_length=1, max_length=2_000)
     evidence_quote: str = Field(min_length=1, max_length=1_000)
     valid_from: datetime | None = Field(default=None)

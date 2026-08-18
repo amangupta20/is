@@ -1,5 +1,6 @@
 import re
 import uuid
+from datetime import datetime
 from time import perf_counter
 from typing import Any
 
@@ -221,7 +222,7 @@ async def consolidate_user_memories(
     consolidator: TaskModelMemoryConsolidator,
     trigger: str = "manual_admin",
 ) -> list[dict[str, Any]]:
-    """Find and apply supersession decisions across active memories for a native user and record an audit log."""
+    """Find and apply supersessions, validity updates, and reclassifications across active memories for a native user and record an audit log."""
     started_at = perf_counter()
     user_stmt = select(UserIdentity).where(UserIdentity.native_user_id == native_user_id)
     user_obj = (await session.execute(user_stmt)).scalar_one_or_none()
@@ -260,34 +261,21 @@ async def consolidate_user_memories(
             "key": r.key,
             "category": r.category,
             "statement": r.statement,
+            "temporal_tag": r.temporal_tag or "permanent",
+            "expires_at": r.expires_at.isoformat() if r.expires_at else "none",
             "created_at": r.created_at.isoformat() if r.created_at else "",
         }
         for r in records
     ]
 
-    decisions = consolidator.consolidate(memory_dicts)
-    if not decisions:
-        duration_ms = (perf_counter() - started_at) * 1000
-        run_log = ConsolidationRun(
-            id=uuid.uuid4(),
-            user_id=user_id,
-            native_user_id=native_user_id,
-            trigger=trigger,
-            status="no_changes",
-            memories_scanned=len(records),
-            superseded_count=0,
-            details=[],
-            duration_ms=round(duration_ms, 2),
-        )
-        session.add(run_log)
-        return []
-
+    result = consolidator.consolidate(memory_dicts)
     record_by_id = {r.id: r for r in records}
     applied: list[dict[str, Any]] = []
 
-    for d in decisions:
-        superseded = record_by_id.get(d.superseded_id)
-        superseding = record_by_id.get(d.superseded_by_id)
+    # 1. Process Supersessions
+    for s in result.supersessions:
+        superseded = record_by_id.get(s.superseded_id)
+        superseding = record_by_id.get(s.superseded_by_id)
 
         if not superseded or not superseding:
             continue
@@ -308,11 +296,108 @@ async def consolidate_user_memories(
         superseded.state = "superseded"
         applied.append(
             {
+                "type": "supersession",
                 "superseded_id": str(superseded.id),
                 "superseded_statement": superseded.statement,
                 "superseded_by_id": str(superseding.id),
                 "superseding_statement": superseding.statement,
-                "reason": d.reason,
+                "reason": s.reason,
+            }
+        )
+
+    # 2. Process Validity Updates
+    for v in result.validity_updates:
+        rec = record_by_id.get(v.memory_id)
+        if not rec or rec.state != "active":
+            continue
+
+        expires_at_dt: datetime | None = None
+        if v.expires_at and v.expires_at.lower() not in ("none", "null", ""):
+            try:
+                expires_at_dt = datetime.fromisoformat(v.expires_at)
+            except ValueError:
+                expires_at_dt = None
+
+        if v.action == "expire_now":
+            await session.execute(
+                update(MemoryRecord).where(MemoryRecord.id == rec.id).values(state="expired")
+            )
+            rec.state = "expired"
+            applied.append(
+                {
+                    "type": "validity_update",
+                    "action": "expire_now",
+                    "memory_id": str(rec.id),
+                    "statement": rec.statement,
+                    "old_validity": (
+                        rec.expires_at.isoformat() if rec.expires_at else "permanent"
+                    ),
+                    "new_validity": "expired",
+                    "reason": v.reason,
+                }
+            )
+        elif v.action in ("set_expiration", "extend_expiration"):
+            await session.execute(
+                update(MemoryRecord)
+                .where(MemoryRecord.id == rec.id)
+                .values(expires_at=expires_at_dt, temporal_tag=v.temporal_tag)
+            )
+            old_val = rec.expires_at.isoformat() if rec.expires_at else "permanent"
+            rec.expires_at = expires_at_dt
+            rec.temporal_tag = v.temporal_tag
+            applied.append(
+                {
+                    "type": "validity_update",
+                    "action": v.action,
+                    "memory_id": str(rec.id),
+                    "statement": rec.statement,
+                    "old_validity": old_val,
+                    "new_validity": expires_at_dt.isoformat() if expires_at_dt else "none",
+                    "temporal_tag": v.temporal_tag,
+                    "reason": v.reason,
+                }
+            )
+        elif v.action == "mark_permanent":
+            await session.execute(
+                update(MemoryRecord)
+                .where(MemoryRecord.id == rec.id)
+                .values(expires_at=None, temporal_tag=None)
+            )
+            old_val = rec.expires_at.isoformat() if rec.expires_at else "none"
+            rec.expires_at = None
+            rec.temporal_tag = None
+            applied.append(
+                {
+                    "type": "validity_update",
+                    "action": "mark_permanent",
+                    "memory_id": str(rec.id),
+                    "statement": rec.statement,
+                    "old_validity": old_val,
+                    "new_validity": "permanent",
+                    "reason": v.reason,
+                }
+            )
+
+    # 3. Process Reclassifications
+    for r in result.reclassifications:
+        rec = record_by_id.get(r.memory_id)
+        if not rec or rec.state != "active":
+            continue
+        if rec.category == r.new_category:
+            continue
+        old_cat = rec.category
+        await session.execute(
+            update(MemoryRecord).where(MemoryRecord.id == rec.id).values(category=r.new_category)
+        )
+        rec.category = r.new_category
+        applied.append(
+            {
+                "type": "reclassification",
+                "memory_id": str(rec.id),
+                "statement": rec.statement,
+                "old_category": old_cat,
+                "new_category": r.new_category,
+                "reason": r.reason,
             }
         )
 

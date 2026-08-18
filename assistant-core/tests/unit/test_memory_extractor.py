@@ -37,9 +37,7 @@ def test_extractor_parses_explicit_preference_and_empty_candidates() -> None:
         assert body["response_format"] == {"type": "json_object"}
         rubric = " ".join(body["messages"][0]["content"].split())
         assert "lowercase dotted identifier" in rubric
-        assert (
-            'exactly one of "fact", "preference", "instruction", "project", or "decision"' in rubric
-        )
+        assert "concise lowercase domain slug" in rubric
         return httpx.Response(
             200,
             json={"choices": [{"message": {"content": json.dumps(next(responses))}}]},
@@ -58,5 +56,48 @@ def test_extractor_parses_explicit_preference_and_empty_candidates() -> None:
     candidates = extractor.extract(preference_turn)
 
     assert candidates[0].key == "profile.response_style"
+    assert candidates[0].category == "preference"
     assert candidates[0].evidence_quote == "I prefer concise answers."
     assert extractor.extract(transient_turn) == []
+
+
+def test_extractor_parses_dynamic_category_and_temporal_tag() -> None:
+    from assistant_core.memory.extractor import (
+        CompletedTurnData,
+        TaskModelMemoryExtractor,
+    )
+
+    response = {
+        "candidates": [
+            {
+                "key": "career.datazip_application",
+                "category": "career",
+                "statement": "The user applied for a position at Datazip.",
+                "evidence_quote": "I applied for a job at Datazip today.",
+                "temporal_tag": "job_application",
+                "expires_at": "2026-09-18T15:00:00Z",
+            }
+        ]
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": json.dumps(response)}}]},
+        )
+
+    extractor = TaskModelMemoryExtractor(
+        base_url="https://task-model.example",
+        api_key=None,
+        model="cheap-extractor",
+        timeout_seconds=3,
+        transport=httpx.MockTransport(respond),
+    )
+
+    turn = CompletedTurnData(id=uuid.uuid4(), user_content="I applied for a job at Datazip today.")
+    candidates = extractor.extract(turn)
+
+    assert len(candidates) == 1
+    assert candidates[0].category == "career"
+    assert candidates[0].temporal_tag == "job_application"
+    assert candidates[0].expires_at is not None

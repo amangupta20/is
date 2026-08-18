@@ -587,6 +587,17 @@ select:focus {
 .badge-fact { background: hsla(217, 91%, 60%, 0.15); color: hsl(217, 91%, 75%); }
 .badge-constraint { background: hsla(38, 92%, 50%, 0.15); color: hsl(38, 92%, 60%); }
 .badge-profile { background: hsla(142, 71%, 45%, 0.15); color: hsl(142, 71%, 60%); }
+.badge-career { background: hsla(285, 85%, 60%, 0.15); color: hsl(285, 85%, 75%); }
+.badge-infrastructure { background: hsla(195, 90%, 45%, 0.15); color: hsl(195, 90%, 65%); }
+.badge-homelab { background: hsla(165, 85%, 45%, 0.15); color: hsl(165, 85%, 65%); }
+.badge-tooling { background: hsla(30, 90%, 50%, 0.15); color: hsl(30, 90%, 65%); }
+.badge-learning { background: hsla(330, 85%, 60%, 0.15); color: hsl(330, 85%, 75%); }
+.badge-project { background: hsla(205, 85%, 55%, 0.15); color: hsl(205, 85%, 70%); }
+.badge-decision { background: hsla(45, 95%, 50%, 0.15); color: hsl(45, 95%, 60%); }
+.badge-instruction { background: hsla(100, 75%, 45%, 0.15); color: hsl(100, 75%, 60%); }
+.badge-finance { background: hsla(135, 80%, 45%, 0.15); color: hsl(135, 80%, 65%); }
+.badge-health { background: hsla(350, 85%, 60%, 0.15); color: hsl(350, 85%, 75%); }
+.badge-category { background: hsla(220, 20%, 30%, 0.3); color: hsl(220, 20%, 80%); }
 
 .badge-active { background: var(--success-subtle); color: var(--success); }
 .badge-tombstoned { background: var(--danger-subtle); color: var(--danger); }

@@ -26,8 +26,8 @@ class MemoryRecord(Base):
     __tablename__ = "memory_record"
     __table_args__ = (
         CheckConstraint(
-            "category IN ('fact', 'preference', 'instruction', 'project', 'decision')",
-            name="memory_record_category",
+            "char_length(category) >= 2 AND char_length(category) <= 50",
+            name="memory_record_category_len",
         ),
         CheckConstraint("kind = 'explicit'", name="memory_record_kind"),
         CheckConstraint("confidence = 1", name="memory_record_confidence"),
@@ -36,7 +36,7 @@ class MemoryRecord(Base):
             name="memory_record_statement_length",
         ),
         CheckConstraint(
-            "state IN ('active', 'superseded', 'archived')",
+            "state IN ('active', 'superseded', 'archived', 'expired')",
             name="memory_record_state",
         ),
         Index(
@@ -55,7 +55,7 @@ class MemoryRecord(Base):
         UUID(as_uuid=True), ForeignKey("assistant_core.user_identity.id"), nullable=False
     )
     key: Mapped[str] = mapped_column(String(200), nullable=False)
-    category: Mapped[str] = mapped_column(String(30), nullable=False)
+    category: Mapped[str] = mapped_column(String(50), nullable=False)
     statement: Mapped[str] = mapped_column(Text, nullable=False)
     kind: Mapped[str] = mapped_column(
         String(30), nullable=False, default="explicit", server_default="explicit"

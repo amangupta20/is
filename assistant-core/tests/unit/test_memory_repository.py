@@ -231,13 +231,20 @@ def test_search_and_read_require_live_completed_turn_evidence() -> None:
 
 
 def test_consolidate_user_memories() -> None:
-    """Consolidation applies supersession to older contradictory active memories."""
-    from assistant_core.memory.consolidator import MemoryConsolidationDecision
+    """Consolidation applies supersessions, validity updates, and reclassifications to active memories."""
+    from assistant_core.memory.consolidator import (
+        ConsolidationResult,
+        MemoryReclassificationDecision,
+        MemorySupersessionDecision,
+        MemoryValidityDecision,
+    )
     from assistant_core.memory.models import MemoryRecord
     from assistant_core.memory.repository import consolidate_user_memories
 
     id_old = uuid.uuid4()
     id_new = uuid.uuid4()
+    id_temp = uuid.uuid4()
+    id_reclass = uuid.uuid4()
 
     record_old = MemoryRecord(
         id=id_old,
@@ -257,16 +264,52 @@ def test_consolidate_user_memories() -> None:
         state="active",
         created_at=datetime(2026, 8, 12, tzinfo=UTC),
     )
+    record_temp = MemoryRecord(
+        id=id_temp,
+        user_id=uuid.uuid4(),
+        key="career.datazip",
+        category="project",
+        statement="User applied for a job at Datazip",
+        state="active",
+        created_at=datetime(2026, 8, 15, tzinfo=UTC),
+    )
+    record_reclass = MemoryRecord(
+        id=id_reclass,
+        user_id=uuid.uuid4(),
+        key="infra.supabase",
+        category="fact",
+        statement="Runs Supabase in Dokploy",
+        state="active",
+        created_at=datetime(2026, 8, 16, tzinfo=UTC),
+    )
 
     class MockConsolidator:
-        def consolidate(self, memories: list[object]) -> list[MemoryConsolidationDecision]:
-            return [
-                MemoryConsolidationDecision(
-                    superseded_id=id_old,
-                    superseded_by_id=id_new,
-                    reason="User switched Linux distributions",
-                )
-            ]
+        def consolidate(self, memories: list[object]) -> ConsolidationResult:
+            return ConsolidationResult(
+                supersessions=[
+                    MemorySupersessionDecision(
+                        superseded_id=id_old,
+                        superseded_by_id=id_new,
+                        reason="User switched Linux distributions",
+                    )
+                ],
+                validity_updates=[
+                    MemoryValidityDecision(
+                        memory_id=id_temp,
+                        action="set_expiration",
+                        expires_at="2026-09-18T15:00:00+00:00",
+                        temporal_tag="job_application",
+                        reason="Active job search milestone",
+                    )
+                ],
+                reclassifications=[
+                    MemoryReclassificationDecision(
+                        memory_id=id_reclass,
+                        new_category="infrastructure",
+                        reason="Deployment setup belongs in infrastructure",
+                    )
+                ],
+            )
 
     class FakeScalarResult:
         def __init__(self, items: list[MemoryRecord], scalar: object = None) -> None:
@@ -296,7 +339,7 @@ def test_consolidate_user_memories() -> None:
                 return FakeScalarResult([], scalar=None)
             if self.call_count == 2:
                 # memory records statement
-                return FakeScalarResult([record_old, record_new])
+                return FakeScalarResult([record_old, record_new, record_temp, record_reclass])
             return FakeScalarResult([])
 
         def add(self, item: object) -> None:
@@ -310,12 +353,26 @@ def test_consolidate_user_memories() -> None:
             native_user_id="user-1",
             consolidator=MockConsolidator(),  # type: ignore[arg-type]
         )
-        assert len(applied) == 1
+        assert len(applied) == 3
+        # Supersession
+        assert applied[0]["type"] == "supersession"
         assert applied[0]["superseded_id"] == str(id_old)
         assert applied[0]["superseding_statement"] == "User runs Arch Linux"
         assert record_old.state == "superseded"
+
+        # Validity update
+        assert applied[1]["type"] == "validity_update"
+        assert applied[1]["temporal_tag"] == "job_application"
+        assert record_temp.temporal_tag == "job_application"
+        assert record_temp.expires_at is not None
+
+        # Reclassification
+        assert applied[2]["type"] == "reclassification"
+        assert applied[2]["new_category"] == "infrastructure"
+        assert record_reclass.category == "infrastructure"
+
         assert len(session.added) == 1
         assert session.added[0].status == "success"  # type: ignore[union-attr]
-        assert session.added[0].superseded_count == 1  # type: ignore[union-attr]
+        assert session.added[0].superseded_count == 3  # type: ignore[union-attr]
 
     anyio.run(run_test)

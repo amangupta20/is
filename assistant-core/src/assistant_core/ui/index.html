@@ -582,18 +582,29 @@
           <div class="form-row">
             <div class="form-group flex-1">
               <label for="memory-category-input">Category</label>
-              <select id="memory-category-input">
-                <option value="preference">Preference</option>
-                <option value="fact">Fact</option>
-                <option value="instruction">Instruction</option>
-                <option value="project">Project</option>
-                <option value="decision">Decision</option>
-              </select>
+              <input type="text" id="memory-category-input" list="memory-category-options" placeholder="e.g. career, infrastructure, preference" required>
+              <datalist id="memory-category-options">
+                <option value="career">
+                <option value="decision">
+                <option value="fact">
+                <option value="finance">
+                <option value="health">
+                <option value="homelab">
+                <option value="infrastructure">
+                <option value="instruction">
+                <option value="learning">
+                <option value="preference">
+                <option value="project">
+                <option value="tooling">
+              </datalist>
             </div>
             <div class="form-group flex-1">
               <label for="memory-temporal-tag-input">Temporal Tag</label>
               <select id="memory-temporal-tag-input">
                 <option value="">None (Permanent)</option>
+                <option value="in_progress">In Progress</option>
+                <option value="job_application">Job Application</option>
+                <option value="active_task">Active Task</option>
                 <option value="deadline">Deadline</option>
                 <option value="temporary_preference">Temporary Preference</option>
                 <option value="scheduled_event">Scheduled Event</option>

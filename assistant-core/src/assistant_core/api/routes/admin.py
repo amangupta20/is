@@ -321,6 +321,32 @@ async def get_overview_telemetry(request: Request) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+@router.get("/memories/categories", dependencies=[Depends(require_admin_session)])
+async def list_memory_categories(request: Request) -> dict[str, list[str]]:
+    """Return all distinct active memory categories present in the database."""
+    async with request.app.state.session_factory() as session:
+        stmt = (
+            select(MemoryRecord.category)
+            .where(MemoryRecord.state == "active")
+            .distinct()
+            .order_by(MemoryRecord.category.asc())
+        )
+        categories = list((await session.execute(stmt)).scalars().all())
+        default_set = {
+            "career",
+            "decision",
+            "fact",
+            "homelab",
+            "infrastructure",
+            "learning",
+            "preference",
+            "project",
+            "tooling",
+        }
+        all_categories = sorted(set(categories) | default_set)
+        return {"categories": all_categories}
+
+
 @router.get("/memories", dependencies=[Depends(require_admin_session)])
 async def list_memories(
     request: Request,

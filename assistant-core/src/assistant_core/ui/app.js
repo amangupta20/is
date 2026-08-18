@@ -229,6 +229,7 @@ class DashboardApp {
         this.loadOverview();
         break;
       case 'memories':
+        this.loadMemoryCategories();
         this.loadMemories();
         break;
       case 'files':
@@ -497,6 +498,30 @@ class DashboardApp {
   // ------------------------------------------------------------------------
   // Memories Tab
   // ------------------------------------------------------------------------
+  async loadMemoryCategories() {
+    try {
+      const data = await this.api('/v1/admin/memories/categories');
+      if (!data.categories) return;
+
+      const select = document.getElementById('memories-category-filter');
+      if (select) {
+        const currentVal = select.value;
+        select.innerHTML = '<option value="">All Categories</option>' +
+          data.categories.map((c) => `<option value="${this.escapeHtml(c)}">${this.escapeHtml(c.charAt(0).toUpperCase() + c.slice(1))}</option>`).join('');
+        if (currentVal && data.categories.includes(currentVal)) {
+          select.value = currentVal;
+        }
+      }
+
+      const datalist = document.getElementById('memory-category-options');
+      if (datalist) {
+        datalist.innerHTML = data.categories.map((c) => `<option value="${this.escapeHtml(c)}">`).join('');
+      }
+    } catch (err) {
+      console.warn('Failed to load memory categories:', err);
+    }
+  }
+
   async loadMemories(searchQuery = null) {
     const query = searchQuery !== null ? searchQuery : document.getElementById('memories-search').value;
     const category = document.getElementById('memories-category-filter').value;
@@ -928,18 +953,36 @@ class DashboardApp {
 
       if (res.details && res.details.length > 0) {
         resultsList.innerHTML = res.details
-          .map(
-            (d) => `
-          <div style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle);">
-            <div><s class="text-danger">${this.escapeHtml(d.superseded_statement)}</s></div>
-            <div class="text-success">↳ ${this.escapeHtml(d.superseding_statement)}</div>
-            <div class="text-muted" style="font-size: 11px;">Reason: ${this.escapeHtml(d.reason)}</div>
-          </div>
-        `
-          )
+          .map((d) => {
+            if (d.type === 'validity_update') {
+              return `
+                <div style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle);">
+                  <div><span class="badge badge-running" style="font-size: 10px;">Validity: ${this.escapeHtml(d.action)}</span> <strong>${this.escapeHtml(d.statement)}</strong></div>
+                  <div style="font-size: 12px; color: var(--text-secondary); margin: 3px 0;">Validity: <s>${this.escapeHtml(d.old_validity)}</s> ➔ <span class="text-success">${this.escapeHtml(d.new_validity)}</span> ${d.temporal_tag ? `<span class="badge">[${this.escapeHtml(d.temporal_tag)}]</span>` : ''}</div>
+                  <div class="text-muted" style="font-size: 11px;">💡 ${this.escapeHtml(d.reason)}</div>
+                </div>
+              `;
+            } else if (d.type === 'reclassification') {
+              return `
+                <div style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle);">
+                  <div><span class="badge badge-${d.new_category || 'category'}" style="font-size: 10px;">Reclassified</span> <strong>${this.escapeHtml(d.statement)}</strong></div>
+                  <div style="font-size: 12px; color: var(--text-secondary); margin: 3px 0;">Category: <s>${this.escapeHtml(d.old_category)}</s> ➔ <span class="badge badge-${d.new_category || 'category'}">${this.escapeHtml(d.new_category)}</span></div>
+                  <div class="text-muted" style="font-size: 11px;">💡 ${this.escapeHtml(d.reason)}</div>
+                </div>
+              `;
+            } else {
+              return `
+                <div style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle);">
+                  <div><span class="badge badge-tombstoned" style="font-size: 10px;">Superseded</span> <s class="text-danger">${this.escapeHtml(d.superseded_statement || '')}</s></div>
+                  <div class="text-success" style="margin: 3px 0;">↳ ${this.escapeHtml(d.superseding_statement || '')}</div>
+                  <div class="text-muted" style="font-size: 11px;">💡 ${this.escapeHtml(d.reason)}</div>
+                </div>
+              `;
+            }
+          })
           .join('');
       } else {
-        resultsList.innerHTML = '<p class="text-muted">No conflicting or obsolete memories found.</p>';
+        resultsList.innerHTML = '<p class="text-muted">No conflicting, temporary, or misclassified memories found.</p>';
       }
 
       resultsBox.style.display = 'block';
@@ -999,7 +1042,7 @@ class DashboardApp {
           <td><code>${this.escapeHtml(r.native_user_id)}</code></td>
           <td>${statusBadges[r.status] || `<span class="badge">${r.status}</span>`}</td>
           <td><strong>${r.memories_scanned}</strong></td>
-          <td>${r.superseded_count > 0 ? `<strong class="text-success">${r.superseded_count} superseded</strong>` : '<span class="text-muted">0</span>'}</td>
+          <td>${r.superseded_count > 0 ? `<strong class="text-success">${r.superseded_count} updated</strong>` : '<span class="text-muted">0</span>'}</td>
           <td><small class="text-muted">${r.duration_ms}ms</small></td>
           <td>
             <button class="btn btn-secondary btn-sm" onclick="app.openConsolidationDiffModal('${r.id}')">
@@ -1027,7 +1070,7 @@ class DashboardApp {
         <div class="diff-meta-item"><span class="diff-meta-label">Trigger:</span> <span class="diff-meta-value">${triggerLabel}</span></div>
         <div class="diff-meta-item"><span class="diff-meta-label">Executed At:</span> <span class="diff-meta-value">${this.formatDate(data.created_at)}</span></div>
         <div class="diff-meta-item"><span class="diff-meta-label">Memories Scanned:</span> <span class="diff-meta-value">${data.memories_scanned}</span></div>
-        <div class="diff-meta-item"><span class="diff-meta-label">Superseded:</span> <span class="diff-meta-value ${data.superseded_count > 0 ? 'text-success' : ''}">${data.superseded_count}</span></div>
+        <div class="diff-meta-item"><span class="diff-meta-label">Updates Applied:</span> <span class="diff-meta-value ${data.superseded_count > 0 ? 'text-success' : ''}">${data.superseded_count}</span></div>
         <div class="diff-meta-item"><span class="diff-meta-label">Duration:</span> <span class="diff-meta-value">${data.duration_ms}ms</span></div>
       `;
 
@@ -1036,34 +1079,82 @@ class DashboardApp {
         changesList.innerHTML = `
           <div class="diff-empty-state">
             <p><strong>No contradictions or updates detected during this run.</strong></p>
-            <p class="text-secondary" style="font-size: 12px; margin-top: 6px;">All ${data.memories_scanned} evaluated active memories were verified to be mutually consistent.</p>
+            <p class="text-secondary" style="font-size: 12px; margin-top: 6px;">All ${data.memories_scanned} evaluated active memories were verified to be mutually consistent and accurately classified.</p>
           </div>
         `;
       } else {
         changesList.innerHTML = data.details
-          .map(
-            (d, idx) => `
-          <div class="diff-card">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span class="badge" style="font-weight: 700;">Resolution #${idx + 1}</span>
-            </div>
-            <div class="diff-comparison-row">
-              <div class="diff-box diff-box-superseded">
-                <div class="diff-box-header">🔴 Superseded (Obsolete)</div>
-                <div>${this.escapeHtml(d.superseded_statement)}</div>
-              </div>
-              <div class="diff-box diff-box-superseding">
-                <div class="diff-box-header">🟢 Superseding (Authoritative)</div>
-                <div>${this.escapeHtml(d.superseding_statement)}</div>
-              </div>
-            </div>
-            <div class="diff-reason-box">
-              <div class="diff-reason-title">💡 AI Decision Rationale</div>
-              <div>${this.escapeHtml(d.reason)}</div>
-            </div>
-          </div>
-        `
-          )
+          .map((d, idx) => {
+            if (d.type === 'validity_update') {
+              return `
+                <div class="diff-card">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span class="badge badge-running" style="font-weight: 700;">Resolution #${idx + 1} — ⏳ Validity Adjusted (${this.escapeHtml(d.action || 'update')})</span>
+                  </div>
+                  <div style="margin-bottom: 10px;"><strong>${this.escapeHtml(d.statement || '')}</strong></div>
+                  <div class="diff-comparison-row">
+                    <div class="diff-box diff-box-superseded">
+                      <div class="diff-box-header">Previous Validity</div>
+                      <div><code>${this.escapeHtml(d.old_validity || 'permanent')}</code></div>
+                    </div>
+                    <div class="diff-box diff-box-superseding">
+                      <div class="diff-box-header">Updated Validity</div>
+                      <div><code>${this.escapeHtml(d.new_validity || 'none')}</code> ${d.temporal_tag ? `<span class="badge badge-category" style="margin-left: 6px;">${this.escapeHtml(d.temporal_tag)}</span>` : ''}</div>
+                    </div>
+                  </div>
+                  <div class="diff-reason-box">
+                    <div class="diff-reason-title">💡 AI Decision Rationale</div>
+                    <div>${this.escapeHtml(d.reason || '')}</div>
+                  </div>
+                </div>
+              `;
+            } else if (d.type === 'reclassification') {
+              return `
+                <div class="diff-card">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span class="badge badge-${d.new_category || 'category'}" style="font-weight: 700;">Resolution #${idx + 1} — 🏷️ Category Reclassified</span>
+                  </div>
+                  <div style="margin-bottom: 10px;"><strong>${this.escapeHtml(d.statement || '')}</strong></div>
+                  <div class="diff-comparison-row">
+                    <div class="diff-box diff-box-superseded">
+                      <div class="diff-box-header">Previous Category</div>
+                      <div><span class="badge badge-${d.old_category || 'category'}">${this.escapeHtml(d.old_category || '')}</span></div>
+                    </div>
+                    <div class="diff-box diff-box-superseding">
+                      <div class="diff-box-header">New Domain Category</div>
+                      <div><span class="badge badge-${d.new_category || 'category'}">${this.escapeHtml(d.new_category || '')}</span></div>
+                    </div>
+                  </div>
+                  <div class="diff-reason-box">
+                    <div class="diff-reason-title">💡 AI Decision Rationale</div>
+                    <div>${this.escapeHtml(d.reason || '')}</div>
+                  </div>
+                </div>
+              `;
+            } else {
+              return `
+                <div class="diff-card">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span class="badge badge-fact" style="font-weight: 700;">Resolution #${idx + 1} — 🔄 Supersession</span>
+                  </div>
+                  <div class="diff-comparison-row">
+                    <div class="diff-box diff-box-superseded">
+                      <div class="diff-box-header">🔴 Superseded (Obsolete)</div>
+                      <div>${this.escapeHtml(d.superseded_statement || '')}</div>
+                    </div>
+                    <div class="diff-box diff-box-superseding">
+                      <div class="diff-box-header">🟢 Superseding (Authoritative)</div>
+                      <div>${this.escapeHtml(d.superseding_statement || '')}</div>
+                    </div>
+                  </div>
+                  <div class="diff-reason-box">
+                    <div class="diff-reason-title">💡 AI Decision Rationale</div>
+                    <div>${this.escapeHtml(d.reason || '')}</div>
+                  </div>
+                </div>
+              `;
+            }
+          })
           .join('');
       }
 
