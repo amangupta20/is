@@ -1085,11 +1085,16 @@ class DashboardApp {
       } else {
         changesList.innerHTML = data.details
           .map((d, idx) => {
+            const revertActionHtml = d.reverted
+              ? '<span class="badge badge-tombstoned" style="font-size: 11px;">↩️ Reverted</span>'
+              : `<button class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 2px 8px;" onclick="app.revertConsolidationItem('${data.id}', ${idx})">Revert Change ↩️</button>`;
+
             if (d.type === 'validity_update') {
               return `
                 <div class="diff-card">
                   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <span class="badge badge-running" style="font-weight: 700;">Resolution #${idx + 1} — ⏳ Validity Adjusted (${this.escapeHtml(d.action || 'update')})</span>
+                    <div>${revertActionHtml}</div>
                   </div>
                   <div style="margin-bottom: 10px;"><strong>${this.escapeHtml(d.statement || '')}</strong></div>
                   <div class="diff-comparison-row">
@@ -1113,6 +1118,7 @@ class DashboardApp {
                 <div class="diff-card">
                   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <span class="badge badge-${d.new_category || 'category'}" style="font-weight: 700;">Resolution #${idx + 1} — 🏷️ Category Reclassified</span>
+                    <div>${revertActionHtml}</div>
                   </div>
                   <div style="margin-bottom: 10px;"><strong>${this.escapeHtml(d.statement || '')}</strong></div>
                   <div class="diff-comparison-row">
@@ -1136,6 +1142,7 @@ class DashboardApp {
                 <div class="diff-card">
                   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <span class="badge badge-fact" style="font-weight: 700;">Resolution #${idx + 1} — 🔄 Supersession</span>
+                    <div>${revertActionHtml}</div>
                   </div>
                   <div class="diff-comparison-row">
                     <div class="diff-box diff-box-superseded">
@@ -1164,8 +1171,99 @@ class DashboardApp {
     }
   }
 
+  async revertConsolidationItem(runId, itemIndex) {
+    if (!confirm(`Are you sure you want to revert resolution #${itemIndex + 1}?`)) return;
+    try {
+      await this.api(`/v1/admin/consolidation-runs/${runId}/revert-item/${itemIndex}`, { method: 'POST' });
+      this.showToast('Resolution reverted successfully!', 'success');
+      await this.openConsolidationDiffModal(runId);
+      this.loadMemories();
+      this.loadConsolidationRuns();
+    } catch (err) {
+      this.showToast(`Failed to revert resolution: ${err.message}`, 'error');
+    }
+  }
+
   closeConsolidationDiffModal() {
     document.getElementById('consolidation-diff-modal').style.display = 'none';
+  }
+
+  openMemoryAuditModal() {
+    document.getElementById('memory-audit-modal').style.display = 'flex';
+    this.loadMemoryAuditLogs(1);
+  }
+
+  closeMemoryAuditModal() {
+    document.getElementById('memory-audit-modal').style.display = 'none';
+  }
+
+  async loadMemoryAuditLogs(page = 1) {
+    const user = document.getElementById('audit-user-filter')?.value.trim() || '';
+    const source = document.getElementById('audit-source-filter')?.value || '';
+    const tbody = document.getElementById('audit-table-body');
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="8" class="loading-cell">Loading change history...</td></tr>';
+
+    try {
+      const params = new URLSearchParams({ page: page, page_size: 50 });
+      if (user) params.set('native_user_id', user);
+      if (source) params.set('change_source', source);
+
+      const data = await this.api(`/v1/admin/memory-changes?${params.toString()}`);
+      if (!data.items || data.items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="loading-cell">No memory mutations logged yet.</td></tr>';
+        return;
+      }
+
+      const sourceBadges = {
+        chat_tool: '<span class="badge badge-category">💬 Chat Tool</span>',
+        turn_extraction: '<span class="badge badge-running">🤖 Extractor</span>',
+        consolidation: '<span class="badge badge-active">⚡ Consolidator</span>',
+        admin_ui: '<span class="badge">👤 Admin UI</span>',
+      };
+
+      tbody.innerHTML = data.items.map(log => {
+        const statement = log.new_state?.statement || log.previous_state?.statement || '(no statement)';
+        const category = log.new_state?.category || log.previous_state?.category || '';
+        const actionBadge = `<span class="badge badge-fact">${this.escapeHtml(log.action)}</span>`;
+        const statusBadge = log.is_reverted ? '<span class="badge badge-tombstoned">↩️ Reverted</span>' : '<span class="badge badge-active">Active</span>';
+        const revertBtn = log.is_reverted 
+          ? '<span class="text-muted" style="font-size: 11px;">Already Reverted</span>'
+          : `<button class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 2px 8px;" onclick="app.revertMemoryChange('${log.id}')">Revert ↩️</button>`;
+
+        return `
+          <tr>
+            <td><small>${this.formatDate(log.created_at)}</small></td>
+            <td>${sourceBadges[log.change_source] || `<span class="badge">${this.escapeHtml(log.change_source)}</span>`}</td>
+            <td>${actionBadge}</td>
+            <td><code>${this.escapeHtml(log.native_user_id)}</code></td>
+            <td>
+              <div style="max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                <strong>${this.escapeHtml(statement)}</strong>
+              </div>
+              ${category ? `<span class="badge badge-${this.escapeHtml(category)}" style="font-size: 10px; margin-top: 2px;">${this.escapeHtml(category)}</span>` : ''}
+            </td>
+            <td><small class="text-muted">${this.escapeHtml(log.reason || '')}</small></td>
+            <td>${statusBadge}</td>
+            <td>${revertBtn}</td>
+          </tr>
+        `;
+      }).join('');
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="8" class="loading-cell text-danger">Failed to load change history: ${this.escapeHtml(err.message)}</td></tr>`;
+    }
+  }
+
+  async revertMemoryChange(logId) {
+    if (!confirm('Are you sure you want to revert this memory change?')) return;
+    try {
+      await this.api(`/v1/admin/memory-changes/${logId}/revert`, { method: 'POST' });
+      this.showToast('Change reverted successfully!', 'success');
+      this.loadMemoryAuditLogs();
+      this.loadMemories();
+    } catch (err) {
+      this.showToast(`Failed to revert change: ${err.message}`, 'error');
+    }
   }
 
   // ------------------------------------------------------------------------

@@ -7,12 +7,14 @@ from typing import Any
 from sqlalchemy import exists, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.sql.elements import ColumnElement
 
 from assistant_core.identity.models import UserIdentity
 from assistant_core.memory.consolidator import TaskModelMemoryConsolidator
 from assistant_core.memory.models import (
     ConsolidationRun,
+    MemoryChangeLog,
     MemoryEvidence,
     MemoryRecord,
 )
@@ -153,6 +155,53 @@ async def _insert_evidence(
     await session.execute(statement)
 
 
+def _memory_snapshot(record: MemoryRecord | None) -> dict[str, Any] | None:
+    """Serialize a snapshot of memory record state for audit and rollbacks."""
+    if record is None:
+        return None
+    return {
+        "id": str(record.id),
+        "key": record.key,
+        "category": record.category,
+        "statement": record.statement,
+        "state": record.state,
+        "temporal_tag": record.temporal_tag,
+        "expires_at": record.expires_at.isoformat() if record.expires_at else None,
+        "valid_from": record.valid_from.isoformat() if record.valid_from else None,
+    }
+
+
+async def log_memory_change(
+    session: AsyncSession,
+    *,
+    native_user_id: str = "",
+    user_id: uuid.UUID | None = None,
+    memory_id: uuid.UUID | None = None,
+    change_source: str,
+    action: str,
+    previous_state: dict[str, Any] | None = None,
+    new_state: dict[str, Any] | None = None,
+    reason: str | None = None,
+) -> MemoryChangeLog:
+    """Persist an audit log entry for memory state mutations."""
+    log_entry = MemoryChangeLog(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        native_user_id=native_user_id or "user",
+        memory_id=memory_id,
+        change_source=change_source,
+        action=action,
+        previous_state=previous_state,
+        new_state=new_state,
+        reason=reason,
+        is_reverted=False,
+        reverted_at=None,
+        created_at=datetime.now(UTC),
+    )
+    session.add(log_entry)
+    return log_entry
+
+
 async def apply_explicit_candidates(
     session: AsyncSession,
     turn: CompletedTurn,
@@ -173,6 +222,7 @@ async def apply_explicit_candidates(
             continue
 
         replacement_id: uuid.UUID | None = None
+        active_snap = _memory_snapshot(active) if active is not None else None
         if active is not None:
             replacement_id = uuid.uuid4()
             await session.execute(
@@ -212,6 +262,17 @@ async def apply_explicit_candidates(
             )
         await _insert_evidence(session, record, turn, candidate.evidence_quote)
         applied.append(record)
+
+        await log_memory_change(
+            session,
+            user_id=turn.user_id,
+            memory_id=record.id,
+            change_source="turn_extraction",
+            action="supersede" if active is not None else "create",
+            previous_state=active_snap,
+            new_state=_memory_snapshot(record),
+            reason=f"Extracted from conversation evidence: \"{candidate.evidence_quote[:100]}\"",
+        )
     return applied
 
 
@@ -293,6 +354,7 @@ async def consolidate_user_memories(
                 superseded_by_id=superseding.id,
             )
         )
+        superseded_snap = _memory_snapshot(superseded)
         superseded.state = "superseded"
         applied.append(
             {
@@ -304,6 +366,17 @@ async def consolidate_user_memories(
                 "reason": s.reason,
             }
         )
+        await log_memory_change(
+            session,
+            native_user_id=native_user_id,
+            user_id=user_id,
+            memory_id=superseded.id,
+            change_source="consolidation",
+            action="supersede",
+            previous_state=superseded_snap,
+            new_state=_memory_snapshot(superseding),
+            reason=s.reason,
+        )
 
     # 2. Process Validity Updates
     for v in result.validity_updates:
@@ -311,6 +384,7 @@ async def consolidate_user_memories(
         if not rec or rec.state != "active":
             continue
 
+        rec_snap = _memory_snapshot(rec)
         expires_at_dt: datetime | None = None
         if v.expires_at and v.expires_at.lower() not in ("none", "null", ""):
             try:
@@ -336,6 +410,17 @@ async def consolidate_user_memories(
                     "reason": v.reason,
                 }
             )
+            await log_memory_change(
+                session,
+                native_user_id=native_user_id,
+                user_id=user_id,
+                memory_id=rec.id,
+                change_source="consolidation",
+                action="validity_change",
+                previous_state=rec_snap,
+                new_state=_memory_snapshot(rec),
+                reason=v.reason,
+            )
         elif v.action in ("set_expiration", "extend_expiration"):
             await session.execute(
                 update(MemoryRecord)
@@ -357,6 +442,17 @@ async def consolidate_user_memories(
                     "reason": v.reason,
                 }
             )
+            await log_memory_change(
+                session,
+                native_user_id=native_user_id,
+                user_id=user_id,
+                memory_id=rec.id,
+                change_source="consolidation",
+                action="validity_change",
+                previous_state=rec_snap,
+                new_state=_memory_snapshot(rec),
+                reason=v.reason,
+            )
         elif v.action == "mark_permanent":
             await session.execute(
                 update(MemoryRecord)
@@ -377,6 +473,17 @@ async def consolidate_user_memories(
                     "reason": v.reason,
                 }
             )
+            await log_memory_change(
+                session,
+                native_user_id=native_user_id,
+                user_id=user_id,
+                memory_id=rec.id,
+                change_source="consolidation",
+                action="validity_change",
+                previous_state=rec_snap,
+                new_state=_memory_snapshot(rec),
+                reason=v.reason,
+            )
 
     # 3. Process Reclassifications
     for r in result.reclassifications:
@@ -386,6 +493,7 @@ async def consolidate_user_memories(
         clean_cat = r.new_category.strip().lower().replace(" ", "_")[:50]
         if len(clean_cat) < 2 or rec.category == clean_cat:
             continue
+        rec_snap = _memory_snapshot(rec)
         old_cat = rec.category
         await session.execute(
             update(MemoryRecord).where(MemoryRecord.id == rec.id).values(category=clean_cat)
@@ -400,6 +508,17 @@ async def consolidate_user_memories(
                 "new_category": clean_cat,
                 "reason": r.reason,
             }
+        )
+        await log_memory_change(
+            session,
+            native_user_id=native_user_id,
+            user_id=user_id,
+            memory_id=rec.id,
+            change_source="consolidation",
+            action="reclassify",
+            previous_state=rec_snap,
+            new_state=_memory_snapshot(rec),
+            reason=r.reason,
         )
 
     duration_ms = (perf_counter() - started_at) * 1000
@@ -465,6 +584,7 @@ async def save_direct_memory(
     category: str = "fact",
     temporal_tag: str | None = None,
     expires_at: datetime | None = None,
+    change_source: str = "chat_tool",
 ) -> tuple[MemoryRecord, bool]:
     """Create or supersede an explicit memory directly via tool invocation."""
     user_stmt = select(UserIdentity).where(UserIdentity.native_user_id == native_user_id)
@@ -487,13 +607,25 @@ async def save_direct_memory(
     active_rec = (await session.execute(existing_stmt)).scalar_one_or_none()
 
     if active_rec is not None and active_rec.statement == statement.strip():
-        # Update existing record's metadata
+        prev_snap = _memory_snapshot(active_rec)
         active_rec.category = clean_cat
         active_rec.temporal_tag = clean_tag
         active_rec.expires_at = expires_at
+        await log_memory_change(
+            session,
+            native_user_id=native_user_id,
+            user_id=user.id,
+            memory_id=active_rec.id,
+            change_source=change_source,
+            action="update",
+            previous_state=prev_snap,
+            new_state=_memory_snapshot(active_rec),
+            reason="Updated metadata for existing memory key",
+        )
         return active_rec, False
 
     replacement_id = uuid.uuid4()
+    active_snap = _memory_snapshot(active_rec) if active_rec is not None else None
     if active_rec is not None:
         await session.execute(
             update(MemoryRecord)
@@ -521,6 +653,18 @@ async def save_direct_memory(
     )
     session.add(new_rec)
     await session.flush()
+
+    await log_memory_change(
+        session,
+        native_user_id=native_user_id,
+        user_id=user.id,
+        memory_id=new_rec.id,
+        change_source=change_source,
+        action="supersede" if active_rec is not None else "create",
+        previous_state=active_snap,
+        new_state=_memory_snapshot(new_rec),
+        reason=f"{'Superseded' if active_rec is not None else 'Saved'} via {change_source}",
+    )
     return new_rec, True
 
 
@@ -534,6 +678,7 @@ async def update_direct_memory(
     temporal_tag: str | None = None,
     expires_at: datetime | None = None,
     clear_expiration: bool = False,
+    change_source: str = "chat_tool",
 ) -> MemoryRecord | None:
     """Modify an active memory record's statement, category, or temporal metadata."""
     user_stmt = select(UserIdentity.id).where(UserIdentity.native_user_id == native_user_id)
@@ -550,6 +695,7 @@ async def update_direct_memory(
     if rec is None:
         return None
 
+    prev_snap = _memory_snapshot(rec)
     if statement and statement.strip():
         rec.statement = statement.strip()
     if category and category.strip():
@@ -564,6 +710,17 @@ async def update_direct_memory(
         rec.expires_at = expires_at
 
     await session.flush()
+    await log_memory_change(
+        session,
+        native_user_id=native_user_id,
+        user_id=user_id,
+        memory_id=rec.id,
+        change_source=change_source,
+        action="update",
+        previous_state=prev_snap,
+        new_state=_memory_snapshot(rec),
+        reason=f"Updated via {change_source}",
+    )
     return rec
 
 
@@ -574,6 +731,7 @@ async def forget_direct_memory(
     memory_id: uuid.UUID | None = None,
     key: str | None = None,
     reason: str | None = None,
+    change_source: str = "chat_tool",
 ) -> list[MemoryRecord]:
     """Archive one or more active memories by ID or key."""
     user_stmt = select(UserIdentity.id).where(UserIdentity.native_user_id == native_user_id)
@@ -596,8 +754,212 @@ async def forget_direct_memory(
 
     records = list((await session.execute(stmt)).scalars().all())
     for rec in records:
+        prev_snap = _memory_snapshot(rec)
         rec.state = "archived"
         rec.archived_at = func.now()
+        await log_memory_change(
+            session,
+            native_user_id=native_user_id,
+            user_id=user_id,
+            memory_id=rec.id,
+            change_source=change_source,
+            action="archive",
+            previous_state=prev_snap,
+            new_state=_memory_snapshot(rec),
+            reason=reason or f"Archived via {change_source}",
+        )
 
     await session.flush()
     return records
+
+
+async def revert_consolidation_item(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    item_index: int,
+) -> dict[str, Any]:
+    """Revert a single decision item within a consolidation run."""
+    run_stmt = select(ConsolidationRun).where(ConsolidationRun.id == run_id).with_for_update()
+    run = (await session.execute(run_stmt)).scalar_one_or_none()
+    if run is None:
+        raise ValueError("Consolidation run not found")
+
+    if item_index < 0 or item_index >= len(run.details):
+        raise ValueError("Resolution item index out of bounds")
+
+    item = dict(run.details[item_index])
+    if item.get("reverted"):
+        raise ValueError("Resolution item has already been reverted")
+
+    item_type = item.get("type")
+    reverted_memory_id: uuid.UUID | None = None
+
+    if item_type == "supersession":
+        superseded_id = uuid.UUID(item["superseded_id"])
+        reverted_memory_id = superseded_id
+        rec_stmt = select(MemoryRecord).where(MemoryRecord.id == superseded_id).with_for_update()
+        rec = (await session.execute(rec_stmt)).scalar_one_or_none()
+        if rec is not None:
+            prev_snap = _memory_snapshot(rec)
+            rec.state = "active"
+            rec.superseded_at = None
+            rec.superseded_by_id = None
+            await log_memory_change(
+                session,
+                native_user_id=run.native_user_id,
+                user_id=run.user_id,
+                memory_id=rec.id,
+                change_source="admin_ui",
+                action="revert_supersession",
+                previous_state=prev_snap,
+                new_state=_memory_snapshot(rec),
+                reason=f"Reverted consolidation supersession #{item_index + 1} from run {run.id}",
+            )
+    elif item_type == "validity_update":
+        memory_id = uuid.UUID(item["memory_id"])
+        reverted_memory_id = memory_id
+        rec_stmt = select(MemoryRecord).where(MemoryRecord.id == memory_id).with_for_update()
+        rec = (await session.execute(rec_stmt)).scalar_one_or_none()
+        if rec is not None:
+            prev_snap = _memory_snapshot(rec)
+            old_val = item.get("old_validity")
+            if old_val in ("permanent", "none", None):
+                rec.expires_at = None
+                rec.temporal_tag = None
+                rec.state = "active"
+            elif old_val == "expired":
+                rec.state = "expired"
+            else:
+                try:
+                    rec.expires_at = datetime.fromisoformat(old_val)
+                    rec.state = "active"
+                except ValueError:
+                    rec.expires_at = None
+                    rec.state = "active"
+            await log_memory_change(
+                session,
+                native_user_id=run.native_user_id,
+                user_id=run.user_id,
+                memory_id=rec.id,
+                change_source="admin_ui",
+                action="revert_validity_update",
+                previous_state=prev_snap,
+                new_state=_memory_snapshot(rec),
+                reason=f"Reverted consolidation validity update #{item_index + 1} from run {run.id}",
+            )
+    elif item_type == "reclassification":
+        memory_id = uuid.UUID(item["memory_id"])
+        reverted_memory_id = memory_id
+        rec_stmt = select(MemoryRecord).where(MemoryRecord.id == memory_id).with_for_update()
+        rec = (await session.execute(rec_stmt)).scalar_one_or_none()
+        if rec is not None:
+            prev_snap = _memory_snapshot(rec)
+            rec.category = item.get("old_category", "fact")
+            await log_memory_change(
+                session,
+                native_user_id=run.native_user_id,
+                user_id=run.user_id,
+                memory_id=rec.id,
+                change_source="admin_ui",
+                action="revert_reclassification",
+                previous_state=prev_snap,
+                new_state=_memory_snapshot(rec),
+                reason=f"Reverted consolidation category reclassification #{item_index + 1} from run {run.id}",
+            )
+
+    item["reverted"] = True
+    item["reverted_at"] = datetime.now(UTC).isoformat()
+    updated_details = list(run.details)
+    updated_details[item_index] = item
+    run.details = updated_details
+    flag_modified(run, "details")
+    await session.flush()
+    return {"success": True, "item": item, "memory_id": str(reverted_memory_id)}
+
+
+async def revert_memory_change_log(
+    session: AsyncSession,
+    *,
+    log_id: uuid.UUID,
+) -> dict[str, Any]:
+    """Revert a memory change log entry, restoring previous state or archiving."""
+    log_stmt = select(MemoryChangeLog).where(MemoryChangeLog.id == log_id).with_for_update()
+    log_entry = (await session.execute(log_stmt)).scalar_one_or_none()
+    if log_entry is None:
+        raise ValueError("Change log entry not found")
+    if log_entry.is_reverted:
+        raise ValueError("Change log has already been reverted")
+    if log_entry.memory_id is None:
+        raise ValueError("Change log has no associated memory record")
+
+    rec_stmt = select(MemoryRecord).where(MemoryRecord.id == log_entry.memory_id).with_for_update()
+    rec = (await session.execute(rec_stmt)).scalar_one_or_none()
+
+    if log_entry.action == "create":
+        if rec is not None:
+            rec.state = "archived"
+            rec.archived_at = func.now()
+    else:
+        if rec is not None and log_entry.previous_state:
+            prev = log_entry.previous_state
+            rec.statement = prev.get("statement", rec.statement)
+            rec.category = prev.get("category", rec.category)
+            rec.state = prev.get("state", "active")
+            rec.temporal_tag = prev.get("temporal_tag")
+            exp_str = prev.get("expires_at")
+            rec.expires_at = datetime.fromisoformat(exp_str) if exp_str else None
+            if rec.state == "active":
+                rec.superseded_at = None
+                rec.superseded_by_id = None
+                rec.archived_at = None
+
+    log_entry.is_reverted = True
+    log_entry.reverted_at = datetime.now(UTC)
+    await session.flush()
+    return {
+        "success": True,
+        "log_id": str(log_entry.id),
+        "memory_id": str(log_entry.memory_id),
+    }
+
+
+async def list_memory_change_logs(
+    session: AsyncSession,
+    *,
+    native_user_id: str | None = None,
+    memory_id: uuid.UUID | None = None,
+    change_source: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> tuple[list[MemoryChangeLog], int]:
+    """List historical memory change logs with pagination."""
+    query = select(MemoryChangeLog)
+    count_query = select(func.count(MemoryChangeLog.id))
+
+    if native_user_id and native_user_id.strip():
+        query = query.where(MemoryChangeLog.native_user_id == native_user_id.strip())
+        count_query = count_query.where(MemoryChangeLog.native_user_id == native_user_id.strip())
+
+    if memory_id:
+        query = query.where(MemoryChangeLog.memory_id == memory_id)
+        count_query = count_query.where(MemoryChangeLog.memory_id == memory_id)
+
+    if change_source and change_source.strip():
+        query = query.where(MemoryChangeLog.change_source == change_source.strip())
+        count_query = count_query.where(MemoryChangeLog.change_source == change_source.strip())
+
+    total = (await session.execute(count_query)).scalar_one()
+    offset = (max(1, page) - 1) * page_size
+    items = list(
+        (
+            await session.execute(
+                query.order_by(MemoryChangeLog.created_at.desc())
+                .offset(offset)
+                .limit(page_size)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return items, total

@@ -14,6 +14,7 @@ from assistant_core.jobs.models import Job
 from assistant_core.memory.models import (
     ChatProfileSnapshot,
     ConsolidationRun,
+    MemoryChangeLog,
     MemoryEvidence,
     MemoryRecord,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "FileSegment",
     "Job",
     "KBReconciliationRun",
+    "MemoryChangeLog",
     "MemoryEvidence",
     "MemoryRecord",
     "OnlyOfficeSession",

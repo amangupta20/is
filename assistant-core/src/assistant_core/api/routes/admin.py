@@ -56,7 +56,12 @@ from assistant_core.memory.models import (
 )
 from assistant_core.memory.profile import get_or_create_profile
 from assistant_core.memory.repository import (
+    _memory_snapshot,
     consolidate_user_memories,
+    list_memory_change_logs,
+    log_memory_change,
+    revert_consolidation_item,
+    revert_memory_change_log,
     search_explicit_memory,
 )
 from assistant_core.turns.models import CompletedTurn
@@ -524,22 +529,21 @@ async def create_memory(body: CreateMemoryRequest, request: Request) -> dict[str
         )
         key = f"{category}:{uuid.uuid4().hex[:12]}"
 
-        session.add(
-            MemoryRecord(
-                id=record_id,
-                user_id=user_id,
-                key=key,
-                kind="explicit",
-                category=category,
-                statement=body.statement,
-                confidence=1,
-                state="active",
-                valid_from=body.valid_from,
-                expires_at=body.expires_at,
-                temporal_tag=body.temporal_tag,
-                created_at=now,
-            )
+        new_mem = MemoryRecord(
+            id=record_id,
+            user_id=user_id,
+            key=key,
+            kind="explicit",
+            category=category,
+            statement=body.statement,
+            confidence=1,
+            state="active",
+            valid_from=body.valid_from,
+            expires_at=body.expires_at,
+            temporal_tag=body.temporal_tag,
+            created_at=now,
         )
+        session.add(new_mem)
         session.add(
             MemoryEvidence(
                 id=uuid.uuid4(),
@@ -548,6 +552,17 @@ async def create_memory(body: CreateMemoryRequest, request: Request) -> dict[str
                 native_user_message_id="admin-manual",
                 evidence_quote=body.evidence_quote or body.statement,
             )
+        )
+        await log_memory_change(
+            session,
+            native_user_id=body.native_user_id,
+            user_id=user_id,
+            memory_id=record_id,
+            change_source="admin_ui",
+            action="create",
+            previous_state=None,
+            new_state=_memory_snapshot(new_mem),
+            reason="Manually created from Admin UI",
         )
         await session.commit()
 
@@ -577,6 +592,14 @@ async def update_memory(
         if record is None:
             raise HTTPException(status_code=404, detail="memory not found")
 
+        prev_snap = _memory_snapshot(record)
+        user_identity = (
+            await session.execute(
+                select(UserIdentity).where(UserIdentity.id == record.user_id)
+            )
+        ).scalar_one_or_none()
+        native_user_id = user_identity.native_user_id if user_identity else "admin"
+
         if body.statement is not None:
             record.statement = body.statement
         if body.category is not None and body.category in {
@@ -601,6 +624,17 @@ async def update_memory(
                 record.state = "active"
                 record.archived_at = None
 
+        await log_memory_change(
+            session,
+            native_user_id=native_user_id,
+            user_id=record.user_id,
+            memory_id=record.id,
+            change_source="admin_ui",
+            action="update",
+            previous_state=prev_snap,
+            new_state=_memory_snapshot(record),
+            reason="Manually updated from Admin UI",
+        )
         await session.commit()
         return {
             "id": str(record.id),
@@ -625,8 +659,28 @@ async def delete_memory(memory_id: uuid.UUID, request: Request) -> dict[str, str
         if record is None:
             raise HTTPException(status_code=404, detail="memory not found")
 
+        prev_snap = _memory_snapshot(record)
+        user_identity = (
+            await session.execute(
+                select(UserIdentity).where(UserIdentity.id == record.user_id)
+            )
+        ).scalar_one_or_none()
+        native_user_id = user_identity.native_user_id if user_identity else "admin"
+
         record.state = "archived"
         record.archived_at = datetime.now(UTC)
+
+        await log_memory_change(
+            session,
+            native_user_id=native_user_id,
+            user_id=record.user_id,
+            memory_id=record.id,
+            change_source="admin_ui",
+            action="archive",
+            previous_state=prev_snap,
+            new_state=_memory_snapshot(record),
+            reason="Manually deleted/archived from Admin UI",
+        )
         await session.commit()
         return {"status": "archived", "id": str(memory_id)}
 
@@ -1301,6 +1355,83 @@ async def get_consolidation_run(run_id: uuid.UUID, request: Request) -> dict[str
             "duration_ms": run.duration_ms,
             "created_at": run.created_at.isoformat() if run.created_at else None,
         }
+
+
+@router.post(
+    "/consolidation-runs/{run_id}/revert-item/{item_index}",
+    dependencies=[Depends(require_admin_session)],
+)
+async def revert_consolidation_run_item(
+    run_id: uuid.UUID, item_index: int, request: Request
+) -> dict[str, Any]:
+    """Revert a single decision item from a historical consolidation run."""
+    async with request.app.state.session_factory() as session:
+        try:
+            result = await revert_consolidation_item(
+                session, run_id=run_id, item_index=item_index
+            )
+            await session.commit()
+            return result
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/memory-changes", dependencies=[Depends(require_admin_session)])
+async def list_memory_changes(
+    request: Request,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    native_user_id: str | None = None,
+    memory_id: uuid.UUID | None = None,
+    change_source: str | None = None,
+) -> dict[str, Any]:
+    """List historical memory changes across all sources with pagination."""
+    async with request.app.state.session_factory() as session:
+        items, total = await list_memory_change_logs(
+            session,
+            native_user_id=native_user_id,
+            memory_id=memory_id,
+            change_source=change_source,
+            page=page,
+            page_size=page_size,
+        )
+        return {
+            "items": [
+                {
+                    "id": str(log.id),
+                    "user_id": str(log.user_id) if log.user_id else None,
+                    "native_user_id": log.native_user_id,
+                    "memory_id": str(log.memory_id) if log.memory_id else None,
+                    "change_source": log.change_source,
+                    "action": log.action,
+                    "previous_state": log.previous_state,
+                    "new_state": log.new_state,
+                    "reason": log.reason,
+                    "is_reverted": log.is_reverted,
+                    "reverted_at": log.reverted_at.isoformat() if log.reverted_at else None,
+                    "created_at": log.created_at.isoformat() if log.created_at else None,
+                }
+                for log in items
+            ],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
+
+
+@router.post(
+    "/memory-changes/{log_id}/revert",
+    dependencies=[Depends(require_admin_session)],
+)
+async def revert_memory_change(log_id: uuid.UUID, request: Request) -> dict[str, Any]:
+    """Revert a memory change log entry, restoring previous state."""
+    async with request.app.state.session_factory() as session:
+        try:
+            result = await revert_memory_change_log(session, log_id=log_id)
+            await session.commit()
+            return result
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

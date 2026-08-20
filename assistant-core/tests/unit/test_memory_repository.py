@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import anyio
 from sqlalchemy.dialects import postgresql
 
+from assistant_core.memory.models import ConsolidationRun
 from assistant_core.turns.models import CompletedTurn
 
 
@@ -25,6 +26,10 @@ class RecordingSession:
     def __init__(self, values: list[object | None]) -> None:
         self.values = values
         self.statements: list[object] = []
+        self.added: list[object] = []
+
+    def add(self, entity: object) -> None:
+        self.added.append(entity)
 
     async def execute(self, statement: object) -> ScalarResult:
         self.statements.append(statement)
@@ -371,8 +376,9 @@ def test_consolidate_user_memories() -> None:
         assert applied[2]["new_category"] == "infrastructure"
         assert record_reclass.category == "infrastructure"
 
-        assert len(session.added) == 1
-        assert session.added[0].status == "success"  # type: ignore[union-attr]
-        assert session.added[0].superseded_count == 3  # type: ignore[union-attr]
+        run_logs = [item for item in session.added if isinstance(item, ConsolidationRun)]
+        assert len(run_logs) == 1
+        assert run_logs[0].status == "success"
+        assert run_logs[0].superseded_count == 3
 
     anyio.run(run_test)

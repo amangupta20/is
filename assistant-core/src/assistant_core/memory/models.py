@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Float,
@@ -167,4 +168,48 @@ class ConsolidationRun(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class MemoryChangeLog(Base):
+    """Historical audit ledger capturing every memory creation, update, and deletion across all sources."""
+
+    __tablename__ = "memory_change_log"
+    __table_args__ = (
+        Index(
+            "ix_memory_change_log_user_time",
+            "native_user_id",
+            "created_at",
+            postgresql_using="btree",
+        ),
+        Index(
+            "ix_memory_change_log_memory_id",
+            "memory_id",
+            postgresql_using="btree",
+        ),
+        Index(
+            "ix_memory_change_log_created_at",
+            "created_at",
+            postgresql_using="btree",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("assistant_core.user_identity.id"), nullable=True
+    )
+    native_user_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    memory_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("assistant_core.memory_record.id"), nullable=True
+    )
+    change_source: Mapped[str] = mapped_column(String(50), nullable=False)
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    previous_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    new_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_reverted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reverted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
 
