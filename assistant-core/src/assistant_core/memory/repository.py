@@ -208,8 +208,9 @@ async def apply_explicit_candidates(
     candidates: list[ExplicitMemoryCandidate],
 ) -> list[MemoryRecord]:
     """Apply exact-quote candidates once, retaining prior facts on correction."""
-    if any(candidate.evidence_quote not in turn.user_content for candidate in candidates):
-        raise ValueError("memory evidence quote is not present in the user content")
+    full_turn_text = f"{turn.user_content}\n{turn.assistant_content}"
+    if any(candidate.evidence_quote not in full_turn_text for candidate in candidates):
+        raise ValueError("memory evidence quote is not present in the completed turn content")
 
     applied: list[MemoryRecord] = []
     for candidate in candidates:

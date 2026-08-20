@@ -198,6 +198,12 @@ def test_completed_turn_enqueue_commits_before_later_extractor_failure(
                 def scalar_one_or_none(self) -> object:
                     return turn
 
+                def scalars(self) -> "Result":
+                    return self
+
+                def all(self) -> list[object]:
+                    return []
+
                 rowcount = 1
 
             return Result()

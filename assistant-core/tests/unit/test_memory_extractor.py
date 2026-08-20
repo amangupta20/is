@@ -101,3 +101,64 @@ def test_extractor_parses_dynamic_category_and_temporal_tag() -> None:
     assert candidates[0].category == "career"
     assert candidates[0].temporal_tag == "job_application"
     assert candidates[0].expires_at is not None
+
+
+def test_extractor_includes_assistant_content_and_file_context() -> None:
+    from assistant_core.memory.extractor import (
+        CompletedTurnData,
+        TaskModelMemoryExtractor,
+    )
+
+    captured_prompt = ""
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_prompt
+        body = json.loads(request.content)
+        captured_prompt = body["messages"][1]["content"]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "candidates": [
+                                        {
+                                            "key": "infra.supabase_backup",
+                                            "category": "infrastructure",
+                                            "statement": "The user decided to migrate Supabase backups to Dokploy native backups.",
+                                            "evidence_quote": "Let's switch to Dokploy native backups.",
+                                        }
+                                    ]
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    extractor = TaskModelMemoryExtractor(
+        base_url="https://task-model.example",
+        api_key=None,
+        model="cheap-extractor",
+        timeout_seconds=3,
+        transport=httpx.MockTransport(respond),
+    )
+
+    turn = CompletedTurnData(
+        id=uuid.uuid4(),
+        user_content="How should we handle database backup?",
+        assistant_content="I recommend Dokploy native backups for scheduled postgres dumps.",
+        file_context="--- Document: infra_spec.md ---\nDatabase: PostgreSQL 16 on Hetzner",
+    )
+
+    candidates = extractor.extract(turn)
+
+    assert len(candidates) == 1
+    assert candidates[0].key == "infra.supabase_backup"
+    assert "[User Prompt]:\nHow should we handle database backup?" in captured_prompt
+    assert "[Assistant Response]:\nI recommend Dokploy native backups for scheduled postgres dumps." in captured_prompt
+    assert "[Attached File Context / Excerpts]:\n--- Document: infra_spec.md ---" in captured_prompt
+

@@ -35,6 +35,7 @@ from assistant_core.conversation.repository import (
 from assistant_core.db.session import create_database
 from assistant_core.events.models import EventInbox
 from assistant_core.files.client import OpenWebUIFileFetchError, fetch_openwebui_file
+from assistant_core.files.models import FileDocument
 from assistant_core.files.repository import (
     get_file_segment_content,
     materialize_file_passages,
@@ -277,10 +278,30 @@ async def _handle_extract_memory(session: AsyncSession, payload: dict[str, JsonV
     turn = await session.get(CompletedTurn, turn_id)
     if turn is None or turn.tombstoned_at is not None:
         raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
+
+    file_docs_stmt = (
+        select(FileDocument)
+        .where(
+            FileDocument.user_id == turn.user_id,
+            FileDocument.tombstoned_at.is_(None),
+        )
+        .order_by(FileDocument.created_at.desc())
+        .limit(3)
+    )
+    file_docs = list((await session.execute(file_docs_stmt)).scalars().all())
+    file_context_parts = []
+    for doc in file_docs:
+        excerpt = doc.content[:1000].strip()
+        if excerpt:
+            file_context_parts.append(f"--- Document: {doc.filename} ---\n{excerpt}")
+    file_context = "\n\n".join(file_context_parts) if file_context_parts else None
+
     turn_data = CompletedTurnData(
         id=turn.id,
         user_content=turn.user_content,
+        assistant_content=turn.assistant_content or "",
         occurred_at=turn.occurred_at,
+        file_context=file_context,
     )
     await session.rollback()
     candidates = await asyncio.to_thread(get_memory_extractor().extract, turn_data)
