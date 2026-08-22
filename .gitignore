@@ -15,4 +15,5 @@ omp-session*.html
 artifacts/openwebui-audit/
 assistant-core/.coverage
 assistant-core/htmlcov/
+repomix-output.*
 
