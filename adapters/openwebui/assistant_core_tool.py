@@ -43,6 +43,21 @@ class Tools:
         identifier = container.get(key)
         return None if identifier is None else str(identifier)
 
+    @staticmethod
+    def _media_time_str(start_sec: object, end_sec: object) -> str:
+        """Render an ``@ MM:SS[-MM:SS]`` marker from possibly fractional seconds."""
+        if isinstance(start_sec, bool) or not isinstance(start_sec, int | float):
+            return ""
+        start = max(0, int(start_sec))
+        end = start
+        if isinstance(end_sec, int | float) and not isinstance(end_sec, bool):
+            end = max(0, int(end_sec))
+        s_min, s_sec = divmod(start, 60)
+        e_min, e_sec = divmod(end, 60)
+        if end != start:
+            return f" @ {s_min:02d}:{s_sec:02d}-{e_min:02d}:{e_sec:02d}"
+        return f" @ {s_min:02d}:{s_sec:02d}"
+
     async def _signed_json_post(self, path: str, payload: dict[str, object]) -> Any:
         """POST one JSON body over the existing signed Assistant Core transport."""
         request_body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
@@ -192,14 +207,9 @@ class Tools:
                     provenance = f" (chat {chat_id})"
                 elif source_type == "media":
                     med_title = result.get("title") or "Media"
-                    start_sec = result.get("start_time_seconds")
-                    end_sec = result.get("end_time_seconds")
-                    if start_sec is not None:
-                        m_min, m_sec = divmod(start_sec, 60)
-                        e_min, e_sec = divmod(end_sec or start_sec, 60)
-                        time_str = f" @ {m_min:02d}:{m_sec:02d}-{e_min:02d}:{e_sec:02d}" if end_sec is not None and end_sec != start_sec else f" @ {m_min:02d}:{m_sec:02d}"
-                    else:
-                        time_str = ""
+                    time_str = self._media_time_str(
+                        result.get("start_time_seconds"), result.get("end_time_seconds")
+                    )
                     label = f"media/{med_title}{time_str}"
                     label_val = result.get("label")
                     provenance = f" ({label_val})" if label_val else ""
@@ -303,14 +313,9 @@ class Tools:
             if source_type == "media":
                 title = response.get("title") or "Media"
                 url = response.get("url") or ""
-                start_sec = response.get("start_time_seconds")
-                end_sec = response.get("end_time_seconds")
-                if start_sec is not None:
-                    m_min, m_sec = divmod(start_sec, 60)
-                    e_min, e_sec = divmod(end_sec or start_sec, 60)
-                    time_str = f" @ {m_min:02d}:{m_sec:02d}-{e_min:02d}:{e_sec:02d}" if end_sec is not None and end_sec != start_sec else f" @ {m_min:02d}:{m_sec:02d}"
-                else:
-                    time_str = ""
+                time_str = self._media_time_str(
+                    response.get("start_time_seconds"), response.get("end_time_seconds")
+                )
                 return (
                     f"Media source {source_id}:\n"
                     f"Media: media/{title}{time_str}\n"

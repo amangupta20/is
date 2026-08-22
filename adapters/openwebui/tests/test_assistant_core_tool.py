@@ -468,3 +468,73 @@ def test_media_context_search_read_and_process_tool(monkeypatch: pytest.MonkeyPa
     assert "Processed & Indexed Media: Deep Learning Fundamentals" in process_out
     assert "Timestamped Segments: 4" in process_out
     assert "Gradient descent minimizes loss" in process_out
+
+
+def test_media_time_str_handles_fractional_zero_and_invalid_seconds() -> None:
+    module = _module()
+    fmt = module.Tools._media_time_str
+
+    assert fmt(125, 240) == " @ 02:05-04:00"
+    assert fmt(125.7, 240.2) == " @ 02:05-04:00"
+    assert fmt(125, None) == " @ 02:05"
+    assert fmt(0, 0) == " @ 00:00"
+    assert fmt(0, None) == " @ 00:00"
+    assert fmt(3600.0, 3661.5) == " @ 60:00-61:01"
+    assert fmt(None, 10) == ""
+    assert fmt("bad", 10) == ""
+    assert fmt(True, 5) == ""
+
+
+def test_media_search_read_survive_fractional_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+    source_id = "00000000-0000-0000-0000-000000000099"
+    fractional_payloads = {
+        "/v1/personal-context/search": {
+            "mode": "hybrid",
+            "results": [
+                {
+                    "source_id": source_id,
+                    "source_type": "media",
+                    "category": "media_segment",
+                    "role": None,
+                    "preview": "Neural networks learn representations.",
+                    "title": "Deep Learning Fundamentals",
+                    "start_time_seconds": 125.42,
+                    "end_time_seconds": 240.86,
+                }
+            ],
+        },
+        "/v1/personal-context/read": {
+            "source_id": source_id,
+            "source_type": "media",
+            "title": "Deep Learning Fundamentals",
+            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "category": "media_segment",
+            "start_time_seconds": 125.42,
+            "end_time_seconds": 0,
+            "content": "# Media: Deep Learning Fundamentals",
+        },
+    }
+
+    class _RoutingClient:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, url: str, **_kwargs: Any) -> _Response:
+            path = "/" + url.split("/", 3)[3]
+            return _Response(fractional_payloads[path])
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda *, timeout: _RoutingClient())
+    tool = module.Tools()
+    tool.valves.hmac_secret = "tool-test-secret"
+    user = {"id": "user-1"}
+
+    search_out = asyncio.run(tool.search_personal_context("backprop", __user__=user))
+    assert "media/Deep Learning Fundamentals @ 02:05-04:00" in search_out
+
+    read_out = asyncio.run(tool.read_personal_context(source_id, __user__=user))
+    assert f"Media source {source_id}:" in read_out
+    assert "Media: media/Deep Learning Fundamentals @ 02:05" in read_out

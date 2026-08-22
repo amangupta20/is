@@ -134,7 +134,7 @@ class CreateMemoryRequest(BaseModel):
     statement: str = Field(min_length=1, max_length=2000)
     category: str = Field(default="preference", min_length=1, max_length=100)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-    evidence_quote: str | None = Field(default=None, max_length=2000)
+    evidence_quote: str | None = Field(default=None, max_length=1000)
     valid_from: datetime | None = Field(default=None)
     expires_at: datetime | None = Field(default=None)
     temporal_tag: str | None = Field(default=None, max_length=50)
@@ -558,7 +558,8 @@ async def create_memory(body: CreateMemoryRequest, request: Request) -> dict[str
 
         # 2. Create manual synthetic CompletedTurn for provenance
         turn_id = uuid.uuid4()
-        user_content = body.evidence_quote or body.statement
+        evidence = body.evidence_quote if body.evidence_quote is not None else body.statement[:1000]
+        user_content = evidence
         assistant_content = "Memory created via Admin Dashboard."
         session.add(
             CompletedTurn(
@@ -609,7 +610,7 @@ async def create_memory(body: CreateMemoryRequest, request: Request) -> dict[str
                 memory_record_id=record_id,
                 completed_turn_id=turn_id,
                 native_user_message_id="admin-manual",
-                evidence_quote=body.evidence_quote or body.statement,
+                evidence_quote=evidence,
             )
         )
         await log_memory_change(

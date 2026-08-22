@@ -13,7 +13,8 @@ from assistant_core.auth.admin import create_admin_session_token
 from assistant_core.config import Settings
 from assistant_core.jobs.models import Job
 from assistant_core.main import create_app
-from assistant_core.memory.models import ChatProfileSnapshot, MemoryRecord
+from assistant_core.memory.models import ChatProfileSnapshot, MemoryEvidence, MemoryRecord
+from assistant_core.turns.models import CompletedTurn
 
 
 class _FakeResult:
@@ -41,6 +42,7 @@ class _FakeResult:
 
     def first(self) -> Any:
         return self._scalar or (self._rows[0] if self._rows else None)
+
     def all(self) -> list[Any]:
         return self._scalars if self._scalars else self._rows
 
@@ -921,3 +923,45 @@ def test_admin_media_crud_and_index(monkeypatch: pytest.MonkeyPatch) -> None:
     perm_del_res = client.delete(f"/v1/admin/media/{media_id}?permanent=true")
     assert perm_del_res.status_code == 200
     assert perm_del_res.json() == {"status": "deleted", "id": str(media_id)}
+
+
+def test_admin_create_memory_truncates_statement_fallback_evidence() -> None:
+    """Statements without an explicit quote must not violate the evidence length CHECK."""
+    secret = "admin-secret-at-least-32-chars-long"
+    app = create_app(Settings(hmac_secret=secret))
+    client = _get_authed_client(app, secret)
+    user_id = uuid.uuid4()
+
+    session = _FakeSession([_FakeResult(scalar=user_id)])
+    app.state.session_factory = lambda: session
+
+    statement = "x" * 2000
+    resp = client.post(
+        "/v1/admin/memories",
+        json={"native_user_id": "user-1", "statement": statement},
+    )
+    assert resp.status_code == 200
+
+    evidence_rows = [e for e in session.added if isinstance(e, MemoryEvidence)]
+    turns = [t for t in session.added if isinstance(t, CompletedTurn)]
+    assert len(evidence_rows) == 1
+    assert len(turns) == 1
+    assert len(evidence_rows[0].evidence_quote) == 1000
+    assert evidence_rows[0].evidence_quote == statement[:1000]
+    assert turns[0].user_content == statement[:1000]
+
+
+def test_admin_create_memory_rejects_oversized_explicit_evidence_quote() -> None:
+    secret = "admin-secret-at-least-32-chars-long"
+    app = create_app(Settings(hmac_secret=secret))
+    client = _get_authed_client(app, secret)
+
+    resp = client.post(
+        "/v1/admin/memories",
+        json={
+            "native_user_id": "user-1",
+            "statement": "Short statement",
+            "evidence_quote": "q" * 1001,
+        },
+    )
+    assert resp.status_code == 422
