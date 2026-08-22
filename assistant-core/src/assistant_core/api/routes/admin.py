@@ -14,7 +14,12 @@ from sqlalchemy.orm import selectinload
 
 from assistant_core.artifacts.models import Artifact, ArtifactVersion, OnlyOfficeSession
 from assistant_core.artifacts.onlyoffice import OnlyOfficeManager
-from assistant_core.artifacts.repository import ArtifactRepository
+from assistant_core.artifacts.repository import (
+    ArtifactRepository,
+    compute_unified_diff,
+    extract_artifact_text,
+)
+from assistant_core.artifacts.schemas import RevertArtifactRequest
 from assistant_core.auth.admin import (
     DEFAULT_SESSION_TTL_SECONDS,
     SESSION_COOKIE_NAME,
@@ -1232,6 +1237,80 @@ async def create_admin_onlyoffice_session(
             "onlyoffice_url": settings.onlyoffice_url,
             "config": config,
         }
+
+
+@router.get("/artifacts/{artifact_id}/diff", dependencies=[Depends(require_admin_session)])
+async def get_artifact_version_diff(
+    artifact_id: uuid.UUID,
+    request: Request,
+    v1: int = Query(..., ge=1, description="Base version number"),
+    v2: int = Query(..., ge=1, description="Target version number to compare against"),
+) -> dict[str, Any]:
+    """Compute unified diff between two versions of an artifact."""
+    async with request.app.state.session_factory() as session:
+        repo = ArtifactRepository(session)
+        art = await repo.get_artifact(artifact_id)
+        if not art or art.tombstoned_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
+
+        ver1 = next((v for v in art.versions if v.version_num == v1), None)
+        if not ver1:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {v1} not found"
+            )
+
+        ver2 = next((v for v in art.versions if v.version_num == v2), None)
+        if not ver2:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {v2} not found"
+            )
+
+        lines1 = extract_artifact_text(art.artifact_type, ver1.binary_data)
+        lines2 = extract_artifact_text(art.artifact_type, ver2.binary_data)
+        return compute_unified_diff(lines1, lines2, v1, v2)
+
+
+@router.post("/artifacts/{artifact_id}/revert", dependencies=[Depends(require_admin_session)])
+async def revert_admin_artifact(
+    artifact_id: uuid.UUID,
+    body: RevertArtifactRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """Revert an artifact to a historical version by creating a new version N+1."""
+    async with request.app.state.session_factory() as session:
+        repo = ArtifactRepository(session)
+        try:
+            artifact, version = await repo.revert_to_version(
+                artifact_id=artifact_id,
+                target_version_num=body.target_version_num,
+            )
+            await session.commit()
+            return {
+                "status": "reverted",
+                "artifact_id": str(artifact.id),
+                "target_version_num": body.target_version_num,
+                "new_version_num": version.version_num,
+                "current_version_num": artifact.current_version_num,
+                "change_summary": version.change_summary,
+            }
+        except ValueError as exc:
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except PermissionError as exc:
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(exc),
+            ) from exc
+        except Exception as exc:
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to revert artifact: {exc}",
+            ) from exc
 
 
 async def _embed_query(request: Request, query: str) -> list[float] | None:

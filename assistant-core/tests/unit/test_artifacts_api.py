@@ -270,3 +270,85 @@ def test_create_presentation_api() -> None:
     assert data["artifact_type"] == "pptx"
     assert data["current_version_num"] == 1
     assert "download_url" in data
+
+
+def test_download_specific_historical_version(tmp_path: Path) -> None:
+    secret = "test-hmac-secret-at-least-32-chars-long"
+    settings = Settings(
+        hmac_secret=secret,
+        artifacts_dir=str(tmp_path),
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+
+    user = UserIdentity(id=uuid.uuid4(), native_user_id="user-123")
+    art_id = uuid.uuid4()
+    storage = LocalStorageBackend(base_dir=str(tmp_path))
+
+    ver1_data = b"# Document Title\n\nInitial version content."
+    ver2_data = b"# Document Title\n\nUpdated version content with changes."
+
+    s1_path, c1_hash, f1_size = storage.save(user.id, art_id, 1, "markdown", ver1_data)
+    s2_path, c2_hash, f2_size = storage.save(user.id, art_id, 2, "markdown", ver2_data)
+
+    art = Artifact(
+        id=art_id,
+        user_id=user.id,
+        title="Markdown Doc",
+        slug="markdown-doc",
+        artifact_type="markdown",
+        current_version_num=2,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    ver1 = ArtifactVersion(
+        id=uuid.uuid4(),
+        artifact_id=art_id,
+        version_num=1,
+        binary_data=ver1_data,
+        content_sha256=c1_hash,
+        storage_path=s1_path,
+        file_size_bytes=f1_size,
+        mime_type="text/markdown",
+        change_summary="Initial commit",
+        created_at=datetime.now(UTC),
+    )
+    ver2 = ArtifactVersion(
+        id=uuid.uuid4(),
+        artifact_id=art_id,
+        version_num=2,
+        binary_data=ver2_data,
+        content_sha256=c2_hash,
+        storage_path=s2_path,
+        file_size_bytes=f2_size,
+        mime_type="text/markdown",
+        change_summary="Second commit",
+        created_at=datetime.now(UTC),
+    )
+    art.versions = [ver1, ver2]
+
+    # Download v1 specifically
+    dl_session1 = _FakeSession([art])
+    app.state.session_factory = lambda: dl_session1
+
+    dl_resp1 = client.get(f"/v1/artifacts/{art_id}/versions/1/download")
+    assert dl_resp1.status_code == 200
+    assert dl_resp1.content == ver1_data
+    assert "markdown" in dl_resp1.headers["content-type"]
+    assert 'filename="markdown-doc-v1.markdown"' in dl_resp1.headers["content-disposition"]
+
+    # Download v2 specifically
+    dl_session2 = _FakeSession([art])
+    app.state.session_factory = lambda: dl_session2
+
+    dl_resp2 = client.get(f"/v1/artifacts/{art_id}/versions/2/download")
+    assert dl_resp2.status_code == 200
+    assert dl_resp2.content == ver2_data
+    assert 'filename="markdown-doc-v2.markdown"' in dl_resp2.headers["content-disposition"]
+
+    # Request invalid version
+    dl_session3 = _FakeSession([art])
+    app.state.session_factory = lambda: dl_session3
+
+    dl_resp3 = client.get(f"/v1/artifacts/{art_id}/versions/99/download")
+    assert dl_resp3.status_code == 404

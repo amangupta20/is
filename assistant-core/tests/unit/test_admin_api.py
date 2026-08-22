@@ -69,6 +69,10 @@ class _FakeSession:
     async def commit(self) -> None:
         pass
 
+    async def refresh(self, obj: object, attributes: list[str]) -> None:
+        if isinstance(obj, Artifact) and not hasattr(obj, "versions"):
+            obj.versions = []
+
     async def execute(self, _statement: Any) -> _FakeResult:
         if self.results:
             return self.results.pop(0)
@@ -624,3 +628,124 @@ def test_admin_episodes_crud_and_compile() -> None:
     del_res = client.delete(f"/v1/admin/episodes/{ep_id}")
     assert del_res.status_code == 200
     assert del_res.json()["status"] == "deleted"
+
+
+def test_artifact_version_diff(tmp_path: Path) -> None:
+    secret = "admin-secret-at-least-32-chars-long"
+    settings = Settings(hmac_secret=secret, artifacts_dir=str(tmp_path))
+    app = create_app(settings)
+    client = _get_authed_client(app, secret)
+
+    art_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+
+    art = Artifact(
+        id=art_id,
+        user_id=user_id,
+        title="Diff Test Doc",
+        slug="diff-test-doc",
+        artifact_type="markdown",
+        current_version_num=2,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    v1 = ArtifactVersion(
+        id=uuid.uuid4(),
+        artifact_id=art_id,
+        version_num=1,
+        binary_data=b"Line 1\nLine 2\nLine 3",
+        content_sha256="hash1",
+        file_size_bytes=20,
+        mime_type="text/markdown",
+        change_summary="v1",
+        created_at=datetime.now(UTC),
+    )
+    v2 = ArtifactVersion(
+        id=uuid.uuid4(),
+        artifact_id=art_id,
+        version_num=2,
+        binary_data=b"Line 1\nLine 2 Modified\nLine 3\nLine 4",
+        content_sha256="hash2",
+        file_size_bytes=35,
+        mime_type="text/markdown",
+        change_summary="v2",
+        created_at=datetime.now(UTC),
+    )
+    art.versions = [v1, v2]
+
+    session = _FakeSession([_FakeResult(scalar=art)])
+    app.state.session_factory = lambda: session
+
+    res = client.get(f"/v1/admin/artifacts/{art_id}/diff?v1=1&v2=2")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["v1"] == 1
+    assert data["v2"] == 2
+    assert len(data["diff_lines"]) > 0
+    assert data["additions"] == 2  # +Line 2 Modified, +Line 4
+    assert data["deletions"] == 1  # -Line 2
+
+    # Test 404 for missing version
+    session404 = _FakeSession([_FakeResult(scalar=art)])
+    app.state.session_factory = lambda: session404
+    res404 = client.get(f"/v1/admin/artifacts/{art_id}/diff?v1=1&v2=99")
+    assert res404.status_code == 404
+
+
+def test_artifact_version_revert(tmp_path: Path) -> None:
+    secret = "admin-secret-at-least-32-chars-long"
+    settings = Settings(hmac_secret=secret, artifacts_dir=str(tmp_path))
+    app = create_app(settings)
+    client = _get_authed_client(app, secret)
+
+    art_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+
+    art = Artifact(
+        id=art_id,
+        user_id=user_id,
+        title="Revert Test Doc",
+        slug="revert-test-doc",
+        artifact_type="markdown",
+        current_version_num=2,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    v1 = ArtifactVersion(
+        id=uuid.uuid4(),
+        artifact_id=art_id,
+        version_num=1,
+        binary_data=b"Original content v1",
+        content_sha256="hash1",
+        file_size_bytes=19,
+        mime_type="text/markdown",
+        change_summary="v1",
+        created_at=datetime.now(UTC),
+    )
+    v2 = ArtifactVersion(
+        id=uuid.uuid4(),
+        artifact_id=art_id,
+        version_num=2,
+        binary_data=b"Changed content v2",
+        content_sha256="hash2",
+        file_size_bytes=18,
+        mime_type="text/markdown",
+        change_summary="v2",
+        created_at=datetime.now(UTC),
+    )
+    art.versions = [v1, v2]
+
+    session = _FakeSession([_FakeResult(scalar=art)])
+    app.state.session_factory = lambda: session
+
+    res = client.post(
+        f"/v1/admin/artifacts/{art_id}/revert",
+        json={"target_version_num": 1},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "reverted"
+    assert data["target_version_num"] == 1
+    assert data["new_version_num"] == 3
+    assert data["current_version_num"] == 3
+    assert "Reverted to v1" in data["change_summary"]

@@ -147,6 +147,35 @@ async def download_artifact(
         )
 
 
+@router.get("/{artifact_id}/versions/{version_num}/download")
+async def download_artifact_version(
+    artifact_id: uuid.UUID,
+    version_num: int,
+    request: Request,
+) -> Response:
+    """Download the binary file for a specific historical version of an artifact."""
+    async with request.app.state.session_factory() as session:
+        repo = ArtifactRepository(session)
+        art = await repo.get_artifact(artifact_id)
+        if not art or art.tombstoned_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
+
+        target_v = next((ver for ver in art.versions if ver.version_num == version_num), None)
+        if not target_v:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Version {version_num} not found",
+            )
+
+        ext = art.artifact_type
+        filename = f"{art.slug}-v{target_v.version_num}.{ext}"
+        return Response(
+            content=target_v.binary_data,
+            media_type=target_v.mime_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+
 @router.get("/{artifact_id}/versions/{version_num}/raw")
 async def get_raw_version_binary(
     artifact_id: uuid.UUID,

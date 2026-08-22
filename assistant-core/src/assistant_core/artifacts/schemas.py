@@ -256,3 +256,19 @@ class ArtifactResponse(BaseModel):
     base64_data: str | None = None
     mime_type: str | None = None
     onlyoffice_url: str | None = None
+
+
+class RevertArtifactRequest(BaseModel):
+    """API request payload to revert an artifact to a historical version."""
+
+    target_version_num: int = Field(ge=1, description="Historical version number to revert to")
+
+
+class ArtifactDiffResponse(BaseModel):
+    """Response containing unified diff lines between two versions."""
+
+    v1: int
+    v2: int
+    diff_lines: list[str] = Field(default_factory=list)
+    additions: int = 0
+    deletions: int = 0

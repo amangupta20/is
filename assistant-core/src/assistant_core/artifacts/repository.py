@@ -1,10 +1,14 @@
-"""Repository layer for managing versioned artifacts in PostgreSQL and storage."""
-
+import difflib
 import hashlib
+import io
 import re
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
+import openpyxl
+from docx import Document
+from pptx import Presentation
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -302,6 +306,60 @@ class ArtifactRepository:
         await self.session.flush()
         return int(getattr(del_res, "rowcount", 0))
 
+    async def revert_to_version(
+        self,
+        artifact_id: uuid.UUID,
+        target_version_num: int,
+        user_id: uuid.UUID | None = None,
+    ) -> tuple[Artifact, ArtifactVersion]:
+        """Revert an artifact by appending a new version N+1 cloning target_version_num."""
+        artifact = await self.get_artifact(artifact_id)
+        if not artifact or artifact.tombstoned_at is not None:
+            raise ValueError(f"Artifact {artifact_id} not found or tombstoned")
+
+        if user_id is not None and artifact.user_id != user_id:
+            raise PermissionError("User does not own this artifact")
+
+        target_v = next((v for v in artifact.versions if v.version_num == target_version_num), None)
+        if not target_v:
+            raise ValueError(f"Version {target_version_num} not found")
+
+        next_version_num = artifact.current_version_num + 1
+        raw_data = target_v.binary_data
+        content_sha256 = target_v.content_sha256 or hashlib.sha256(raw_data).hexdigest()
+        file_size = target_v.file_size_bytes or len(raw_data)
+
+        storage_path = None
+        if self.storage is not None:
+            storage_path, _, _ = self.storage.save(
+                user_id=artifact.user_id,
+                artifact_id=artifact_id,
+                version_num=next_version_num,
+                ext=artifact.artifact_type,
+                data=raw_data,
+            )
+
+        now = datetime.now(UTC)
+        version = ArtifactVersion(
+            id=uuid.uuid4(),
+            artifact_id=artifact_id,
+            version_num=next_version_num,
+            binary_data=raw_data,
+            content_sha256=content_sha256,
+            storage_path=storage_path,
+            file_size_bytes=file_size,
+            mime_type=target_v.mime_type
+            or MIME_MAP.get(artifact.artifact_type, "application/octet-stream"),
+            change_summary=f"Reverted to v{target_version_num}",
+            created_at=now,
+        )
+        self.session.add(version)
+        artifact.current_version_num = next_version_num
+        artifact.updated_at = now
+        await self.session.flush()
+        await self.session.refresh(artifact, ["versions"])
+        return artifact, version
+
     def _render_binary(
         self,
         artifact_type: str,
@@ -384,3 +442,82 @@ class ArtifactRepository:
             return TypstGenerator.generate_resume(default_resume)
 
         return (raw_content or "").encode("utf-8")
+
+
+def extract_artifact_text(artifact_type: str, data: bytes) -> list[str]:
+    """Extract plain text lines from binary artifact data for unified diffing."""
+    if not data:
+        return []
+
+    if artifact_type == "docx":
+        try:
+            doc = Document(io.BytesIO(data))
+            lines: list[str] = []
+            for p in doc.paragraphs:
+                if p.text:
+                    lines.extend(p.text.splitlines())
+            for tbl in doc.tables:
+                for row in tbl.rows:
+                    row_str = " | ".join(cell.text.strip() for cell in row.cells)
+                    if row_str.strip():
+                        lines.append(row_str)
+            return lines
+        except Exception:  # noqa: BLE001
+            return data.decode("utf-8", errors="replace").splitlines()
+
+    elif artifact_type == "xlsx":
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+            lines = []
+            for sheet in wb.worksheets:
+                lines.append(f"--- Sheet: {sheet.title} ---")
+                for row in sheet.iter_rows(values_only=True):
+                    if any(v is not None for v in row):
+                        row_str = "\t".join("" if v is None else str(v) for v in row)
+                        lines.append(row_str)
+            return lines
+        except Exception:  # noqa: BLE001
+            return data.decode("utf-8", errors="replace").splitlines()
+
+    elif artifact_type == "pptx":
+        try:
+            prs = Presentation(io.BytesIO(data))
+            lines = []
+            for idx, slide in enumerate(prs.slides):
+                lines.append(f"--- Slide {idx + 1} ---")
+                for shape in slide.shapes:
+                    if shape.has_text_frame:
+                        for p in shape.text_frame.paragraphs:
+                            if p.text:
+                                lines.extend(p.text.splitlines())
+            return lines
+        except Exception:  # noqa: BLE001
+            return data.decode("utf-8", errors="replace").splitlines()
+
+    return data.decode("utf-8", errors="replace").splitlines()
+
+
+def compute_unified_diff(
+    lines_v1: list[str],
+    lines_v2: list[str],
+    v1_num: int,
+    v2_num: int,
+) -> dict[str, Any]:
+    """Compute unified diff lines, additions, and deletions between two versions."""
+    diff_iter = difflib.unified_diff(
+        lines_v1,
+        lines_v2,
+        fromfile=f"v{v1_num}",
+        tofile=f"v{v2_num}",
+        lineterm="",
+    )
+    diff_lines = list(diff_iter)
+    additions = sum(1 for line in diff_lines if line.startswith("+") and not line.startswith("+++"))
+    deletions = sum(1 for line in diff_lines if line.startswith("-") and not line.startswith("---"))
+    return {
+        "v1": v1_num,
+        "v2": v2_num,
+        "diff_lines": diff_lines,
+        "additions": additions,
+        "deletions": deletions,
+    }

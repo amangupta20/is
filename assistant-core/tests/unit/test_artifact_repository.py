@@ -1,12 +1,13 @@
 """Unit tests for ArtifactRepository using RecordingSession."""
 
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from assistant_core.artifacts.models import Artifact
+from assistant_core.artifacts.models import Artifact, ArtifactVersion
 from assistant_core.artifacts.repository import ArtifactRepository
 from assistant_core.artifacts.schemas import (
     CreateArtifactRequest,
@@ -205,3 +206,148 @@ async def test_artifact_repository_create_resume(tmp_path: Path) -> None:
     assert art.artifact_type == "resume"
     assert ver1.binary_data.startswith(b"%PDF-")
     assert ver1.mime_type == "application/pdf"
+
+
+@pytest.mark.anyio
+async def test_artifact_repository_revert_to_version(tmp_path: Path) -> None:
+    user = UserIdentity(id=uuid.uuid4(), native_user_id="user-123")
+    storage = LocalStorageBackend(base_dir=str(tmp_path))
+    art_id = uuid.uuid4()
+
+    art = Artifact(
+        id=art_id,
+        user_id=user.id,
+        title="Doc to Revert",
+        slug="doc-to-revert",
+        artifact_type="markdown",
+        current_version_num=2,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    v1 = ArtifactVersion(
+        id=uuid.uuid4(),
+        artifact_id=art_id,
+        version_num=1,
+        binary_data=b"# V1 Content",
+        content_sha256="h1",
+        file_size_bytes=12,
+        mime_type="text/markdown",
+        change_summary="v1",
+        created_at=datetime.now(UTC),
+    )
+    v2 = ArtifactVersion(
+        id=uuid.uuid4(),
+        artifact_id=art_id,
+        version_num=2,
+        binary_data=b"# V2 Content",
+        content_sha256="h2",
+        file_size_bytes=12,
+        mime_type="text/markdown",
+        change_summary="v2",
+        created_at=datetime.now(UTC),
+    )
+    art.versions = [v1, v2]
+
+    session = RecordingSession(values=[art])
+    repo = ArtifactRepository(session, storage)  # type: ignore[arg-type]
+
+    reverted_art, v3 = await repo.revert_to_version(art_id, 1, user_id=user.id)
+    assert reverted_art.current_version_num == 3
+    assert v3.version_num == 3
+    assert v3.binary_data == b"# V1 Content"
+    assert v3.change_summary == "Reverted to v1"
+    if v3.storage_path:
+        assert Path(v3.storage_path).exists()
+
+    # Revert to non-existent version raises ValueError
+    session2 = RecordingSession(values=[art])
+    repo2 = ArtifactRepository(session2, storage)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="Version 99 not found"):
+        await repo2.revert_to_version(art_id, 99, user_id=user.id)
+
+    # Revert with wrong user raises PermissionError
+    session3 = RecordingSession(values=[art])
+    repo3 = ArtifactRepository(session3, storage)  # type: ignore[arg-type]
+    with pytest.raises(PermissionError, match="does not own"):
+        await repo3.revert_to_version(art_id, 1, user_id=uuid.uuid4())
+
+
+@pytest.mark.anyio
+async def test_artifact_repository_diff_extraction() -> None:
+    from assistant_core.artifacts.generators.docx_gen import DocxGenerator
+    from assistant_core.artifacts.generators.xlsx_gen import XlsxGenerator
+    from assistant_core.artifacts.repository import compute_unified_diff, extract_artifact_text
+    from assistant_core.artifacts.schemas import (
+        DocumentSectionSpec,
+        DocumentSpec,
+        SheetSpec,
+        TableSpec,
+        WorkbookSpec,
+    )
+
+    # 1. Plain Text / Markdown
+    lines1 = extract_artifact_text("markdown", b"Hello\nWorld")
+    lines2 = extract_artifact_text("markdown", b"Hello\nNew World\nExtra")
+    diff = compute_unified_diff(lines1, lines2, 1, 2)
+    assert diff["v1"] == 1
+    assert diff["v2"] == 2
+    assert diff["additions"] == 2
+    assert diff["deletions"] == 1
+
+    # 2. DOCX text extraction
+    doc_bytes1 = DocxGenerator.generate(
+        DocumentSpec(
+            title="Report",
+            sections=[
+                DocumentSectionSpec(
+                    heading="Intro",
+                    paragraphs=["Paragraph 1"],
+                    table=TableSpec(headers=["Col1", "Col2"], rows=[["Val1", "Val2"]]),
+                )
+            ],
+        )
+    )
+    doc_bytes2 = DocxGenerator.generate(
+        DocumentSpec(
+            title="Report",
+            sections=[
+                DocumentSectionSpec(
+                    heading="Intro",
+                    paragraphs=["Paragraph 1 Modified"],
+                    table=TableSpec(headers=["Col1", "Col2"], rows=[["Val1", "Val2 Updated"]]),
+                )
+            ],
+        )
+    )
+    docx_lines1 = extract_artifact_text("docx", doc_bytes1)
+    docx_lines2 = extract_artifact_text("docx", doc_bytes2)
+    assert any("Paragraph 1" in line for line in docx_lines1)
+    assert any("Val1 | Val2" in line for line in docx_lines1)
+    docx_diff = compute_unified_diff(docx_lines1, docx_lines2, 1, 2)
+    assert docx_diff["additions"] >= 1
+    assert docx_diff["deletions"] >= 1
+
+    # 3. XLSX text extraction
+    wb_bytes1 = XlsxGenerator.generate(
+        WorkbookSpec(
+            title="Finance",
+            sheets=[SheetSpec(name="S1", headers=["Item", "Cost"], rows=[["Servers", 500]])],
+        )
+    )
+    wb_bytes2 = XlsxGenerator.generate(
+        WorkbookSpec(
+            title="Finance",
+            sheets=[
+                SheetSpec(
+                    name="S1",
+                    headers=["Item", "Cost"],
+                    rows=[["Servers", 500], ["Databases", 300]],
+                )
+            ],
+        )
+    )
+    xlsx_lines1 = extract_artifact_text("xlsx", wb_bytes1)
+    xlsx_lines2 = extract_artifact_text("xlsx", wb_bytes2)
+    assert any("Servers" in line for line in xlsx_lines1)
+    xlsx_diff = compute_unified_diff(xlsx_lines1, xlsx_lines2, 1, 2)
+    assert xlsx_diff["additions"] >= 1
