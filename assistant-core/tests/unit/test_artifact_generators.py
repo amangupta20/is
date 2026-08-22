@@ -302,3 +302,137 @@ def test_pdf_generator_with_image_and_themes() -> None:
         assert isinstance(data, bytes)
         assert len(data) > 0
         assert data.startswith(b"%PDF-")
+
+
+def test_typst_generator_compiles_raw_markup() -> None:
+    from assistant_core.artifacts.generators.typst_gen import TypstGenerator
+
+    markup = '#set page(paper: "a4")\n= Hello Typst\nThis is a compiled document.'
+    data = TypstGenerator.compile_markup(markup)
+    assert isinstance(data, bytes)
+    assert len(data) > 0
+    assert data.startswith(b"%PDF-")
+
+
+def test_typst_generator_creates_resume() -> None:
+    from assistant_core.artifacts.generators.typst_gen import TypstGenerator
+    from assistant_core.artifacts.schemas import (
+        EducationItem,
+        ExperienceItem,
+        ProjectItem,
+        ResumeSpec,
+        SkillCategory,
+    )
+
+    spec = ResumeSpec(
+        name="Alex Mercer",
+        title="Staff Software Engineer",
+        email="alex.mercer@example.com",
+        phone="+1 (555) 019-2834",
+        location="San Francisco, CA",
+        website="https://alexmercer.dev",
+        github="https://github.com/alexmercer",
+        linkedin="https://linkedin.com/in/alexmercer",
+        summary="Experienced distributed systems engineer specializing in high-throughput data platforms, Rust, Python, and cloud infrastructure.",
+        experience=[
+            ExperienceItem(
+                company="Acme Corp",
+                position="Senior Infrastructure Engineer",
+                location="San Francisco, CA",
+                start_date="2022-03",
+                end_date="Present",
+                highlights=[
+                    "Architected multi-region event streaming pipeline handling 2M events/sec.",
+                    "Reduced p99 tail latency by 45% through custom serialization protocols.",
+                ],
+                technologies=["Rust", "Kafka", "Kubernetes", "PostgreSQL"],
+            ),
+            ExperienceItem(
+                company="TechStartup Inc",
+                position="Software Engineer",
+                location="Austin, TX",
+                start_date="2019-06",
+                end_date="2022-02",
+                highlights=[
+                    "Built asynchronous microservices with FastAPI and asyncpg.",
+                    "Implemented CI/CD pipelines reducing deployment times from 40m to 6m.",
+                ],
+                technologies=["Python", "FastAPI", "Docker", "AWS"],
+            ),
+        ],
+        education=[
+            EducationItem(
+                institution="University of California, Berkeley",
+                degree="B.S. in Computer Science",
+                location="Berkeley, CA",
+                start_date="2015",
+                end_date="2019",
+                highlights=["Graduated Magna Cum Laude", "Teaching Assistant for CS61A"],
+            )
+        ],
+        skills=[
+            SkillCategory(
+                name="Languages",
+                skills=["Rust", "Python", "Go", "TypeScript", "SQL"],
+            ),
+            SkillCategory(
+                name="Infrastructure & Tools",
+                skills=["Kubernetes", "Docker", "Terraform", "PostgreSQL", "Kafka", "Prometheus"],
+            ),
+        ],
+        projects=[
+            ProjectItem(
+                name="HyperVector",
+                description="Fast embedded vector index in Rust with Python bindings.",
+                url="https://github.com/alexmercer/hypervector",
+                highlights=[
+                    "Supports SIMD cosine similarity calculations with sub-millisecond search over 1M vectors.",
+                ],
+                technologies=["Rust", "PyO3", "SIMD"],
+            )
+        ],
+    )
+
+    data = TypstGenerator.generate_resume(spec)
+    assert isinstance(data, bytes)
+    assert len(data) > 0
+    assert data.startswith(b"%PDF-")
+
+
+def test_typst_generator_creates_report() -> None:
+    from assistant_core.artifacts.generators.typst_gen import TypstGenerator
+    from assistant_core.artifacts.schemas import DocumentSectionSpec, DocumentSpec, TableSpec
+
+    spec = DocumentSpec(
+        title="Distributed Systems Benchmark",
+        subtitle="Typst High-Fidelity Rendering Evaluation",
+        author="Performance Engineering Team",
+        theme="slate",
+        sections=[
+            DocumentSectionSpec(
+                heading="Executive Summary",
+                level=1,
+                paragraphs=[
+                    "This report benchmarks Typst compilation performance against ReportLab and Weasyprint.",
+                ],
+                bullets=[
+                    "Sub-10ms compilation latency",
+                    "Native mathematical notation",
+                    "Deterministic layout engine",
+                ],
+                callout="Typst compiles 10x faster than legacy typesetting tools with identical output fidelity.",
+                table=TableSpec(
+                    headers=["Engine", "Avg Render Time", "Binary Size"],
+                    rows=[
+                        ["Typst", "4.2 ms", "12 KB"],
+                        ["ReportLab", "48.1 ms", "35 KB"],
+                        ["Weasyprint", "320.5 ms", "110 KB"],
+                    ],
+                ),
+            )
+        ],
+    )
+    data = TypstGenerator.generate_report(spec)
+    assert isinstance(data, bytes)
+    assert len(data) > 0
+    assert data.startswith(b"%PDF-")

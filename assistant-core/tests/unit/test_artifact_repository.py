@@ -147,3 +147,61 @@ async def test_artifact_repository_create_pdf(tmp_path: Path) -> None:
     assert art.artifact_type == "pdf"
     assert ver1.binary_data.startswith(b"%PDF-")
     assert ver1.mime_type == "application/pdf"
+
+
+@pytest.mark.anyio
+async def test_artifact_repository_create_typst(tmp_path: Path) -> None:
+    user = UserIdentity(id=uuid.uuid4(), native_user_id="user-123")
+    storage = LocalStorageBackend(base_dir=str(tmp_path))
+
+    session = RecordingSession(values=[user])
+    repo = ArtifactRepository(session, storage)  # type: ignore[arg-type]
+
+    create_req = CreateArtifactRequest(
+        native_user_id="user-123",
+        title="Typst Research Notes",
+        artifact_type="typst",
+        raw_content='#set page(paper: "a4")\n= Research Notes\n\nContent compiled via Typst.',
+        change_summary="Initial Typst creation",
+    )
+    art, ver1 = await repo.create_artifact(create_req)
+    assert art.title == "Typst Research Notes"
+    assert art.artifact_type == "typst"
+    assert ver1.binary_data.startswith(b"%PDF-")
+    assert ver1.mime_type == "application/pdf"
+
+
+@pytest.mark.anyio
+async def test_artifact_repository_create_resume(tmp_path: Path) -> None:
+    from assistant_core.artifacts.schemas import ExperienceItem, ResumeSpec
+
+    user = UserIdentity(id=uuid.uuid4(), native_user_id="user-123")
+    storage = LocalStorageBackend(base_dir=str(tmp_path))
+
+    session = RecordingSession(values=[user])
+    repo = ArtifactRepository(session, storage)  # type: ignore[arg-type]
+
+    create_req = CreateArtifactRequest(
+        native_user_id="user-123",
+        title="Alex Mercer Resume",
+        artifact_type="resume",
+        resume_spec=ResumeSpec(
+            name="Alex Mercer",
+            title="Senior Engineer",
+            summary="Distributed systems specialist.",
+            experience=[
+                ExperienceItem(
+                    company="Tech Corp",
+                    position="Lead Architect",
+                    start_date="2020",
+                    highlights=["Built cloud native pipelines"],
+                )
+            ],
+        ),
+        change_summary="Initial Resume creation",
+    )
+    art, ver1 = await repo.create_artifact(create_req)
+    assert art.title == "Alex Mercer Resume"
+    assert art.artifact_type == "resume"
+    assert ver1.binary_data.startswith(b"%PDF-")
+    assert ver1.mime_type == "application/pdf"

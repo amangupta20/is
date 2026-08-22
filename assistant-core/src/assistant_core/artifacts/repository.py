@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from assistant_core.artifacts.generators.docx_gen import DocxGenerator
 from assistant_core.artifacts.generators.pdf_gen import PdfGenerator
 from assistant_core.artifacts.generators.pptx_gen import PptxGenerator
+from assistant_core.artifacts.generators.typst_gen import TypstGenerator
 from assistant_core.artifacts.generators.xlsx_gen import XlsxGenerator
 from assistant_core.artifacts.models import Artifact, ArtifactVersion
 from assistant_core.artifacts.schemas import (
@@ -19,6 +20,7 @@ from assistant_core.artifacts.schemas import (
     DocumentSectionSpec,
     DocumentSpec,
     PresentationSpec,
+    ResumeSpec,
     ReviseArtifactRequest,
     SheetSpec,
     SlideSpec,
@@ -33,6 +35,8 @@ MIME_MAP = {
     "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "pdf": "application/pdf",
     "markdown": "text/markdown",
+    "typst": "application/pdf",
+    "resume": "application/pdf",
 }
 
 
@@ -76,6 +80,7 @@ class ArtifactRepository:
             workbook_spec=request.workbook_spec,
             document_spec=request.document_spec,
             presentation_spec=request.presentation_spec,
+            resume_spec=request.resume_spec,
             raw_content=request.raw_content,
             title=request.title,
         )
@@ -149,6 +154,7 @@ class ArtifactRepository:
             workbook_spec=request.workbook_spec,
             document_spec=request.document_spec,
             presentation_spec=request.presentation_spec,
+            resume_spec=request.resume_spec,
             raw_content=request.raw_content,
             title=artifact.title,
         )
@@ -304,6 +310,7 @@ class ArtifactRepository:
         presentation_spec: PresentationSpec | None,
         raw_content: str | None,
         title: str,
+        resume_spec: ResumeSpec | None = None,
     ) -> bytes:
         """Helper to render binary data according to spec and format."""
         if artifact_type == "xlsx":
@@ -355,5 +362,25 @@ class ArtifactRepository:
                 ],
             )
             return PdfGenerator.generate(default_doc)
+
+        elif artifact_type == "typst":
+            if raw_content:
+                return TypstGenerator.compile_markup(raw_content)
+            elif document_spec:
+                return TypstGenerator.generate_report(document_spec)
+            elif resume_spec:
+                return TypstGenerator.generate_resume(resume_spec)
+            else:
+                default_markup = (
+                    f'#set page(paper: "a4")\n= {title}\n\n'
+                    f"{raw_content or 'Initial document content.'}"
+                )
+                return TypstGenerator.compile_markup(default_markup)
+
+        elif artifact_type == "resume":
+            if resume_spec:
+                return TypstGenerator.generate_resume(resume_spec)
+            default_resume = ResumeSpec(name=title, summary=raw_content or "Professional Resume")
+            return TypstGenerator.generate_resume(default_resume)
 
         return (raw_content or "").encode("utf-8")

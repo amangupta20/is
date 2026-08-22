@@ -132,9 +132,71 @@ class PresentationSpec(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Resume / Typst Schemas
+# ---------------------------------------------------------------------------
+class ExperienceItem(BaseModel):
+    """Professional work experience entry in a resume."""
+
+    company: str
+    position: str
+    location: str | None = None
+    start_date: str
+    end_date: str | None = None
+    highlights: list[str] = Field(default_factory=list)
+    technologies: list[str] = Field(default_factory=list)
+
+
+class EducationItem(BaseModel):
+    """Academic degree or certification entry in a resume."""
+
+    institution: str
+    degree: str
+    field_of_study: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    location: str | None = None
+    highlights: list[str] = Field(default_factory=list)
+
+
+class SkillCategory(BaseModel):
+    """Grouped technical or soft skill category in a resume."""
+
+    name: str
+    skills: list[str] = Field(default_factory=list)
+
+
+class ProjectItem(BaseModel):
+    """Project entry in a portfolio or resume."""
+
+    name: str
+    description: str | None = None
+    url: str | None = None
+    highlights: list[str] = Field(default_factory=list)
+    technologies: list[str] = Field(default_factory=list)
+
+
+class ResumeSpec(BaseModel):
+    """Complete specification for a professional resume compiled via Typst."""
+
+    name: str = Field(min_length=1, max_length=255)
+    title: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    location: str | None = None
+    website: str | None = None
+    github: str | None = None
+    linkedin: str | None = None
+    summary: str | None = None
+    experience: list[ExperienceItem] = Field(default_factory=list)
+    education: list[EducationItem] = Field(default_factory=list)
+    skills: list[SkillCategory] = Field(default_factory=list)
+    projects: list[ProjectItem] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Generic Create & Response Schemas
 # ---------------------------------------------------------------------------
-ArtifactFormat = Literal["xlsx", "docx", "pptx", "pdf", "markdown"]
+ArtifactFormat = Literal["xlsx", "docx", "pptx", "pdf", "markdown", "typst", "resume"]
 
 
 class CreateArtifactRequest(BaseModel):
@@ -148,6 +210,7 @@ class CreateArtifactRequest(BaseModel):
     workbook_spec: WorkbookSpec | None = None
     document_spec: DocumentSpec | None = None
     presentation_spec: PresentationSpec | None = None
+    resume_spec: ResumeSpec | None = None
     raw_content: str | None = None
     change_summary: str = "Initial creation"
 
@@ -159,6 +222,7 @@ class ReviseArtifactRequest(BaseModel):
     workbook_spec: WorkbookSpec | None = None
     document_spec: DocumentSpec | None = None
     presentation_spec: PresentationSpec | None = None
+    resume_spec: ResumeSpec | None = None
     raw_content: str | None = None
     change_summary: str = "AI Revision"
 
