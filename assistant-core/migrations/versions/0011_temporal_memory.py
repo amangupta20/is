@@ -59,6 +59,12 @@ def downgrade() -> None:
     op.execute(sa.text("SET search_path TO assistant_core, extensions, public"))
 
     op.execute(sa.text("DROP INDEX IF EXISTS assistant_core.ix_memory_record_user_validity;"))
-    op.execute(sa.text("ALTER TABLE assistant_core.memory_record DROP COLUMN IF EXISTS temporal_tag;"))
-    op.execute(sa.text("ALTER TABLE assistant_core.memory_record DROP COLUMN IF EXISTS expires_at;"))
-    op.execute(sa.text("ALTER TABLE assistant_core.memory_record DROP COLUMN IF EXISTS valid_from;"))
+    op.execute(
+        sa.text("ALTER TABLE assistant_core.memory_record DROP COLUMN IF EXISTS temporal_tag;")
+    )
+    op.execute(
+        sa.text("ALTER TABLE assistant_core.memory_record DROP COLUMN IF EXISTS expires_at;")
+    )
+    op.execute(
+        sa.text("ALTER TABLE assistant_core.memory_record DROP COLUMN IF EXISTS valid_from;")
+    )

@@ -164,23 +164,49 @@ def downgrade() -> None:
     # 1. artifacts
     op.execute(sa.text("DROP INDEX IF EXISTS assistant_core.ix_artifacts_user_folder;"))
     op.execute(sa.text("DROP INDEX IF EXISTS assistant_core.ix_artifacts_user_project;"))
-    op.execute(sa.text("ALTER TABLE assistant_core.artifacts DROP COLUMN IF EXISTS native_folder_id;"))
-    op.execute(sa.text("ALTER TABLE assistant_core.artifacts DROP COLUMN IF EXISTS native_project_id;"))
+    op.execute(
+        sa.text("ALTER TABLE assistant_core.artifacts DROP COLUMN IF EXISTS native_folder_id;")
+    )
+    op.execute(
+        sa.text("ALTER TABLE assistant_core.artifacts DROP COLUMN IF EXISTS native_project_id;")
+    )
 
     # 2. conversation_reference
-    op.execute(sa.text("DROP INDEX IF EXISTS assistant_core.ix_conversation_reference_user_folder;"))
-    op.execute(sa.text("DROP INDEX IF EXISTS assistant_core.ix_conversation_reference_user_project;"))
-    op.execute(sa.text("ALTER TABLE assistant_core.conversation_reference DROP COLUMN IF EXISTS native_folder_id;"))
-    op.execute(sa.text("ALTER TABLE assistant_core.conversation_reference DROP COLUMN IF EXISTS native_project_id;"))
+    op.execute(
+        sa.text("DROP INDEX IF EXISTS assistant_core.ix_conversation_reference_user_folder;")
+    )
+    op.execute(
+        sa.text("DROP INDEX IF EXISTS assistant_core.ix_conversation_reference_user_project;")
+    )
+    op.execute(
+        sa.text(
+            "ALTER TABLE assistant_core.conversation_reference DROP COLUMN IF EXISTS native_folder_id;"
+        )
+    )
+    op.execute(
+        sa.text(
+            "ALTER TABLE assistant_core.conversation_reference DROP COLUMN IF EXISTS native_project_id;"
+        )
+    )
 
     # 3. completed_turn
     op.execute(sa.text("DROP INDEX IF EXISTS assistant_core.ix_completed_turn_folder;"))
     op.execute(sa.text("DROP INDEX IF EXISTS assistant_core.ix_completed_turn_project;"))
-    op.execute(sa.text("ALTER TABLE assistant_core.completed_turn DROP COLUMN IF EXISTS native_folder_id;"))
-    op.execute(sa.text("ALTER TABLE assistant_core.completed_turn DROP COLUMN IF EXISTS native_project_id;"))
+    op.execute(
+        sa.text("ALTER TABLE assistant_core.completed_turn DROP COLUMN IF EXISTS native_folder_id;")
+    )
+    op.execute(
+        sa.text(
+            "ALTER TABLE assistant_core.completed_turn DROP COLUMN IF EXISTS native_project_id;"
+        )
+    )
 
     # 4. event_inbox
     op.execute(sa.text("DROP INDEX IF EXISTS assistant_core.ix_event_inbox_folder;"))
     op.execute(sa.text("DROP INDEX IF EXISTS assistant_core.ix_event_inbox_project;"))
-    op.execute(sa.text("ALTER TABLE assistant_core.event_inbox DROP COLUMN IF EXISTS native_folder_id;"))
-    op.execute(sa.text("ALTER TABLE assistant_core.event_inbox DROP COLUMN IF EXISTS native_project_id;"))
+    op.execute(
+        sa.text("ALTER TABLE assistant_core.event_inbox DROP COLUMN IF EXISTS native_folder_id;")
+    )
+    op.execute(
+        sa.text("ALTER TABLE assistant_core.event_inbox DROP COLUMN IF EXISTS native_project_id;")
+    )

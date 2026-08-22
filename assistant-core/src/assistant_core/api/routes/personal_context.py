@@ -650,9 +650,7 @@ async def read_full_document(
     dependencies=[Depends(require_adapter_signature)],
     response_model=MemoryListResponse,
 )
-async def list_memories(
-    body: MemoryListRequest, request: Request
-) -> MemoryListResponse:
+async def list_memories(body: MemoryListRequest, request: Request) -> MemoryListResponse:
     """Retrieve active memories for the authenticated user."""
     async with request.app.state.session_factory() as session:
         records = await list_user_memories(
@@ -685,9 +683,7 @@ async def list_memories(
     dependencies=[Depends(require_adapter_signature)],
     response_model=MemorySaveResponse,
 )
-async def save_memory(
-    body: MemorySaveRequest, request: Request
-) -> MemorySaveResponse:
+async def save_memory(body: MemorySaveRequest, request: Request) -> MemorySaveResponse:
     """Create or update an explicit memory directly via chat tool call."""
     async with request.app.state.session_factory() as session:
         record, created = await save_direct_memory(
@@ -731,9 +727,7 @@ async def save_memory(
     dependencies=[Depends(require_adapter_signature)],
     response_model=MemoryUpdateResponse,
 )
-async def update_memory(
-    body: MemoryUpdateRequest, request: Request
-) -> MemoryUpdateResponse:
+async def update_memory(body: MemoryUpdateRequest, request: Request) -> MemoryUpdateResponse:
     """Modify an active memory record by ID."""
     async with request.app.state.session_factory() as session:
         record = await update_direct_memory(
@@ -777,9 +771,7 @@ async def update_memory(
     dependencies=[Depends(require_adapter_signature)],
     response_model=MemoryForgetResponse,
 )
-async def forget_memory(
-    body: MemoryForgetRequest, request: Request
-) -> MemoryForgetResponse:
+async def forget_memory(body: MemoryForgetRequest, request: Request) -> MemoryForgetResponse:
     """Archive one or more active memories by ID or key."""
     async with request.app.state.session_factory() as session:
         records = await forget_direct_memory(
@@ -790,7 +782,9 @@ async def forget_memory(
             reason=body.reason,
         )
         if not records:
-            raise HTTPException(status_code=404, detail="No active matching memory records found to archive")
+            raise HTTPException(
+                status_code=404, detail="No active matching memory records found to archive"
+            )
         await session.commit()
 
     archived_ids = [r.id for r in records]

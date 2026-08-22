@@ -272,7 +272,7 @@ async def apply_explicit_candidates(
             action="supersede" if active is not None else "create",
             previous_state=active_snap,
             new_state=_memory_snapshot(record),
-            reason=f"Extracted from conversation evidence: \"{candidate.evidence_quote[:100]}\"",
+            reason=f'Extracted from conversation evidence: "{candidate.evidence_quote[:100]}"',
         )
     return applied
 
@@ -404,9 +404,7 @@ async def consolidate_user_memories(
                     "action": "expire_now",
                     "memory_id": str(rec.id),
                     "statement": rec.statement,
-                    "old_validity": (
-                        rec.expires_at.isoformat() if rec.expires_at else "permanent"
-                    ),
+                    "old_validity": (rec.expires_at.isoformat() if rec.expires_at else "permanent"),
                     "new_validity": "expired",
                     "reason": v.reason,
                 }
@@ -600,11 +598,15 @@ async def save_direct_memory(
     clean_tag = temporal_tag.strip().lower() if temporal_tag and temporal_tag.strip() else None
 
     # Check for existing active record with same key
-    existing_stmt = select(MemoryRecord).where(
-        MemoryRecord.user_id == user.id,
-        MemoryRecord.key == clean_key,
-        MemoryRecord.state == "active",
-    ).with_for_update()
+    existing_stmt = (
+        select(MemoryRecord)
+        .where(
+            MemoryRecord.user_id == user.id,
+            MemoryRecord.key == clean_key,
+            MemoryRecord.state == "active",
+        )
+        .with_for_update()
+    )
     active_rec = (await session.execute(existing_stmt)).scalar_one_or_none()
 
     if active_rec is not None and active_rec.statement == statement.strip():
@@ -687,11 +689,15 @@ async def update_direct_memory(
     if user_id is None:
         return None
 
-    stmt = select(MemoryRecord).where(
-        MemoryRecord.id == memory_id,
-        MemoryRecord.user_id == user_id,
-        MemoryRecord.state == "active",
-    ).with_for_update()
+    stmt = (
+        select(MemoryRecord)
+        .where(
+            MemoryRecord.id == memory_id,
+            MemoryRecord.user_id == user_id,
+            MemoryRecord.state == "active",
+        )
+        .with_for_update()
+    )
     rec = (await session.execute(stmt)).scalar_one_or_none()
     if rec is None:
         return None
@@ -743,10 +749,14 @@ async def forget_direct_memory(
     if memory_id is None and (key is None or not key.strip()):
         return []
 
-    stmt = select(MemoryRecord).where(
-        MemoryRecord.user_id == user_id,
-        MemoryRecord.state == "active",
-    ).with_for_update()
+    stmt = (
+        select(MemoryRecord)
+        .where(
+            MemoryRecord.user_id == user_id,
+            MemoryRecord.state == "active",
+        )
+        .with_for_update()
+    )
 
     if memory_id is not None:
         stmt = stmt.where(MemoryRecord.id == memory_id)
@@ -955,9 +965,7 @@ async def list_memory_change_logs(
     items = list(
         (
             await session.execute(
-                query.order_by(MemoryChangeLog.created_at.desc())
-                .offset(offset)
-                .limit(page_size)
+                query.order_by(MemoryChangeLog.created_at.desc()).offset(offset).limit(page_size)
             )
         )
         .scalars()

@@ -248,9 +248,9 @@ async def search_topic_episodes(
             end_message_id=ep.end_message_id,
             turn_count=ep.turn_count,
             score=scores[ep.id],
-            match_mode="hybrid" if (ep in lexical_rows and ep in vector_rows) else (
-                "vector" if ep in vector_rows else "lexical"
-            ),
+            match_mode="hybrid"
+            if (ep in lexical_rows and ep in vector_rows)
+            else ("vector" if ep in vector_rows else "lexical"),
             created_at=ep.created_at,
         )
         for ep in episodes_by_id.values()

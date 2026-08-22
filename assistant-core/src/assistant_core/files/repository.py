@@ -744,4 +744,3 @@ async def reconcile_and_log_kb_documents(
         duration_ms=round(duration_ms, 2),
     )
     return run_log
-

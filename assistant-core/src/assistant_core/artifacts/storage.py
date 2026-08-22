@@ -36,9 +36,7 @@ class LocalStorageBackend:
         try:
             target_dir.mkdir(parents=True, exist_ok=True)
             # Write to temp file first to ensure atomic replacement
-            with tempfile.NamedTemporaryFile(
-                dir=target_dir, delete=False, prefix=".tmp_v_"
-            ) as tmp:
+            with tempfile.NamedTemporaryFile(dir=target_dir, delete=False, prefix=".tmp_v_") as tmp:
                 tmp.write(data)
                 tmp_path = Path(tmp.name)
 

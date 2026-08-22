@@ -87,7 +87,9 @@ class TaskModelMemoryExtractor:
         if turn.assistant_content and turn.assistant_content.strip():
             turn_prompt_parts.append(f"[Assistant Response]:\n{turn.assistant_content.strip()}")
         if turn.file_context and turn.file_context.strip():
-            turn_prompt_parts.append(f"[Attached File Context / Excerpts]:\n{turn.file_context.strip()}")
+            turn_prompt_parts.append(
+                f"[Attached File Context / Excerpts]:\n{turn.file_context.strip()}"
+            )
 
         user_message_content = "\n\n".join(turn_prompt_parts)
 

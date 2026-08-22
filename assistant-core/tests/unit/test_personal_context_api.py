@@ -49,6 +49,7 @@ class _Result:
             return self.row if not isinstance(self.row, tuple) else self.row[0]
         return None
 
+
 class _ContextSession:
     def __init__(self, records: list[MemoryRecord], read_row: tuple[Any, ...]) -> None:
         self.records = records
@@ -69,9 +70,15 @@ class _ContextSession:
         )
         if "ORDER BY assistant_core.memory_evidence.created_at" in str(compiled):
             return _Result(row=self.read_row if native_user_id == "user-1" else None)
-        if "FROM assistant_core.conversation_reference" in str(compiled) or "FROM assistant_core.file_reference" in str(compiled) or "FROM assistant_core.topic_episode" in str(compiled):
+        if (
+            "FROM assistant_core.conversation_reference" in str(compiled)
+            or "FROM assistant_core.file_reference" in str(compiled)
+            or "FROM assistant_core.topic_episode" in str(compiled)
+        ):
             return _Result(row=None, rows=[])
-        if "SELECT assistant_core.user_identity.id FROM assistant_core.user_identity" in str(compiled):
+        if "SELECT assistant_core.user_identity.id FROM assistant_core.user_identity" in str(
+            compiled
+        ):
             return _Result(scalar=uuid.UUID("00000000-0000-0000-0000-000000000001"))
         return _Result(rows=[self.records[0]] if native_user_id == "user-1" else [])
 
@@ -317,6 +324,7 @@ def test_hybrid_conversation_hit_reads_bounded_neighbors_and_fails_open_lexicall
         return (
             conversation_read if native_user_id == "user-1" and source_id == hit.source_id else None
         )
+
     monkeypatch.setattr(personal_context, "search_topic_episodes", no_memories)
     monkeypatch.setattr(personal_context, "get_topic_episode", no_memory_read)
 
@@ -618,6 +626,7 @@ def test_read_full_document_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
         )
     )
     assert missing.status_code == 404
+
 
 def test_search_and_read_topic_episodes(monkeypatch: pytest.MonkeyPatch) -> None:
     """Hybrid search returns TopicEpisode matches and read returns full formatted episode."""

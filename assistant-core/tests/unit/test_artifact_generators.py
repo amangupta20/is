@@ -77,8 +77,16 @@ def test_docx_generator_creates_valid_document() -> None:
                 table=TableSpec(
                     headers=["Format", "Engine", "MIME Type"],
                     rows=[
-                        ["XLSX", "openpyxl", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
-                        ["DOCX", "python-docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+                        [
+                            "XLSX",
+                            "openpyxl",
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        ],
+                        [
+                            "DOCX",
+                            "python-docx",
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        ],
                     ],
                 ),
             )
@@ -114,8 +122,14 @@ def test_pptx_generator_creates_valid_presentation() -> None:
                 title="Target Metrics",
                 layout="cards",
                 cards=[
-                    StatCard(title="Uptime", value="99.99%", description="Zero downtime deployment"),
-                    StatCard(title="Memory Saved", value="4.2 GB", description="Reduced background overhead"),
+                    StatCard(
+                        title="Uptime", value="99.99%", description="Zero downtime deployment"
+                    ),
+                    StatCard(
+                        title="Memory Saved",
+                        value="4.2 GB",
+                        description="Reduced background overhead",
+                    ),
                 ],
             ),
             SlideSpec(
@@ -217,3 +231,74 @@ def test_pptx_generator_with_images_charts_and_timeline() -> None:
     prs = Presentation(io.BytesIO(data))
     assert len(prs.slides) == 5  # 1 Title + 4 Slides
 
+
+def test_pdf_generator_creates_valid_pdf() -> None:
+    from assistant_core.artifacts.generators.pdf_gen import PdfGenerator
+
+    spec = DocumentSpec(
+        title="Architecture Decision Record: PDF Generation",
+        subtitle="ReportLab-based PDF generation engine",
+        author="Lead Architect",
+        theme="slate",
+        sections=[
+            DocumentSectionSpec(
+                heading="Context & Problem Statement",
+                level=1,
+                paragraphs=[
+                    "The assistant requires high quality styled PDF generation.",
+                    "PDFs must render cover headers, sections, callouts, and styled tables.",
+                ],
+                bullets=[
+                    "Fast Platypus layout engine",
+                    "Dynamic page numbering and running headers",
+                    "Zero external browser dependencies",
+                ],
+                callout="All generated PDFs adhere to standard corporate theme palettes.",
+                table=TableSpec(
+                    headers=["Module", "Role", "Version"],
+                    rows=[
+                        ["reportlab", "PDF Engine", "5.0.1"],
+                        ["assistant_core", "API Core", "0.1.0"],
+                    ],
+                ),
+            ),
+            DocumentSectionSpec(
+                heading="Subsection Analysis",
+                level=2,
+                paragraphs=["Detailed secondary analysis paragraph."],
+            ),
+        ],
+    )
+    data = PdfGenerator.generate(spec)
+    assert isinstance(data, bytes)
+    assert len(data) > 0
+    assert data.startswith(b"%PDF-")
+
+
+def test_pdf_generator_with_image_and_themes() -> None:
+    from assistant_core.artifacts.generators.pdf_gen import PdfGenerator
+
+    img = Image.new("RGB", (60, 60), color="red")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    b64_img = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    for theme in ("slate", "navy", "emerald", "crimson", "dark"):
+        spec = DocumentSpec(
+            title=f"Theme {theme.title()} PDF Test",
+            subtitle="Testing Embedded Figures & Colors",
+            theme=theme,  # type: ignore[arg-type]
+            sections=[
+                DocumentSectionSpec(
+                    heading="Visual Evidence",
+                    paragraphs=["This section contains an embedded diagram."],
+                    image_base64=b64_img,
+                    image_caption=f"Figure 1: {theme.title()} Test",
+                    callout="Highlight box with theme accent.",
+                )
+            ],
+        )
+        data = PdfGenerator.generate(spec)
+        assert isinstance(data, bytes)
+        assert len(data) > 0
+        assert data.startswith(b"%PDF-")

@@ -64,7 +64,9 @@ class OnlyOfficeManager:
 
         doc_type = DOCUMENT_TYPE_MAP.get(artifact.artifact_type, "word")
         ext = artifact.artifact_type
-        title_with_ext = f"{artifact.title}.{ext}" if not artifact.title.endswith(f".{ext}") else artifact.title
+        title_with_ext = (
+            f"{artifact.title}.{ext}" if not artifact.title.endswith(f".{ext}") else artifact.title
+        )
 
         # Build raw download & callback URLs
         download_url = f"{base_service_url.rstrip('/')}/v1/artifacts/{artifact.id}/versions/{current_version.version_num}/raw"
@@ -97,7 +99,11 @@ class OnlyOfficeManager:
         }
 
         # If JWT Secret is configured, sign the payload
-        jwt_secret = self.settings.onlyoffice_jwt_secret.get_secret_value() if self.settings.onlyoffice_jwt_secret else None
+        jwt_secret = (
+            self.settings.onlyoffice_jwt_secret.get_secret_value()
+            if self.settings.onlyoffice_jwt_secret
+            else None
+        )
         if jwt_secret:
             token = jwt.encode(config, jwt_secret, algorithm="HS256")
             config["token"] = token
@@ -121,12 +127,9 @@ class OnlyOfficeManager:
             return {"error": 1, "message": "Missing download url in callback"}
 
         # Look up session
-        stmt = (
-            select(OnlyOfficeSession)
-            .where(
-                OnlyOfficeSession.artifact_id == artifact_id,
-                OnlyOfficeSession.session_key == session_key,
-            )
+        stmt = select(OnlyOfficeSession).where(
+            OnlyOfficeSession.artifact_id == artifact_id,
+            OnlyOfficeSession.session_key == session_key,
         )
         res = await self.session.execute(stmt)
         oo_session = res.scalar_one_or_none()
@@ -137,7 +140,10 @@ class OnlyOfficeManager:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.get(download_url)
             if resp.status_code != 200:
-                return {"error": 1, "message": f"Failed to download edited document: status {resp.status_code}"}
+                return {
+                    "error": 1,
+                    "message": f"Failed to download edited document: status {resp.status_code}",
+                }
             edited_bytes = resp.content
 
         # Save new immutable version

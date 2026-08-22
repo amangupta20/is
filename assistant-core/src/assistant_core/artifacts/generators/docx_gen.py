@@ -18,13 +18,13 @@ from assistant_core.artifacts.schemas import DocumentSpec, TableSpec
 # Theme palettes
 DOCX_THEMES: dict[str, dict[str, Any]] = {
     "slate": {
-        "primary": RGBColor(30, 41, 59),     # Slate 800
+        "primary": RGBColor(30, 41, 59),  # Slate 800
         "secondary": RGBColor(71, 85, 105),  # Slate 600
-        "muted": RGBColor(100, 116, 139),    # Slate 500
-        "accent_hex": "3B82F6",              # Blue 500
-        "header_bg_hex": "1E293B",          # Slate 800
-        "zebra_bg_hex": "F8FAFC",           # Slate 50
-        "callout_bg_hex": "F1F5F9",         # Slate 100
+        "muted": RGBColor(100, 116, 139),  # Slate 500
+        "accent_hex": "3B82F6",  # Blue 500
+        "header_bg_hex": "1E293B",  # Slate 800
+        "zebra_bg_hex": "F8FAFC",  # Slate 50
+        "callout_bg_hex": "F1F5F9",  # Slate 100
     },
     "navy": {
         "primary": RGBColor(11, 25, 44),
@@ -243,12 +243,12 @@ class DocxGenerator:
 
                 tcPr = callout_cell._tc.get_or_add_tcPr()
                 tcBorders = parse_xml(
-                    f'<w:tcBorders {nsdecls("w")}>'
+                    f"<w:tcBorders {nsdecls('w')}>"
                     f'<w:top w:val="none"/>'
                     f'<w:left w:val="single" w:sz="24" w:space="0" w:color="{theme["accent_hex"]}"/>'
                     f'<w:bottom w:val="none"/>'
                     f'<w:right w:val="none"/>'
-                    f'</w:tcBorders>'
+                    f"</w:tcBorders>"
                 )
                 tcPr.append(tcBorders)
 

@@ -57,7 +57,9 @@ class MemoryValidityDecision(BaseModel):
     temporal_tag: str | None = Field(
         default=None, max_length=50, description="Tag describing the timeframe"
     )
-    reason: str = Field(min_length=1, max_length=500, description="Reason for the validity adjustment")
+    reason: str = Field(
+        min_length=1, max_length=500, description="Reason for the validity adjustment"
+    )
 
 
 class MemoryReclassificationDecision(BaseModel):
@@ -72,7 +74,9 @@ class MemoryReclassificationDecision(BaseModel):
         pattern=r"^[a-z][a-z0-9_-]*$",
         description="New clean lowercase category slug (e.g. career, infrastructure, homelab, preference, fact, project)",
     )
-    reason: str = Field(min_length=1, max_length=500, description="Reason for the category reclassification")
+    reason: str = Field(
+        min_length=1, max_length=500, description="Reason for the category reclassification"
+    )
 
 
 class ConsolidationResult(BaseModel):
@@ -174,6 +178,7 @@ class TaskModelMemoryConsolidator:
                 raw = "\n".join(lines).strip()
 
             import json
+
             parsed_dict = json.loads(raw)
             if not isinstance(parsed_dict, dict):
                 raise TypeError("Parsed JSON is not an object")

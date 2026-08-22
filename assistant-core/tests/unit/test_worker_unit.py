@@ -391,6 +391,7 @@ def test_missing_embedding_configuration_keeps_worker_available_for_lexical_back
             task_model_model="cheap-extractor",
         ),
     )
+
     async def enqueue_consolidation(_session: object) -> int:
         return 0
 
@@ -465,6 +466,7 @@ def test_chat_deleted_routes_owner_and_chat_to_idempotent_tombstone(
 
     monkeypatch.setattr(worker, "tombstone_chat", tombstone, raising=False)
     monkeypatch.setattr(worker, "LOGGER", Logger())
+
     async def no_tombstone_episodes(_session: object, **_kwargs: object) -> int:
         return 0
 
@@ -954,6 +956,7 @@ def test_worker_builds_database_from_settings_and_always_disposes(
     monkeypatch.setattr(worker, "enqueue_missing_conversation_jobs", enqueue)
     monkeypatch.setattr(worker, "enqueue_daily_consolidation_jobs", enqueue_consolidation)
     monkeypatch.setattr(worker, "enqueue_reconcile_kb_job", enqueue_kb_reconcile)
+
     async def enqueue_episodes(_session: object, **_kwargs: object) -> int:
         return 0
 
@@ -963,6 +966,7 @@ def test_worker_builds_database_from_settings_and_always_disposes(
         stop_event = asyncio.Event()
         stop_event.set()
         await worker.run_worker(stop_event)
+
     anyio.run(exercise)
 
     assert created_urls == [database_url]

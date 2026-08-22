@@ -80,10 +80,30 @@ def test_consolidator_parses_multi_action_result() -> None:
     )
 
     memories = [
-        {"id": id_1, "key": "preferences.python", "category": "preference", "statement": "I use Python 3.11"},
-        {"id": id_2, "key": "preferences.python", "category": "preference", "statement": "I use Python 3.12"},
-        {"id": id_3, "key": "career.datazip", "category": "project", "statement": "Applied at Datazip"},
-        {"id": id_4, "key": "infra.supabase", "category": "fact", "statement": "Migrated Supabase backups"},
+        {
+            "id": id_1,
+            "key": "preferences.python",
+            "category": "preference",
+            "statement": "I use Python 3.11",
+        },
+        {
+            "id": id_2,
+            "key": "preferences.python",
+            "category": "preference",
+            "statement": "I use Python 3.12",
+        },
+        {
+            "id": id_3,
+            "key": "career.datazip",
+            "category": "project",
+            "statement": "Applied at Datazip",
+        },
+        {
+            "id": id_4,
+            "key": "infra.supabase",
+            "category": "fact",
+            "statement": "Migrated Supabase backups",
+        },
     ]
 
     result = consolidator.consolidate(memories)

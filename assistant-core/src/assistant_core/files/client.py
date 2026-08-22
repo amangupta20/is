@@ -6,6 +6,7 @@ import structlog
 
 LOGGER = structlog.get_logger("assistant_core.files.client")
 
+
 class OpenWebUIFileFetchError(Exception):
     """Raised when fetching file metadata or content from Open WebUI fails."""
 
@@ -235,9 +236,7 @@ def fetch_all_kb_metadata_and_hashes(
                     if o_resp.status_code == 200:
                         o_data = o_resp.json()
                         if isinstance(o_data, dict):
-                            _extract_files_from_dict(
-                                o_data, kb_file_ids, kb_hashes, kb_filenames
-                            )
+                            _extract_files_from_dict(o_data, kb_file_ids, kb_hashes, kb_filenames)
                         elif isinstance(o_data, list):
                             for el in o_data:
                                 if isinstance(el, dict):

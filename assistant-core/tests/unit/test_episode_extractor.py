@@ -21,24 +21,26 @@ async def test_extract_episodes_success() -> None:
         "choices": [
             {
                 "message": {
-                    "content": json.dumps({
-                        "episodes": [
-                            {
-                                "title": "Docker Compose Networking Configuration",
-                                "topic_category": "infrastructure",
-                                "summary": "Discussed Supavisor pooler networking setup in Dokploy. Configured shared network open-webui-integrations.",
-                                "decisions_made": [
-                                    "Attach Supavisor to open-webui-integrations network"
-                                ],
-                                "open_loops": [
-                                    "Verify DNS resolution from open-webui container"
-                                ],
-                                "key_entities": ["Dokploy", "Supavisor", "Docker"],
-                                "start_message_id": "msg-1",
-                                "end_message_id": "msg-2",
-                            }
-                        ]
-                    })
+                    "content": json.dumps(
+                        {
+                            "episodes": [
+                                {
+                                    "title": "Docker Compose Networking Configuration",
+                                    "topic_category": "infrastructure",
+                                    "summary": "Discussed Supavisor pooler networking setup in Dokploy. Configured shared network open-webui-integrations.",
+                                    "decisions_made": [
+                                        "Attach Supavisor to open-webui-integrations network"
+                                    ],
+                                    "open_loops": [
+                                        "Verify DNS resolution from open-webui container"
+                                    ],
+                                    "key_entities": ["Dokploy", "Supavisor", "Docker"],
+                                    "start_message_id": "msg-1",
+                                    "end_message_id": "msg-2",
+                                }
+                            ]
+                        }
+                    )
                 }
             }
         ]
@@ -85,6 +87,7 @@ async def test_extract_episodes_success() -> None:
 @pytest.mark.anyio
 async def test_extract_episodes_error_handling() -> None:
     """Verify proper exception raising on HTTP failure."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"error": "internal error"})
 

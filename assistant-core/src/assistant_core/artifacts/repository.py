@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from assistant_core.artifacts.generators.docx_gen import DocxGenerator
+from assistant_core.artifacts.generators.pdf_gen import PdfGenerator
 from assistant_core.artifacts.generators.pptx_gen import PptxGenerator
 from assistant_core.artifacts.generators.xlsx_gen import XlsxGenerator
 from assistant_core.artifacts.models import Artifact, ArtifactVersion
@@ -311,7 +312,9 @@ class ArtifactRepository:
             # Default empty sheet if spec omitted
             default_wb = WorkbookSpec(
                 title=title,
-                sheets=[SheetSpec(name="Sheet1", headers=["Item", "Value"], rows=[["Sample", 100]])],
+                sheets=[
+                    SheetSpec(name="Sheet1", headers=["Item", "Value"], rows=[["Sample", 100]])
+                ],
             )
             return XlsxGenerator.generate(default_wb)
 
@@ -320,7 +323,11 @@ class ArtifactRepository:
                 return DocxGenerator.generate(document_spec)
             default_doc = DocumentSpec(
                 title=title,
-                sections=[DocumentSectionSpec(heading="Overview", paragraphs=[raw_content or "Initial content"])],
+                sections=[
+                    DocumentSectionSpec(
+                        heading="Overview", paragraphs=[raw_content or "Initial content"]
+                    )
+                ],
             )
             return DocxGenerator.generate(default_doc)
 
@@ -337,7 +344,16 @@ class ArtifactRepository:
             return (raw_content or f"# {title}\n\n").encode("utf-8")
 
         elif artifact_type == "pdf":
-            # Markdown/Text fallback PDF for now
-            return (raw_content or f"%PDF-1.4\n1 0 obj\n<< /Title ({title}) >>\n").encode("utf-8")
+            if document_spec:
+                return PdfGenerator.generate(document_spec)
+            default_doc = DocumentSpec(
+                title=title,
+                sections=[
+                    DocumentSectionSpec(
+                        heading="Overview", paragraphs=[raw_content or "Initial content"]
+                    )
+                ],
+            )
+            return PdfGenerator.generate(default_doc)
 
         return (raw_content or "").encode("utf-8")

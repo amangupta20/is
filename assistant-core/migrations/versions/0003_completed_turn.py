@@ -20,9 +20,7 @@ def upgrade() -> None:
         sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("native_chat_id", sa.String(length=200), nullable=False),
         sa.Column("native_user_message_id", sa.String(length=200), nullable=False),
-        sa.Column(
-            "native_assistant_message_id", sa.String(length=200), nullable=False
-        ),
+        sa.Column("native_assistant_message_id", sa.String(length=200), nullable=False),
         sa.Column("user_content", sa.Text(), nullable=False),
         sa.Column("assistant_content", sa.Text(), nullable=False),
         sa.Column("user_content_sha256", sa.String(length=64), nullable=False),

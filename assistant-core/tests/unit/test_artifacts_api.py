@@ -215,7 +215,9 @@ def test_artifacts_onlyoffice_session_and_callback(tmp_path: Path) -> None:
     app.state.session_factory = lambda: session
 
     headers = _signed_headers(secret, "POST", f"/v1/artifacts/{art_id}/onlyoffice/session", b"")
-    resp = client.post(f"/v1/artifacts/{art_id}/onlyoffice/session?native_user_id=user-123", headers=headers)
+    resp = client.post(
+        f"/v1/artifacts/{art_id}/onlyoffice/session?native_user_id=user-123", headers=headers
+    )
     assert resp.status_code == 200
     res_data = resp.json()
     assert res_data["onlyoffice_url"] == "https://onlyoffice.test"

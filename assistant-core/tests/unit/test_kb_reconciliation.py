@@ -280,7 +280,9 @@ def test_fetch_all_kb_metadata_and_hashes_discovers_oikb_files() -> None:
     transport = httpx.MockTransport(mock_handler)
     with patch(
         "assistant_core.files.client.httpx.Client",
-        side_effect=lambda **kwargs: real_client_cls(transport=transport, timeout=kwargs.get("timeout")),
+        side_effect=lambda **kwargs: real_client_cls(
+            transport=transport, timeout=kwargs.get("timeout")
+        ),
     ):
         fids, hashes, fnames = fetch_all_kb_metadata_and_hashes(
             base_url="http://open-webui:8080",
@@ -345,7 +347,9 @@ def test_fetch_all_kb_metadata_dict_items() -> None:
     transport = httpx.MockTransport(mock_handler)
     with patch(
         "assistant_core.files.client.httpx.Client",
-        side_effect=lambda **kwargs: real_client_cls(transport=transport, timeout=kwargs.get("timeout")),
+        side_effect=lambda **kwargs: real_client_cls(
+            transport=transport, timeout=kwargs.get("timeout")
+        ),
     ):
         fids, hashes, fnames = fetch_all_kb_metadata_and_hashes(
             base_url="http://open-webui:8080",
@@ -409,7 +413,9 @@ def test_fetch_all_kb_metadata_excludes_manual_chat_uploads() -> None:
     transport = httpx.MockTransport(mock_handler)
     with patch(
         "assistant_core.files.client.httpx.Client",
-        side_effect=lambda **kwargs: real_client_cls(transport=transport, timeout=kwargs.get("timeout")),
+        side_effect=lambda **kwargs: real_client_cls(
+            transport=transport, timeout=kwargs.get("timeout")
+        ),
     ):
         fids, hashes, fnames = fetch_all_kb_metadata_and_hashes(
             base_url="http://open-webui:8080",

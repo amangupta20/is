@@ -179,4 +179,3 @@ def test_get_consolidation_run_not_found() -> None:
     resp = client.get(f"/v1/admin/consolidation-runs/{uuid.uuid4()}")
 
     assert resp.status_code == 404
-

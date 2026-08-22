@@ -60,7 +60,9 @@ class XlsxGenerator:
                     cell = ws.cell(row=1, column=col_idx)
                     cell.fill = HEADER_FILL
                     cell.font = HEADER_FONT
-                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                    cell.alignment = Alignment(
+                        horizontal="center", vertical="center", wrap_text=True
+                    )
                     cell.border = THIN_BORDER
                 ws.row_dimensions[1].height = 28
 
@@ -108,10 +110,14 @@ class XlsxGenerator:
                     if c_idx == 0:
                         totals.append("Total")
                     elif col_type in ("currency", "integer", "float") or any(
-                        isinstance(r[c_idx], (int, float)) for r in sheet_spec.rows if len(r) > c_idx
+                        isinstance(r[c_idx], (int, float))
+                        for r in sheet_spec.rows
+                        if len(r) > c_idx
                     ):
                         col_letter = get_column_letter(c_idx + 1)
-                        totals.append(f"=SUM({col_letter}{start_data_row}:{col_letter}{end_data_row})")
+                        totals.append(
+                            f"=SUM({col_letter}{start_data_row}:{col_letter}{end_data_row})"
+                        )
                     else:
                         totals.append("")
 
@@ -142,7 +148,11 @@ class XlsxGenerator:
                 col_letter = get_column_letter(int(col[0].column))
                 for cell in col:
                     val_str = str(cell.value or "")
-                    if cell.number_format and "0.00" in cell.number_format and isinstance(cell.value, (int, float)):
+                    if (
+                        cell.number_format
+                        and "0.00" in cell.number_format
+                        and isinstance(cell.value, (int, float))
+                    ):
                         val_str = f"${cell.value:,.2f}"
                     max_len = max(max_len, len(val_str))
                 ws.column_dimensions[col_letter].width = max(max_len + 4, 12)

@@ -49,7 +49,11 @@ class _DirectMemorySession:
         self.statements.append(statement)
         sql = str(statement).lower()
         if "user_identity" in sql and "select" in sql:
-            if "user_identity.id \nfrom" in sql or "user_identity.id\nfrom" in sql or "user_identity.id from" in sql:
+            if (
+                "user_identity.id \nfrom" in sql
+                or "user_identity.id\nfrom" in sql
+                or "user_identity.id from" in sql
+            ):
                 return _FakeResult(scalar=self.user_id, rows=[self.user_id])
             return _FakeResult(scalar=UserIdentity(id=self.user_id, native_user_id="user-1"))
         if "memory_record" in sql and "select" in sql:

@@ -620,9 +620,7 @@ async def update_memory(
 
         prev_snap = _memory_snapshot(record)
         user_identity = (
-            await session.execute(
-                select(UserIdentity).where(UserIdentity.id == record.user_id)
-            )
+            await session.execute(select(UserIdentity).where(UserIdentity.id == record.user_id))
         ).scalar_one_or_none()
         native_user_id = user_identity.native_user_id if user_identity else "admin"
 
@@ -687,9 +685,7 @@ async def delete_memory(memory_id: uuid.UUID, request: Request) -> dict[str, str
 
         prev_snap = _memory_snapshot(record)
         user_identity = (
-            await session.execute(
-                select(UserIdentity).where(UserIdentity.id == record.user_id)
-            )
+            await session.execute(select(UserIdentity).where(UserIdentity.id == record.user_id))
         ).scalar_one_or_none()
         native_user_id = user_identity.native_user_id if user_identity else "admin"
 
@@ -1189,7 +1185,11 @@ async def list_admin_artifacts(
 async def delete_admin_artifact(artifact_id: uuid.UUID, request: Request) -> dict[str, Any]:
     """Soft delete an artifact from the admin dashboard."""
     async with request.app.state.session_factory() as session:
-        stmt = update(Artifact).where(Artifact.id == artifact_id).values(tombstoned_at=datetime.now(UTC))
+        stmt = (
+            update(Artifact)
+            .where(Artifact.id == artifact_id)
+            .values(tombstoned_at=datetime.now(UTC))
+        )
         res = await session.execute(stmt)
         await session.commit()
         if not res.rowcount:
@@ -1197,8 +1197,12 @@ async def delete_admin_artifact(artifact_id: uuid.UUID, request: Request) -> dic
         return {"status": "deleted", "artifact_id": str(artifact_id)}
 
 
-@router.post("/artifacts/{artifact_id}/onlyoffice/session", dependencies=[Depends(require_admin_session)])
-async def create_admin_onlyoffice_session(artifact_id: uuid.UUID, request: Request) -> dict[str, Any]:
+@router.post(
+    "/artifacts/{artifact_id}/onlyoffice/session", dependencies=[Depends(require_admin_session)]
+)
+async def create_admin_onlyoffice_session(
+    artifact_id: uuid.UUID, request: Request
+) -> dict[str, Any]:
     """Create an OnlyOffice editor session from the admin dashboard."""
     settings = request.app.state.settings
     async with request.app.state.session_factory() as session:
@@ -1360,9 +1364,7 @@ async def get_consolidation_run(run_id: uuid.UUID, request: Request) -> dict[str
     """Get single consolidation run by ID with full diff details."""
     async with request.app.state.session_factory() as session:
         run = (
-            await session.execute(
-                select(ConsolidationRun).where(ConsolidationRun.id == run_id)
-            )
+            await session.execute(select(ConsolidationRun).where(ConsolidationRun.id == run_id))
         ).scalar_one_or_none()
 
         if run is None:
@@ -1393,9 +1395,7 @@ async def revert_consolidation_run_item(
     """Revert a single decision item from a historical consolidation run."""
     async with request.app.state.session_factory() as session:
         try:
-            result = await revert_consolidation_item(
-                session, run_id=run_id, item_index=item_index
-            )
+            result = await revert_consolidation_item(session, run_id=run_id, item_index=item_index)
             await session.commit()
             return result
         except ValueError as exc:
@@ -1470,15 +1470,9 @@ async def trigger_kb_reconciliation(request: Request) -> dict[str, Any]:
     """Trigger immediate on-demand Knowledge Base document reconciliation."""
     settings = request.app.state.settings
     api_key = (
-        settings.open_webui_api_key.get_secret_value()
-        if settings.open_webui_api_key
-        else None
+        settings.open_webui_api_key.get_secret_value() if settings.open_webui_api_key else None
     )
-    oikb_api_key = (
-        settings.oikb_api_key.get_secret_value()
-        if settings.oikb_api_key
-        else None
-    )
+    oikb_api_key = settings.oikb_api_key.get_secret_value() if settings.oikb_api_key else None
 
     async with request.app.state.session_factory() as session:
         run = await reconcile_and_log_kb_documents(
@@ -1627,14 +1621,18 @@ async def compile_admin_topic_episodes(
         if body.native_chat_id:
             user_row = (
                 await session.execute(
-                    select(UserIdentity.id).where(UserIdentity.native_user_id == body.native_user_id)
+                    select(UserIdentity.id).where(
+                        UserIdentity.native_user_id == body.native_user_id
+                    )
                 )
             ).scalar_one_or_none()
             if user_row is None:
                 raise HTTPException(status_code=404, detail="user not found")
             chats = [(user_row, body.native_user_id or "user-1", body.native_chat_id)]
         else:
-            chats = await detect_inactive_chats_for_compilation(session, inactivity_hours=0.0, limit=10)
+            chats = await detect_inactive_chats_for_compilation(
+                session, inactivity_hours=0.0, limit=10
+            )
 
         if not chats:
             return {"status": "no_eligible_chats", "compiled_count": 0, "duration_ms": 0.0}
@@ -1667,7 +1665,9 @@ async def compile_admin_topic_episodes(
             try:
                 extractions = await extractor.extract_episodes(turn_inputs)
             except Exception as exc:  # noqa: BLE001
-                LOGGER.warning("admin_compile_episodes_failed", chat_id=native_chat_id, error=str(exc))
+                LOGGER.warning(
+                    "admin_compile_episodes_failed", chat_id=native_chat_id, error=str(exc)
+                )
                 continue
 
             for ext in extractions:
@@ -1720,7 +1720,6 @@ async def delete_admin_topic_episode(episode_id: uuid.UUID, request: Request) ->
     return {"status": "deleted", "id": str(episode_id)}
 
 
-
 @router.post("/playground/search", dependencies=[Depends(require_admin_session)])
 async def playground_search(body: PlaygroundSearchRequest, request: Request) -> dict[str, Any]:
     """Execute hybrid or filtered search for dashboard inspection and prompt preview."""
@@ -1766,7 +1765,6 @@ async def playground_search(body: PlaygroundSearchRequest, request: Request) -> 
                 query_embedding=query_embedding,
                 limit=body.limit,
             )
-
 
         profile_snapshot = await get_or_create_profile(
             session,
@@ -1857,7 +1855,6 @@ async def playground_search(body: PlaygroundSearchRequest, request: Request) -> 
             }
         )
 
-
     ranked.sort(key=lambda item: -item["rrf_score"])
     selected = ranked[: body.limit]
     duration_ms = round((perf_counter() - started_at) * 1000, 2)
@@ -1881,7 +1878,11 @@ async def playground_search(body: PlaygroundSearchRequest, request: Request) -> 
                 )
             elif item["source_type"] == "episode":
                 meta = item["metadata"]
-                dec_str = f" | Decisions: {'; '.join(meta.get('decisions_made', []))}" if meta.get('decisions_made') else ""
+                dec_str = (
+                    f" | Decisions: {'; '.join(meta.get('decisions_made', []))}"
+                    if meta.get("decisions_made")
+                    else ""
+                )
                 context_lines.append(
                     f"- [Topic Episode #{idx}] ({meta.get('title')}, {item['category']}): {item['statement']}{dec_str}"
                 )

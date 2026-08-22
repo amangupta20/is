@@ -65,9 +65,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_user_identity")),
-        sa.UniqueConstraint(
-            "native_user_id", name=op.f("uq_user_identity_native_user_id")
-        ),
+        sa.UniqueConstraint("native_user_id", name=op.f("uq_user_identity_native_user_id")),
         schema="assistant_core",
     )
     op.create_table(

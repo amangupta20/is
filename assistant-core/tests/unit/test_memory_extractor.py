@@ -159,6 +159,8 @@ def test_extractor_includes_assistant_content_and_file_context() -> None:
     assert len(candidates) == 1
     assert candidates[0].key == "infra.supabase_backup"
     assert "[User Prompt]:\nHow should we handle database backup?" in captured_prompt
-    assert "[Assistant Response]:\nI recommend Dokploy native backups for scheduled postgres dumps." in captured_prompt
+    assert (
+        "[Assistant Response]:\nI recommend Dokploy native backups for scheduled postgres dumps."
+        in captured_prompt
+    )
     assert "[Attached File Context / Excerpts]:\n--- Document: infra_spec.md ---" in captured_prompt
-

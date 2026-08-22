@@ -78,8 +78,12 @@ async def create_artifact(
             artifact, _version = await repo.create_artifact(request_data)
             await session.commit()
             base_url = str(request.base_url)
-            public_base = getattr(getattr(request.app.state, "settings", None), "public_base_url", None)
-            return _serialize_artifact(artifact, request_data.native_user_id, base_url, public_base_url=public_base)
+            public_base = getattr(
+                getattr(request.app.state, "settings", None), "public_base_url", None
+            )
+            return _serialize_artifact(
+                artifact, request_data.native_user_id, base_url, public_base_url=public_base
+            )
         except Exception as exc:
             await session.rollback()
             raise HTTPException(
@@ -111,7 +115,9 @@ async def get_artifact_details(
 async def download_artifact(
     artifact_id: uuid.UUID,
     request: Request,
-    v: Annotated[int | None, Query(description="Specific version number; defaults to current")] = None,
+    v: Annotated[
+        int | None, Query(description="Specific version number; defaults to current")
+    ] = None,
 ) -> Response:
     """Download the binary file for an artifact directly from PostgreSQL."""
     async with request.app.state.session_factory() as session:
@@ -121,9 +127,14 @@ async def download_artifact(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
 
         target_version_num = v if v is not None else art.current_version_num
-        target_v = next((ver for ver in art.versions if ver.version_num == target_version_num), None)
+        target_v = next(
+            (ver for ver in art.versions if ver.version_num == target_version_num), None
+        )
         if not target_v:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {target_version_num} not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Version {target_version_num} not found",
+            )
 
         ext = art.artifact_type
         filename = f"{art.slug}-v{target_v.version_num}.{ext}"
@@ -168,8 +179,12 @@ async def revise_artifact(
             artifact, _version = await repo.add_version(artifact_id, request_data)
             await session.commit()
             base_url = str(request.base_url)
-            public_base = getattr(getattr(request.app.state, "settings", None), "public_base_url", None)
-            return _serialize_artifact(artifact, request_data.native_user_id, base_url, public_base_url=public_base)
+            public_base = getattr(
+                getattr(request.app.state, "settings", None), "public_base_url", None
+            )
+            return _serialize_artifact(
+                artifact, request_data.native_user_id, base_url, public_base_url=public_base
+            )
         except Exception as exc:
             await session.rollback()
             raise HTTPException(
@@ -201,7 +216,9 @@ async def open_onlyoffice_session(
 
         target_v = next((v for v in art.versions if v.version_num == art.current_version_num), None)
         if not target_v:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Active version not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Active version not found"
+            )
 
         manager = OnlyOfficeManager(session, repo, settings)
         base_url = str(request.base_url)
@@ -230,7 +247,9 @@ async def handle_onlyoffice_callback(
     async with request.app.state.session_factory() as session:
         repo = ArtifactRepository(session)
         manager = OnlyOfficeManager(session, repo, settings)
-        res = await manager.handle_callback(artifact_id=artifact_id, session_key=key, payload=payload)
+        res = await manager.handle_callback(
+            artifact_id=artifact_id, session_key=key, payload=payload
+        )
         await session.commit()
         return res
 
@@ -249,6 +268,8 @@ async def delete_artifact(
         success = await repo.tombstone_artifact(artifact_id, user.id)
         if not success:
             await session.rollback()
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found or unauthorized")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found or unauthorized"
+            )
         await session.commit()
         return {"status": "deleted", "artifact_id": str(artifact_id)}

@@ -16,14 +16,14 @@ from assistant_core.artifacts.schemas import PresentationSpec, SlideLayout, Slid
 # Theme palettes
 THEMES: dict[str, dict[str, RGBColor]] = {
     "slate": {
-        "dark_bg": RGBColor(15, 23, 42),      # Slate 900
+        "dark_bg": RGBColor(15, 23, 42),  # Slate 900
         "light_bg": RGBColor(248, 250, 252),  # Slate 50
-        "card_bg": RGBColor(241, 245, 249),   # Slate 100
-        "card_border": RGBColor(203, 213, 225), # Slate 300
-        "primary_text": RGBColor(15, 23, 42), # Slate 900
-        "secondary_text": RGBColor(71, 85, 105), # Slate 600
-        "muted_text": RGBColor(148, 163, 184), # Slate 400
-        "accent": RGBColor(59, 130, 246),     # Blue 500
+        "card_bg": RGBColor(241, 245, 249),  # Slate 100
+        "card_border": RGBColor(203, 213, 225),  # Slate 300
+        "primary_text": RGBColor(15, 23, 42),  # Slate 900
+        "secondary_text": RGBColor(71, 85, 105),  # Slate 600
+        "muted_text": RGBColor(148, 163, 184),  # Slate 400
+        "accent": RGBColor(59, 130, 246),  # Blue 500
         "white": RGBColor(255, 255, 255),
     },
     "navy": {
@@ -150,15 +150,17 @@ class PptxGenerator:
 
             # Paint background for content slide according to theme
             bg_color = theme_colors["dark_bg"] if spec.theme == "dark" else theme_colors["light_bg"]
-            bg = slide.shapes.add_shape(
-                MSO_SHAPE.RECTANGLE, 0, 0, Inches(13.333), Inches(7.5)
-            )
+            bg = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, Inches(13.333), Inches(7.5))
             bg.fill.solid()
             bg.fill.fore_color.rgb = bg_color
             bg.line.color.rgb = bg_color
 
             PptxGenerator._render_header(
-                slide, slide_spec.title, slide_spec.subtitle, slide_num=s_idx + 2, theme=theme_colors
+                slide,
+                slide_spec.title,
+                slide_spec.subtitle,
+                slide_num=s_idx + 2,
+                theme=theme_colors,
             )
 
             layout = _infer_layout(slide_spec)
@@ -515,7 +517,9 @@ class PptxGenerator:
             "line": XL_CHART_TYPE.LINE,
             "pie": XL_CHART_TYPE.PIE,
         }
-        xl_type = chart_type_map.get(slide_spec.chart_type or "column", XL_CHART_TYPE.COLUMN_CLUSTERED)
+        xl_type = chart_type_map.get(
+            slide_spec.chart_type or "column", XL_CHART_TYPE.COLUMN_CLUSTERED
+        )
 
         chart_data = CategoryChartData()
         categories = slide_spec.chart_categories or ["Category 1", "Category 2", "Category 3"]

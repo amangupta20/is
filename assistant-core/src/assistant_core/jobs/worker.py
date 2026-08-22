@@ -387,22 +387,14 @@ async def _handle_consolidate_memories(
     )
 
 
-async def _handle_reconcile_kb_files(
-    session: AsyncSession, payload: dict[str, JsonValue]
-) -> None:
+async def _handle_reconcile_kb_files(session: AsyncSession, payload: dict[str, JsonValue]) -> None:
     """Reconcile active Knowledge Base files against Assistant Core Document Store."""
     settings = get_settings()
     trigger = str(payload.get("trigger") or "worker_hourly")
     api_key = (
-        settings.open_webui_api_key.get_secret_value()
-        if settings.open_webui_api_key
-        else None
+        settings.open_webui_api_key.get_secret_value() if settings.open_webui_api_key else None
     )
-    oikb_api_key = (
-        settings.oikb_api_key.get_secret_value()
-        if settings.oikb_api_key
-        else None
-    )
+    oikb_api_key = settings.oikb_api_key.get_secret_value() if settings.oikb_api_key else None
     await reconcile_and_log_kb_documents(
         session,
         base_url=settings.open_webui_url,
@@ -414,9 +406,7 @@ async def _handle_reconcile_kb_files(
     )
 
 
-async def enqueue_reconcile_kb_job(
-    session: AsyncSession, trigger: str = "worker_hourly"
-) -> int:
+async def enqueue_reconcile_kb_job(session: AsyncSession, trigger: str = "worker_hourly") -> int:
     """Enqueue periodic KB reconciliation job."""
     hourly_key = f"reconcile_kb:{datetime.now(UTC).strftime('%Y-%m-%d-%H')}"
     res = await session.execute(
@@ -598,6 +588,8 @@ async def _handle_index_file(session: AsyncSession, payload: dict[str, JsonValue
         embedded_count=embedded_count,
         duration_ms=round(duration_ms, 2),
     )
+
+
 async def _handle_compile_topic_episodes(
     session: AsyncSession, payload: dict[str, JsonValue]
 ) -> None:
@@ -702,8 +694,6 @@ async def enqueue_inactive_chat_episode_jobs(
     return enqueued
 
 
-
-
 async def handle(
     session: AsyncSession,
     kind: str,
@@ -796,7 +786,9 @@ async def run_worker(stop_event: asyncio.Event | None = None) -> None:
             consolidation_count = await enqueue_daily_consolidation_jobs(session)
             kb_reconcile_count = await enqueue_reconcile_kb_job(session)
             await session.commit()
-            episodes_enqueued = await enqueue_inactive_chat_episode_jobs(session, inactivity_hours=3.0)
+            episodes_enqueued = await enqueue_inactive_chat_episode_jobs(
+                session, inactivity_hours=3.0
+            )
         LOGGER.info(
             "worker_startup_jobs_enqueued",
             conversation_backfill=backfill_count,

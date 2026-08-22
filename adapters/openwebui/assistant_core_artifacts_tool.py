@@ -361,3 +361,52 @@ class Tools:
             return f"Failed to generate presentation '{title}': {detail}"
         except Exception as exc:  # noqa: BLE001
             return f"Failed to generate presentation '{title}': {exc}"
+
+    async def create_pdf(
+        self,
+        title: str,
+        sections_json: str,
+        subtitle: str = "",
+        theme: str = "slate",
+        __user__: dict | None = None,
+        __metadata__: dict | None = None,
+        __request__: object | None = None,
+    ) -> str:
+        """Create a styled publication-ready PDF document (.pdf) with typography, callouts, images, and data tables.
+        sections_json: JSON array of sections: [{"heading": "Sec 1", "level": 1, "paragraphs": ["..."], "bullets": ["..."], "callout": "...", "image_url": "https://...", "image_caption": "Figure 1", "table": {"headers": ["A", "B"], "rows": [["1", "2"]]}}]
+        theme: Color theme preset ('slate', 'navy', 'emerald', 'crimson', 'dark').
+        """
+        try:
+            native_user_id = self._optional_id(__user__, "id") or "unknown"
+            folder_id, project_id = self._extract_scope_ids(__metadata__)
+            sections_data = json.loads(sections_json) if isinstance(sections_json, str) else sections_json
+            payload = {
+                "native_user_id": native_user_id,
+                "title": title.strip(),
+                "artifact_type": "pdf",
+                "native_project_id": project_id,
+                "native_folder_id": folder_id,
+                "document_spec": {
+                    "title": title.strip(),
+                    "subtitle": subtitle.strip() or None,
+                    "theme": theme if theme in ("slate", "navy", "emerald", "crimson", "dark") else "slate",
+                    "sections": sections_data if isinstance(sections_data, list) else [sections_data],
+                },
+                "change_summary": "Generated PDF document",
+            }
+            res = await self._signed_json_post("/v1/artifacts/create", payload)
+            if not isinstance(res, dict):
+                return self._UNAVAILABLE
+
+            return await self._format_result(
+                title=title.strip(), ext="pdf", icon="📕", res=res, user=__user__, request=__request__
+            )
+        except httpx.HTTPStatusError as exc:
+            try:
+                detail = exc.response.json().get("detail", exc.response.text)
+            except (ValueError, KeyError, AttributeError):
+                detail = exc.response.text or str(exc)
+            return f"Failed to generate PDF '{title}': {detail}"
+        except Exception as exc:  # noqa: BLE001
+            return f"Failed to generate PDF '{title}': {exc}"
+

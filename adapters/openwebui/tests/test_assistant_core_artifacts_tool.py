@@ -195,3 +195,42 @@ def test_create_presentation_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "PPTX Created" in result
     assert "Pitch Deck.pptx" in result
     assert "/api/v1/files/owui-file-999/content" in result
+
+
+def test_create_pdf_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+    tools = module.Tools()
+    tools.valves.hmac_secret = "test-secret"
+    tools.valves.open_webui_url = "http://localhost:8080"
+    tools.valves.open_webui_api_key = "test-owui-key"
+
+    capture: dict[str, Any] = {}
+    mock_resp = {
+        "id": "55555555-5555-5555-5555-555555555555",
+        "current_version_num": 1,
+        "base64_data": "JVBERi0xLjQK",
+        "mime_type": "application/pdf",
+        "download_url": "http://assistant-core:8080/v1/artifacts/55555555-5555-5555-5555-555555555555/download",
+    }
+
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: _RecordingClient(capture, kwargs.get("timeout", 10.0), mock_resp),
+    )
+
+    sections_json = json.dumps([{"heading": "Executive Summary", "paragraphs": ["All systems normal."]}])
+    result = asyncio.run(
+        tools.create_pdf(
+            title="Whitepaper",
+            sections_json=sections_json,
+            subtitle="Confidential",
+            theme="navy",
+            __user__={"id": "user-123", "token": "user-token-abc"},
+        )
+    )
+
+    assert "PDF Created" in result
+    assert "Whitepaper.pdf" in result
+    assert "/api/v1/files/owui-file-999/content" in result
+

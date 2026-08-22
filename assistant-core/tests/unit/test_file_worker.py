@@ -140,4 +140,3 @@ def test_fetch_openwebui_file_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result[0] == "guidelines.pdf"
     assert result[1] == "application/pdf"
     assert result[2] == "Extracted PDF text content"
-

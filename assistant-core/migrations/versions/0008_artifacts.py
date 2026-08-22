@@ -140,9 +140,15 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Drop artifact and OnlyOffice session tables."""
     op.execute(sa.text("SET search_path TO assistant_core, extensions, public"))
-    op.drop_index("ix_onlyoffice_sessions_session_key", table_name="onlyoffice_sessions", schema="assistant_core")
+    op.drop_index(
+        "ix_onlyoffice_sessions_session_key",
+        table_name="onlyoffice_sessions",
+        schema="assistant_core",
+    )
     op.drop_table("onlyoffice_sessions", schema="assistant_core")
-    op.drop_index("ix_artifact_versions_artifact_id", table_name="artifact_versions", schema="assistant_core")
+    op.drop_index(
+        "ix_artifact_versions_artifact_id", table_name="artifact_versions", schema="assistant_core"
+    )
     op.drop_table("artifact_versions", schema="assistant_core")
     op.drop_index("ix_artifacts_user_tombstone", table_name="artifacts", schema="assistant_core")
     op.drop_table("artifacts", schema="assistant_core")

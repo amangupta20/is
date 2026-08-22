@@ -73,7 +73,11 @@ async def test_artifact_repository_create_and_revise(tmp_path: Path) -> None:
         artifact_type="xlsx",
         workbook_spec=WorkbookSpec(
             title="Q3 Model",
-            sheets=[SheetSpec(name="Data", headers=["Item", "Cost"], rows=[["Servers", 500]], totals_row=True)],
+            sheets=[
+                SheetSpec(
+                    name="Data", headers=["Item", "Cost"], rows=[["Servers", 500]], totals_row=True
+                )
+            ],
         ),
         change_summary="Initial commit",
     )
@@ -94,7 +98,14 @@ async def test_artifact_repository_create_and_revise(tmp_path: Path) -> None:
         native_user_id="user-123",
         workbook_spec=WorkbookSpec(
             title="Q3 Model v2",
-            sheets=[SheetSpec(name="Data", headers=["Item", "Cost"], rows=[["Servers", 500], ["DB", 300]], totals_row=True)],
+            sheets=[
+                SheetSpec(
+                    name="Data",
+                    headers=["Item", "Cost"],
+                    rows=[["Servers", 500], ["DB", 300]],
+                    totals_row=True,
+                )
+            ],
         ),
         change_summary="Added DB",
     )
@@ -104,3 +115,35 @@ async def test_artifact_repository_create_and_revise(tmp_path: Path) -> None:
     assert len(ver2.binary_data) > 0
     if ver2.storage_path:
         assert Path(ver2.storage_path).exists()
+
+
+@pytest.mark.anyio
+async def test_artifact_repository_create_pdf(tmp_path: Path) -> None:
+    from assistant_core.artifacts.schemas import DocumentSectionSpec, DocumentSpec
+
+    user = UserIdentity(id=uuid.uuid4(), native_user_id="user-123")
+    storage = LocalStorageBackend(base_dir=str(tmp_path))
+
+    session = RecordingSession(values=[user])
+    repo = ArtifactRepository(session, storage)  # type: ignore[arg-type]
+
+    create_req = CreateArtifactRequest(
+        native_user_id="user-123",
+        title="Architecture Decision Record",
+        artifact_type="pdf",
+        document_spec=DocumentSpec(
+            title="Architecture Decision Record",
+            sections=[
+                DocumentSectionSpec(
+                    heading="Section 1",
+                    paragraphs=["Paragraph text"],
+                )
+            ],
+        ),
+        change_summary="Initial PDF creation",
+    )
+    art, ver1 = await repo.create_artifact(create_req)
+    assert art.title == "Architecture Decision Record"
+    assert art.artifact_type == "pdf"
+    assert ver1.binary_data.startswith(b"%PDF-")
+    assert ver1.mime_type == "application/pdf"

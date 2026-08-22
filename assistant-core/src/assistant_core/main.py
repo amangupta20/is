@@ -61,4 +61,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             response = FileResponse(str(UI_DIR / "index.html"))
             response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             return response
+
     return app
