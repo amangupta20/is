@@ -1,6 +1,7 @@
 """OnlyOffice Document Server integration, signed configuration, and save callbacks."""
 
 import hashlib
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -13,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from assistant_core.artifacts.models import Artifact, ArtifactVersion, OnlyOfficeSession
 from assistant_core.artifacts.repository import ArtifactRepository
 from assistant_core.config import Settings
+
+logger = logging.getLogger(__name__)
 
 DOCUMENT_TYPE_MAP = {
     "docx": "word",
@@ -36,6 +39,18 @@ class OnlyOfficeManager:
         self.session = session
         self.repo = repo
         self.settings = settings
+
+    def verify_callback_jwt(self, token: str) -> dict[str, Any]:
+        """Verify and decode OnlyOffice JWT token using configured secret."""
+        if not self.settings.onlyoffice_jwt_secret:
+            raise ValueError("OnlyOffice JWT secret is not configured")
+        secret = self.settings.onlyoffice_jwt_secret.get_secret_value()
+        decoded = jwt.decode(token, secret, algorithms=["HS256"])
+        if isinstance(decoded, dict):
+            if "payload" in decoded and isinstance(decoded["payload"], dict):
+                return decoded["payload"]
+            return decoded
+        return {}
 
     async def create_editor_session(
         self,
@@ -116,16 +131,7 @@ class OnlyOfficeManager:
         session_key: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        """Handle Document Server save webhook (status=2 or status=6)."""
-        status = payload.get("status")
-        # Status 2 = ready for saving, 6 = force save
-        if status not in (2, 6):
-            return {"error": 0, "status": "acknowledged"}
-
-        download_url = payload.get("url")
-        if not download_url:
-            return {"error": 1, "message": "Missing download url in callback"}
-
+        """Handle Document Server save/status webhook."""
         # Look up session
         stmt = select(OnlyOfficeSession).where(
             OnlyOfficeSession.artifact_id == artifact_id,
@@ -136,25 +142,75 @@ class OnlyOfficeManager:
         if not oo_session:
             return {"error": 1, "message": "Invalid session key"}
 
-        # Download binary from Document Server
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(download_url)
-            if resp.status_code != 200:
-                return {
-                    "error": 1,
-                    "message": f"Failed to download edited document: status {resp.status_code}",
-                }
-            edited_bytes = resp.content
+        status = payload.get("status")
 
-        # Save new immutable version
-        _, new_version = await self.repo.add_raw_binary_version(
-            artifact_id=artifact_id,
-            user_id=oo_session.user_id,
-            raw_data=edited_bytes,
-            change_summary="OnlyOffice Web Edit",
-        )
+        # Status 1: Document is being edited
+        if status == 1:
+            oo_session.status = "editing"
+            await self.session.flush()
+            return {"error": 0, "status": "editing"}
 
-        oo_session.status = "saved"
-        await self.session.flush()
+        # Status 4: Document is closed with no changes
+        if status == 4:
+            oo_session.status = "closed"
+            await self.session.flush()
+            return {"error": 0, "status": "closed"}
 
-        return {"error": 0, "saved_version": new_version.version_num}
+        # Status 3: Saving error (non-destructive)
+        if status == 3:
+            logger.warning(
+                "OnlyOffice document saving error for artifact %s, session %s: %s",
+                artifact_id,
+                session_key,
+                payload,
+            )
+            oo_session.status = "error"
+            await self.session.flush()
+            return {"error": 0, "status": "error_recorded"}
+
+        # Status 2 (Ready for saving) or Status 6 (Force save)
+        if status in (2, 6):
+            download_url = payload.get("url")
+            if not download_url:
+                oo_session.status = "error"
+                await self.session.flush()
+                return {"error": 1, "message": "Missing download url in callback"}
+
+            # Download binary from Document Server
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(download_url)
+                if resp.status_code != 200 or not resp.content:
+                    oo_session.status = "error"
+                    await self.session.flush()
+                    return {
+                        "error": 1,
+                        "message": f"Failed to download edited document: status {resp.status_code}",
+                    }
+                edited_bytes = resp.content
+
+            # Save new immutable version
+            _, new_version = await self.repo.add_raw_binary_version(
+                artifact_id=artifact_id,
+                user_id=oo_session.user_id,
+                raw_data=edited_bytes,
+                change_summary="OnlyOffice Web Edit",
+            )
+
+            oo_session.status = "saved"
+            await self.session.flush()
+
+            return {"error": 0, "saved_version": new_version.version_num}
+
+        # Status 7: Corrupted force save error
+        if status == 7:
+            logger.warning(
+                "OnlyOffice document force save error for artifact %s, session %s: %s",
+                artifact_id,
+                session_key,
+                payload,
+            )
+            oo_session.status = "error"
+            await self.session.flush()
+            return {"error": 0, "status": "error_recorded"}
+
+        return {"error": 0, "status": "acknowledged"}

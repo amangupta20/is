@@ -1,10 +1,12 @@
 """API endpoints for managing and generating versioned documents and spreadsheets."""
 
 import base64
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 
 from assistant_core.api.dependencies import require_adapter_signature
@@ -235,20 +237,72 @@ async def open_onlyoffice_session(
         }
 
 
+@router.post("/{artifact_id}/onlyoffice/callback")
 @router.post("/onlyoffice/callback")
 async def handle_onlyoffice_callback(
-    payload: dict[str, Any],
     request: Request,
-    artifact_id: Annotated[uuid.UUID, Query()],
-    key: Annotated[str, Query()],
+    artifact_id: uuid.UUID | None = None,
+    key: Annotated[str | None, Query()] = None,
+    query_artifact_id: Annotated[uuid.UUID | None, Query(alias="artifact_id")] = None,
 ) -> dict[str, Any]:
-    """Callback webhook invoked by OnlyOffice Document Server upon save/close."""
+    """Callback webhook invoked by OnlyOffice Document Server upon save/close/editing."""
+    target_artifact_id = artifact_id or query_artifact_id
+    if not target_artifact_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing artifact_id in path or query parameters",
+        )
+
+    try:
+        raw_payload = await request.json()
+        payload = raw_payload if isinstance(raw_payload, dict) else {}
+    except (json.JSONDecodeError, ValueError):
+        payload = {}
+
     settings = request.app.state.settings
     async with request.app.state.session_factory() as session:
         repo = ArtifactRepository(session)
         manager = OnlyOfficeManager(session, repo, settings)
+
+        # Enforce JWT validation if secret is configured
+        if settings.onlyoffice_jwt_secret:
+            auth_header = request.headers.get("authorization")
+            token: str | None = None
+            if auth_header and auth_header.startswith("Bearer "):
+                token = auth_header.removeprefix("Bearer ").strip()
+            elif payload.get("token"):
+                token = str(payload["token"])
+
+            if not token:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Missing OnlyOffice JWT authorization token",
+                )
+
+            try:
+                verified = manager.verify_callback_jwt(token)
+                if isinstance(verified, dict) and "status" in verified:
+                    payload = verified
+            except jwt.PyJWTError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"Invalid OnlyOffice JWT signature: {exc}",
+                ) from exc
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"OnlyOffice JWT verification failed: {exc}",
+                ) from exc
+
+        session_key = key or payload.get("key")
+        if not session_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing session key",
+            )
+
         res = await manager.handle_callback(
-            artifact_id=artifact_id, session_key=key, payload=payload
+            artifact_id=target_artifact_id, session_key=session_key, payload=payload
         )
         await session.commit()
         return res
