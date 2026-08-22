@@ -155,7 +155,9 @@ class Tools:
                         if res.status_code in (200, 201):
                             data = res.json()
                             file_id = data.get("id") or (
-                                data.get("file", {}).get("id") if isinstance(data.get("file"), dict) else None
+                                data.get("file", {}).get("id")
+                                if isinstance(data.get("file"), dict)
+                                else None
                             )
                             if file_id:
                                 return f"/api/v1/files/{file_id}/content", None
@@ -199,7 +201,9 @@ class Tools:
         if not download_link:
             raw_dl = res.get("download_url") or f"/v1/artifacts/{art_id}/download"
             if self.valves.public_assistant_url:
-                download_link = f"{self.valves.public_assistant_url.rstrip('/')}/v1/artifacts/{art_id}/download"
+                download_link = (
+                    f"{self.valves.public_assistant_url.rstrip('/')}/v1/artifacts/{art_id}/download"
+                )
             else:
                 download_link = raw_dl
 
@@ -209,6 +213,8 @@ class Tools:
             f"- **Download**: [⬇️ Download `{filename}`]({download_link})",
             f"- **Artifact ID**: `{art_id}`",
         ]
+        if res.get("onlyoffice_url"):
+            lines.append(f"- **OnlyOffice**: [Open Document Editor]({res['onlyoffice_url']})")
         if not download_link.startswith("/api/v1/files/") and upload_err:
             lines.append("")
             lines.append(f"*(Open WebUI File Store note: {upload_err})*")
@@ -247,7 +253,12 @@ class Tools:
                 return self._UNAVAILABLE
 
             return await self._format_result(
-                title=title.strip(), ext="xlsx", icon="📊", res=res, user=__user__, request=__request__
+                title=title.strip(),
+                ext="xlsx",
+                icon="📊",
+                res=res,
+                user=__user__,
+                request=__request__,
             )
         except httpx.HTTPStatusError as exc:
             try:
@@ -275,7 +286,9 @@ class Tools:
         try:
             native_user_id = self._optional_id(__user__, "id") or "unknown"
             folder_id, project_id = self._extract_scope_ids(__metadata__)
-            sections_data = json.loads(sections_json) if isinstance(sections_json, str) else sections_json
+            sections_data = (
+                json.loads(sections_json) if isinstance(sections_json, str) else sections_json
+            )
             payload = {
                 "native_user_id": native_user_id,
                 "title": title.strip(),
@@ -285,8 +298,12 @@ class Tools:
                 "document_spec": {
                     "title": title.strip(),
                     "subtitle": subtitle.strip() or None,
-                    "theme": theme if theme in ("slate", "navy", "emerald", "crimson", "dark") else "slate",
-                    "sections": sections_data if isinstance(sections_data, list) else [sections_data],
+                    "theme": theme
+                    if theme in ("slate", "navy", "emerald", "crimson", "dark")
+                    else "slate",
+                    "sections": sections_data
+                    if isinstance(sections_data, list)
+                    else [sections_data],
                 },
                 "change_summary": "Generated document",
             }
@@ -295,7 +312,12 @@ class Tools:
                 return self._UNAVAILABLE
 
             return await self._format_result(
-                title=title.strip(), ext="docx", icon="📄", res=res, user=__user__, request=__request__
+                title=title.strip(),
+                ext="docx",
+                icon="📄",
+                res=res,
+                user=__user__,
+                request=__request__,
             )
         except httpx.HTTPStatusError as exc:
             try:
@@ -341,7 +363,9 @@ class Tools:
                 "presentation_spec": {
                     "title": title.strip(),
                     "subtitle": subtitle.strip() or None,
-                    "theme": theme if theme in ("slate", "navy", "emerald", "crimson", "dark") else "slate",
+                    "theme": theme
+                    if theme in ("slate", "navy", "emerald", "crimson", "dark")
+                    else "slate",
                     "slides": slides_data if isinstance(slides_data, list) else [slides_data],
                 },
                 "change_summary": "Generated presentation",
@@ -351,7 +375,12 @@ class Tools:
                 return self._UNAVAILABLE
 
             return await self._format_result(
-                title=title.strip(), ext="pptx", icon="📽️", res=res, user=__user__, request=__request__
+                title=title.strip(),
+                ext="pptx",
+                icon="📽️",
+                res=res,
+                user=__user__,
+                request=__request__,
             )
         except httpx.HTTPStatusError as exc:
             try:
@@ -379,7 +408,9 @@ class Tools:
         try:
             native_user_id = self._optional_id(__user__, "id") or "unknown"
             folder_id, project_id = self._extract_scope_ids(__metadata__)
-            sections_data = json.loads(sections_json) if isinstance(sections_json, str) else sections_json
+            sections_data = (
+                json.loads(sections_json) if isinstance(sections_json, str) else sections_json
+            )
             payload = {
                 "native_user_id": native_user_id,
                 "title": title.strip(),
@@ -389,8 +420,12 @@ class Tools:
                 "document_spec": {
                     "title": title.strip(),
                     "subtitle": subtitle.strip() or None,
-                    "theme": theme if theme in ("slate", "navy", "emerald", "crimson", "dark") else "slate",
-                    "sections": sections_data if isinstance(sections_data, list) else [sections_data],
+                    "theme": theme
+                    if theme in ("slate", "navy", "emerald", "crimson", "dark")
+                    else "slate",
+                    "sections": sections_data
+                    if isinstance(sections_data, list)
+                    else [sections_data],
                 },
                 "change_summary": "Generated PDF document",
             }
@@ -399,7 +434,12 @@ class Tools:
                 return self._UNAVAILABLE
 
             return await self._format_result(
-                title=title.strip(), ext="pdf", icon="📕", res=res, user=__user__, request=__request__
+                title=title.strip(),
+                ext="pdf",
+                icon="📕",
+                res=res,
+                user=__user__,
+                request=__request__,
             )
         except httpx.HTTPStatusError as exc:
             try:
@@ -410,3 +450,107 @@ class Tools:
         except Exception as exc:  # noqa: BLE001
             return f"Failed to generate PDF '{title}': {exc}"
 
+    async def create_typst_document(
+        self,
+        title: str,
+        markup: str,
+        change_summary: str = "Generated Typst document",
+        __user__: dict | None = None,
+        __metadata__: dict | None = None,
+        __request__: object | None = None,
+        __event_emitter__: Any = None,
+    ) -> str:
+        """Create a publication-quality PDF document (.pdf) compiled directly from Typst markup.
+        markup: Typst markup source code (e.g. '= Title\\n\\n== Heading\\nParagraph text...').
+        change_summary: Summary of this generation or revision.
+        """
+        try:
+            native_user_id = self._optional_id(__user__, "id") or "unknown"
+            folder_id, project_id = self._extract_scope_ids(__metadata__)
+            payload = {
+                "native_user_id": native_user_id,
+                "title": title.strip(),
+                "artifact_type": "typst",
+                "native_project_id": project_id,
+                "native_folder_id": folder_id,
+                "raw_content": markup,
+                "change_summary": change_summary.strip()
+                if change_summary
+                else "Generated Typst document",
+            }
+            res = await self._signed_json_post("/v1/artifacts/create", payload)
+            if not isinstance(res, dict):
+                return self._UNAVAILABLE
+
+            return await self._format_result(
+                title=title.strip(),
+                ext="pdf",
+                icon="📐",
+                res=res,
+                user=__user__,
+                request=__request__,
+            )
+        except httpx.HTTPStatusError as exc:
+            try:
+                detail = exc.response.json().get("detail", exc.response.text)
+            except (ValueError, KeyError, AttributeError):
+                detail = exc.response.text or str(exc)
+            return f"Failed to generate Typst document '{title}': {detail}"
+        except Exception as exc:  # noqa: BLE001
+            return f"Failed to generate Typst document '{title}': {exc}"
+
+    async def create_resume(
+        self,
+        title: str,
+        resume_json: str,
+        change_summary: str = "Generated resume",
+        __user__: dict | None = None,
+        __metadata__: dict | None = None,
+        __request__: object | None = None,
+        __event_emitter__: Any = None,
+    ) -> str:
+        """Create a professional, publication-grade PDF resume (.pdf) compiled via Typst from structured JSON.
+        resume_json: JSON string representing ResumeSpec:
+          - 'name': Full name (str)
+          - 'title': Professional subtitle/title (optional str)
+          - 'email', 'phone', 'location', 'website', 'github', 'linkedin': Contact info (optional str)
+          - 'summary': Summary profile (optional str)
+          - 'experience': list of [{"company": "...", "position": "...", "location": "...", "start_date": "...", "end_date": "...", "highlights": ["..."], "technologies": ["..."]}]
+          - 'education': list of [{"institution": "...", "degree": "...", "field_of_study": "...", "start_date": "...", "end_date": "...", "location": "...", "highlights": ["..."]}]
+          - 'skills': list of [{"name": "Category", "skills": ["Skill1", "Skill2"]}]
+          - 'projects': list of [{"name": "...", "description": "...", "url": "...", "highlights": ["..."], "technologies": ["..."]}]
+        change_summary: Summary of this generation or revision.
+        """
+        try:
+            native_user_id = self._optional_id(__user__, "id") or "unknown"
+            folder_id, project_id = self._extract_scope_ids(__metadata__)
+            resume_data = json.loads(resume_json) if isinstance(resume_json, str) else resume_json
+            payload = {
+                "native_user_id": native_user_id,
+                "title": title.strip(),
+                "artifact_type": "resume",
+                "native_project_id": project_id,
+                "native_folder_id": folder_id,
+                "resume_spec": resume_data,
+                "change_summary": change_summary.strip() if change_summary else "Generated resume",
+            }
+            res = await self._signed_json_post("/v1/artifacts/create", payload)
+            if not isinstance(res, dict):
+                return self._UNAVAILABLE
+
+            return await self._format_result(
+                title=title.strip(),
+                ext="pdf",
+                icon="💼",
+                res=res,
+                user=__user__,
+                request=__request__,
+            )
+        except httpx.HTTPStatusError as exc:
+            try:
+                detail = exc.response.json().get("detail", exc.response.text)
+            except (ValueError, KeyError, AttributeError):
+                detail = exc.response.text or str(exc)
+            return f"Failed to generate resume '{title}': {detail}"
+        except Exception as exc:  # noqa: BLE001
+            return f"Failed to generate resume '{title}': {exc}"
