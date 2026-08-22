@@ -12,6 +12,7 @@ from assistant_core.files.models import (
 )
 from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
+from assistant_core.media.models import MediaDocument, MediaSegment
 from assistant_core.memory.models import (
     ChatProfileSnapshot,
     ConsolidationRun,
@@ -35,6 +36,8 @@ __all__ = [
     "FileSegment",
     "Job",
     "KBReconciliationRun",
+    "MediaDocument",
+    "MediaSegment",
     "MemoryChangeLog",
     "MemoryEvidence",
     "MemoryRecord",

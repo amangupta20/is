@@ -174,6 +174,27 @@ class DashboardApp {
         this.debounce('episodes', () => this.loadEpisodes(e.target.value), 300);
       });
     }
+    const mediaSearch = document.getElementById('media-search');
+    if (mediaSearch) {
+      mediaSearch.addEventListener('input', (e) => {
+        this.debounce('media', () => this.loadMedia(e.target.value), 300);
+      });
+    }
+
+    const mediaStatusFilter = document.getElementById('media-status-filter');
+    if (mediaStatusFilter) {
+      mediaStatusFilter.addEventListener('change', () => {
+        this.loadMedia();
+      });
+    }
+
+    const indexMediaForm = document.getElementById('index-media-form');
+    if (indexMediaForm) {
+      indexMediaForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        await this.submitIndexMedia();
+      });
+    }
 
     // Memory form submit
     document.getElementById('memory-form').addEventListener('submit', async (e) => {
@@ -222,6 +243,7 @@ class DashboardApp {
       consolidation: { title: 'Consolidation History', sub: 'Audit logs of AI conflict resolution, supersessions, and evolutionary memory diffs.' },
       artifacts: { title: 'Artifacts', sub: 'Inspect and launch web editing for generated spreadsheets and documents.' },
       episodes: { title: 'Topic Episodes', sub: 'Inspect high-density 3-hour inactivity session summaries and decisions.' },
+      media: { title: 'Media Understanding', sub: 'Inspect deep multimodal video summaries, topic chapters, and timestamped transcripts.' },
       playground: { title: 'Search Playground', sub: 'Interactive hybrid RRF retrieval tester and prompt context preview.' },
     };
 
@@ -257,6 +279,9 @@ class DashboardApp {
         break;
       case 'episodes':
         this.loadEpisodes();
+        break;
+      case 'media':
+        this.loadMedia();
         break;
       case 'playground':
         break;
@@ -296,6 +321,15 @@ class DashboardApp {
         document.getElementById('stat-episodes-sub').innerText = `${data.total_episodes} session summaries`;
         const epBadge = document.getElementById('badge-episodes');
         if (epBadge) epBadge.innerText = data.total_episodes;
+      }
+      if (data.total_media !== undefined || data.media !== undefined) {
+        const totalMedia = data.total_media !== undefined ? data.total_media : (data.media ? data.media.active : 0);
+        const statMedia = document.getElementById('stat-media');
+        if (statMedia) statMedia.innerText = totalMedia;
+        const statMediaSub = document.getElementById('stat-media-sub');
+        if (statMediaSub) statMediaSub.innerText = `${totalMedia} video summaries`;
+        const mediaBadge = document.getElementById('badge-media');
+        if (mediaBadge) mediaBadge.innerText = totalMedia;
       }
 
       document.getElementById('stat-jobs').innerText = `${data.jobs.queued} queued`;
@@ -1487,13 +1521,13 @@ class DashboardApp {
       matchesList.innerHTML = '<div class="card"><p class="text-muted">No matching memories, documents, or conversation turns found.</p></div>';
       return;
     }
-
     const typeIcons = {
       memory: '🧠 Memory',
       file: '📁 Document',
       conversation: '💬 Conversation',
+      episode: '🌐 Episode',
+      media: '🎬 Media',
     };
-
     matchesList.innerHTML = data.results
       .map(
         (r, idx) => `
@@ -1510,6 +1544,7 @@ class DashboardApp {
           ${r.source_type === 'file' ? `<span>📄 ${this.escapeHtml(r.metadata?.filename || 'doc')} (chunk #${r.metadata?.chunk_ordinal})</span>` : ''}
           ${r.source_type === 'conversation' ? `<span>💬 ${this.escapeHtml(r.role || 'user')} turn in chat <code>${this.escapeHtml(r.metadata?.native_chat_id || '')}</code></span>` : ''}
           ${r.source_type === 'memory' ? `<span>🔑 <code>${this.escapeHtml(r.metadata?.key || '')}</code></span>` : ''}
+          ${r.source_type === 'media' ? `<span>🎬 <a href="${this.escapeHtml(r.metadata?.url || '')}" target="_blank" style="color: var(--primary);">${this.escapeHtml(r.metadata?.title || 'Media')}</a> (${this.formatSeconds(r.metadata?.start_time_seconds)} - ${this.formatSeconds(r.metadata?.end_time_seconds)}${r.metadata?.label ? ` • ${this.escapeHtml(r.metadata.label)}` : ''})</span>` : ''}
           ${r.vector_score !== null ? `<span>• Cosine Sim: <strong>${r.vector_score}</strong></span>` : ''}
           ${r.lexical_rank ? `<span>• Lexical Rank: #${r.lexical_rank}</span>` : ''}
         </div>
@@ -1999,6 +2034,196 @@ class DashboardApp {
       await this.api(`/v1/admin/episodes/${episodeId}`, { method: 'DELETE' });
       this.showToast('Topic episode deleted', 'success');
       this.loadEpisodes();
+      this.loadOverview();
+    } catch (err) {
+      this.showToast(`Delete failed: ${err.message}`, 'error');
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // Media Tab
+  // ------------------------------------------------------------------------
+  formatSeconds(seconds) {
+    if (seconds === null || seconds === undefined) return '00:00';
+    const s = Math.max(0, parseInt(seconds, 10) || 0);
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    const h = Math.floor(m / 60);
+    const min = m % 60;
+    if (h > 0) {
+      return `${h.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+    }
+    return `${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+  }
+
+  async loadMedia(searchQuery = null) {
+    const tbody = document.getElementById('media-table-body');
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4">Loading media...</td></tr>';
+
+    const searchInput = document.getElementById('media-search');
+    const query = searchQuery !== null ? searchQuery : (searchInput ? searchInput.value : '');
+    const filterSelect = document.getElementById('media-status-filter');
+    const status = filterSelect ? filterSelect.value : 'active';
+
+    try {
+      const data = await this.api(`/v1/admin/media?limit=100&status_filter=${status}&query=${encodeURIComponent(query)}`);
+      this.mediaList = data.items || [];
+      this.renderMedia(this.mediaList);
+    } catch {
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-danger">Failed to load media items.</td></tr>';
+    }
+  }
+
+  renderMedia(items) {
+    const tbody = document.getElementById('media-table-body');
+    if (!tbody) return;
+
+    if (!items || items.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-secondary">No media found.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = items
+      .map((item) => {
+        const durationStr = this.formatSeconds(item.duration_seconds);
+
+        return `
+          <tr>
+            <td>
+              <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 2px;">
+                <a href="${this.escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">${this.escapeHtml(item.title)}</a>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted); word-break: break-all;">
+                ${this.escapeHtml(item.url)}
+              </div>
+            </td>
+            <td>
+              <span class="text-secondary">${this.escapeHtml(item.channel_or_author || 'Unknown')}</span>
+            </td>
+            <td><code>${durationStr}</code></td>
+            <td>
+              <span class="badge badge-indigo">${item.total_segments} segments</span>
+              ${item.has_embedding ? '<span class="badge badge-success" title="Embedded">Vector</span>' : ''}
+            </td>
+            <td class="text-secondary text-sm">${this.formatDate(item.created_at)}</td>
+            <td style="text-align: right;">
+              <button class="btn btn-secondary btn-sm" onclick="app.viewMedia('${item.id}')">Breakdown</button>
+              <button class="btn btn-danger-ghost btn-sm" onclick="app.deleteMedia('${item.id}')" title="Delete Media">
+                <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </td>
+          </tr>
+        `;
+      })
+      .join('');
+  }
+
+  async viewMedia(mediaId) {
+    try {
+      const data = await this.api(`/v1/admin/media/${mediaId}`);
+      document.getElementById('media-detail-title').innerText = data.title;
+      document.getElementById('media-detail-meta').innerText = `${data.channel_or_author || 'Unknown'} • Duration: ${this.formatSeconds(data.duration_seconds)} • User: ${data.native_user_id} • ${this.formatDate(data.created_at)}`;
+      document.getElementById('media-detail-summary').innerText = data.summary;
+
+      const takeawaysList = document.getElementById('media-detail-takeaways');
+      if (data.key_takeaways && data.key_takeaways.length > 0) {
+        takeawaysList.innerHTML = data.key_takeaways.map((t) => `<li>${this.escapeHtml(t)}</li>`).join('');
+      } else {
+        takeawaysList.innerHTML = '<li class="text-secondary">No takeaways recorded</li>';
+      }
+
+      const topicsDiv = document.getElementById('media-detail-topics');
+      if (data.topics && data.topics.length > 0) {
+        topicsDiv.innerHTML = data.topics.map((top) => `<span class="badge badge-muted" style="padding: 2px 8px; border-radius: 4px; font-size: 11px;">${this.escapeHtml(top)}</span>`).join('');
+      } else {
+        topicsDiv.innerHTML = '<span class="text-secondary text-sm">None</span>';
+      }
+
+      document.getElementById('media-detail-segment-count').innerText = data.segments ? data.segments.length : 0;
+      const segsList = document.getElementById('media-detail-segments');
+      if (data.segments && data.segments.length > 0) {
+        segsList.innerHTML = data.segments
+          .map((s) => {
+            const timeRange = `${this.formatSeconds(s.start_time_seconds)} - ${this.formatSeconds(s.end_time_seconds)}`;
+            const labelBadge = s.label ? `<span class="badge badge-indigo" style="font-size: 11px;">${this.escapeHtml(s.label)}</span>` : '';
+            return `
+              <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                  <span style="font-weight: 600; font-size: 12px; color: var(--primary);">⏱ ${timeRange}</span>
+                  ${labelBadge}
+                </div>
+                <div style="font-size: 12px; color: var(--text-primary); line-height: 1.4;">${this.escapeHtml(s.content)}</div>
+              </div>
+            `;
+          })
+          .join('');
+      } else {
+        segsList.innerHTML = '<div class="text-secondary text-sm">No segment breakdown available.</div>';
+      }
+
+      document.getElementById('media-detail-modal').style.display = 'flex';
+    } catch (err) {
+      this.showToast(`Failed to load media details: ${err.message}`, 'error');
+    }
+  }
+
+  closeMediaDetailModal() {
+    document.getElementById('media-detail-modal').style.display = 'none';
+  }
+
+  openIndexMediaModal() {
+    document.getElementById('index-media-url').value = '';
+    document.getElementById('index-media-user-id').value = 'user-1';
+    document.getElementById('index-media-modal').style.display = 'flex';
+  }
+
+  closeIndexMediaModal() {
+    document.getElementById('index-media-modal').style.display = 'none';
+  }
+
+  async submitIndexMedia() {
+    const url = document.getElementById('index-media-url').value.trim();
+    const userId = document.getElementById('index-media-user-id').value.trim() || 'user-1';
+    const mediaType = document.getElementById('index-media-type').value || 'youtube';
+
+    if (!url) {
+      this.showToast('Please enter a media URL', 'error');
+      return;
+    }
+
+    const btn = document.getElementById('index-media-submit-btn');
+    btn.disabled = true;
+    btn.innerText = 'Analyzing Video...';
+
+    try {
+      this.showToast('Starting multimodal video analysis...', 'info');
+      const res = await this.api('/v1/admin/media/index-url', {
+        method: 'POST',
+        body: JSON.stringify({
+          url,
+          native_user_id: userId,
+          media_type: mediaType,
+        }),
+      });
+      this.showToast(`Successfully indexed "${res.title}" with ${res.total_segments} segments!`, 'success');
+      this.closeIndexMediaModal();
+      this.loadMedia();
+      this.loadOverview();
+    } catch (err) {
+      this.showToast(`Indexing failed: ${err.message}`, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerText = 'Start Analysis';
+    }
+  }
+
+  async deleteMedia(mediaId) {
+    if (!confirm('Are you sure you want to delete this media document and its segments?')) return;
+    try {
+      await this.api(`/v1/admin/media/${mediaId}`, { method: 'DELETE' });
+      this.showToast('Media document deleted', 'success');
+      this.loadMedia();
       this.loadOverview();
     } catch (err) {
       this.showToast(`Delete failed: ${err.message}`, 'error');

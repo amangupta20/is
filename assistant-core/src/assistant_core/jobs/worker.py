@@ -1,6 +1,7 @@
 """Foundation worker for durable assistant jobs."""
 
 import asyncio
+import re
 import signal
 import uuid
 from datetime import UTC, datetime
@@ -57,6 +58,10 @@ from assistant_core.files.repository import (
 from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
 from assistant_core.jobs.repository import claim_next_job, complete_job, fail_job
+from assistant_core.media.analyzer import (
+    MediaAnalyzer,
+)
+from assistant_core.media.repository import store_media_analysis
 from assistant_core.memory.consolidator import (
     MemoryConsolidationError,
     TaskModelMemoryConsolidator,
@@ -86,6 +91,9 @@ INVALID_JOB_CLAIM_ERROR = "invalid_job_claim"
 TASK_MODEL_CONFIGURATION_ERROR = "task_model_configuration_error"
 IDLE_POLL_SECONDS = 1.0
 LOGGER = structlog.get_logger("assistant_core.worker")
+YOUTUBE_URL_REGEX = re.compile(
+    r"https?://(?:www\.)?(?:youtube\.com/watch\?v=[\w-]+|youtu\.be/[\w-]+)"
+)
 
 
 class UnsupportedJobKindError(ValueError):
@@ -162,7 +170,6 @@ def get_episode_extractor(settings: Settings | None = None) -> TaskModelEpisodeE
         timeout_seconds=timeout,
     )
 
-
 def get_conversation_embedder(
     settings: Settings | None = None,
 ) -> OpenAICompatibleEmbedder:
@@ -170,6 +177,19 @@ def get_conversation_embedder(
     resolved_settings = settings or get_settings()
     return build_conversation_embedder(resolved_settings)
 
+
+def get_media_analyzer(settings: Settings | None = None) -> MediaAnalyzer:
+    """Build the task-model media analyzer for multimodal media understanding."""
+    resolved_settings = settings or get_settings()
+    base_url, model = _task_model_configuration(resolved_settings)
+    api_key = resolved_settings.task_model_api_key
+    timeout = max(120.0, resolved_settings.task_model_timeout_seconds)
+    return MediaAnalyzer(
+        base_url=base_url,
+        api_key=api_key.get_secret_value() if api_key is not None else None,
+        model=model,
+        timeout_seconds=timeout,
+    )
 
 async def _handle_process_event(session: AsyncSession, payload: dict[str, JsonValue]) -> None:
     """Route one received event to its durable materialization."""
@@ -289,6 +309,29 @@ async def _handle_process_event(session: AsyncSession, payload: dict[str, JsonVa
                         )
                         .on_conflict_do_nothing(index_elements=[Job.identity_key])
                     )
+
+        user_content_str = ""
+        if isinstance(event.payload, dict):
+            user_msg = event.payload.get("user_message")
+            if isinstance(user_msg, dict):
+                user_content_str = str(user_msg.get("content") or "")
+        if not user_content_str and turn:
+            user_content_str = turn.user_content or ""
+
+        if user_content_str:
+            for media_url in sorted(set(YOUTUBE_URL_REGEX.findall(user_content_str))):
+                await session.execute(
+                    insert(Job)
+                    .values(
+                        id=uuid.uuid4(),
+                        identity_key=f"media:{media_url}",
+                        kind="index_media",
+                        status="queued",
+                        payload={"url": media_url, "user_id": str(event.user_id)},
+                        attempts=0,
+                    )
+                    .on_conflict_do_nothing(index_elements=[Job.identity_key])
+                )
 
 
 def _turn_id_from_payload(payload: dict[str, JsonValue]) -> uuid.UUID:
@@ -666,6 +709,75 @@ async def _handle_compile_topic_episodes(
     )
 
 
+async def _handle_index_media(session: AsyncSession, payload: dict[str, JsonValue]) -> None:
+    """Analyze video/media resource with multimodal analyzer and persist document and segments with embeddings."""
+    url = payload.get("url")
+    user_id_raw = payload.get("user_id")
+    if not isinstance(url, str) or not url.strip() or not isinstance(user_id_raw, str):
+        raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
+    try:
+        user_id = uuid.UUID(user_id_raw)
+    except ValueError:
+        raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR) from None
+
+    settings = get_settings()
+    started_at = perf_counter()
+    LOGGER.info("media_index_started", url=url, user_id=str(user_id))
+
+    analyzer = get_media_analyzer(settings)
+    analysis = await analyzer.analyze_media(url=url)
+
+    embedder: OpenAICompatibleEmbedder | None = None
+    try:
+        embedder = get_conversation_embedder(settings)
+    except Exception:  # noqa: BLE001
+        embedder = None
+
+    doc_embedding: list[float] | None = None
+    if embedder is not None:
+        doc_text = (
+            f"Title: {analysis.title}\n"
+            f"Summary: {analysis.summary}\n"
+            f"Takeaways: {', '.join(analysis.key_takeaways)}\n"
+            f"Topics: {', '.join(analysis.topics)}"
+        )
+        try:
+            doc_embedding = await asyncio.to_thread(embedder.embed_one, doc_text)
+        except Exception:  # noqa: BLE001
+            doc_embedding = None
+
+    segment_embeddings: list[list[float] | None] = []
+    for seg in analysis.segments:
+        seg_emb: list[float] | None = None
+        if embedder is not None:
+            seg_text = f"{seg.label or ''}\n{seg.content}".strip()
+            try:
+                seg_emb = await asyncio.to_thread(embedder.embed_one, seg_text)
+            except Exception:  # noqa: BLE001
+                seg_emb = None
+        segment_embeddings.append(seg_emb)
+
+    doc = await store_media_analysis(
+        session,
+        user_id=user_id,
+        analysis=analysis,
+        document_embedding=doc_embedding,
+        segment_embeddings=segment_embeddings,
+    )
+    await session.commit()
+
+    duration_ms = (perf_counter() - started_at) * 1000
+    LOGGER.info(
+        "media_index_completed",
+        document_id=str(doc.id),
+        url=url,
+        user_id=str(user_id),
+        title=doc.title,
+        total_segments=doc.total_segments,
+        duration_ms=round(duration_ms, 2),
+    )
+
+
 async def enqueue_inactive_chat_episode_jobs(
     session: AsyncSession, inactivity_hours: float = 3.0
 ) -> int:
@@ -714,6 +826,8 @@ async def handle(
         await _handle_reconcile_kb_files(session, payload)
     elif kind == "compile_topic_episodes":
         await _handle_compile_topic_episodes(session, payload)
+    elif kind == "index_media":
+        await _handle_index_media(session, payload)
     else:
         raise UnsupportedJobKindError(UNSUPPORTED_KIND_ERROR)
 

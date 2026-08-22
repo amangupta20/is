@@ -62,7 +62,15 @@ from assistant_core.jobs.models import Job
 from assistant_core.jobs.worker import (
     TaskModelConfigurationError,
     get_episode_extractor,
+    get_media_analyzer,
     get_memory_consolidator,
+)
+from assistant_core.media.models import MediaDocument, MediaSegment
+from assistant_core.media.repository import (
+    delete_media_document,
+    search_media_segments,
+    store_media_analysis,
+    tombstone_media_document,
 )
 from assistant_core.memory.consolidator import MemoryConsolidationError
 from assistant_core.memory.models import (
@@ -107,8 +115,7 @@ class PlaygroundSearchRequest(BaseModel):
     native_user_id: str = Field(default="user-1", min_length=1, max_length=200)
     query: str = Field(min_length=1, max_length=1000)
     limit: int = Field(default=10, ge=1, le=50)
-    source_type: Literal["all", "memories", "files", "conversations", "episodes"] = "all"
-
+    source_type: Literal["all", "memories", "files", "conversations", "episodes", "media"] = "all"
 
 class CompileEpisodesRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -156,8 +163,14 @@ class BatchDeleteFilesRequest(BaseModel):
 class PurgeSystemRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     confirmation: str
-    scope: Literal["all", "memories", "files", "conversations", "jobs", "artifacts"] = "all"
+    scope: Literal["all", "memories", "files", "conversations", "jobs", "artifacts", "episodes", "media"] = "all"
 
+
+class IndexMediaUrlRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str = Field(min_length=1, max_length=2048)
+    native_user_id: str = Field(default="user-1", min_length=1, max_length=200)
+    media_type: str = Field(default="youtube", min_length=1, max_length=64)
 
 # ---------------------------------------------------------------------------
 # Authentication Routes
@@ -287,6 +300,16 @@ async def get_overview_telemetry(request: Request) -> dict[str, Any]:
             await session.execute(select(func.count(ArtifactVersion.id)))
         ).scalar_one()
 
+        # Media
+        active_media = (
+            await session.execute(
+                select(func.count(MediaDocument.id)).where(MediaDocument.tombstoned_at.is_(None))
+            )
+        ).scalar_one()
+        total_media_segments = (
+            await session.execute(select(func.count(MediaSegment.id)))
+        ).scalar_one()
+
         # Consolidation
         total_consolidation_runs = (
             await session.execute(select(func.count(ConsolidationRun.id)))
@@ -330,6 +353,11 @@ async def get_overview_telemetry(request: Request) -> dict[str, Any]:
                 "deduplicated_references": max(0, total_references - total_segments),
             },
             "total_episodes": total_episodes,
+            "total_media": active_media,
+            "media": {
+                "active": active_media,
+                "total_segments": total_media_segments,
+            },
             "conversations": {
                 "active_turns": total_turns,
                 "indexed_passages": total_conv_segments,
@@ -1104,13 +1132,21 @@ async def purge_system_data(body: PurgeSystemRequest, request: Request) -> dict[
             deleted_counts["artifact_versions"] = ver_count
             deleted_counts["onlyoffice_sessions"] = sess_count
 
+        if scope in ("episodes", "all"):
+            ep_count = (await session.execute(sa_delete(TopicEpisode))).rowcount or 0
+            deleted_counts["episodes"] = ep_count
+
+        if scope in ("media", "all"):
+            seg_count = (await session.execute(sa_delete(MediaSegment))).rowcount or 0
+            doc_count = (await session.execute(sa_delete(MediaDocument))).rowcount or 0
+            deleted_counts["media_segments"] = seg_count
+            deleted_counts["media_documents"] = doc_count
+
         if scope in ("jobs", "all"):
             job_count = (await session.execute(sa_delete(Job))).rowcount or 0
             inbox_count = (await session.execute(sa_delete(EventInbox))).rowcount or 0
             deleted_counts["jobs"] = job_count
             deleted_counts["events"] = inbox_count
-
-        await session.commit()
 
     return {
         "status": "purged",
@@ -1799,6 +1835,236 @@ async def delete_admin_topic_episode(episode_id: uuid.UUID, request: Request) ->
     return {"status": "deleted", "id": str(episode_id)}
 
 
+
+# ---------------------------------------------------------------------------
+# Media Understanding & Segment Management
+# ---------------------------------------------------------------------------
+
+
+@router.get("/media", dependencies=[Depends(require_admin_session)])
+async def list_admin_media(
+    request: Request,
+    query: str | None = None,
+    status_filter: Literal["all", "active", "tombstoned"] = "active",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """List indexed media documents with segment counters, metadata, and status."""
+    async with request.app.state.session_factory() as session:
+        stmt = (
+            select(
+                MediaDocument.id,
+                MediaDocument.url,
+                MediaDocument.media_type,
+                MediaDocument.title,
+                MediaDocument.channel_or_author,
+                MediaDocument.duration_seconds,
+                MediaDocument.summary,
+                MediaDocument.key_takeaways,
+                MediaDocument.topics,
+                MediaDocument.total_segments,
+                MediaDocument.embedding.is_not(None),
+                MediaDocument.created_at,
+                MediaDocument.updated_at,
+                MediaDocument.tombstoned_at,
+                UserIdentity.native_user_id,
+            )
+            .join(UserIdentity, UserIdentity.id == MediaDocument.user_id)
+            .order_by(desc(MediaDocument.created_at))
+        )
+
+        if status_filter == "active":
+            stmt = stmt.where(MediaDocument.tombstoned_at.is_(None))
+        elif status_filter == "tombstoned":
+            stmt = stmt.where(MediaDocument.tombstoned_at.is_not(None))
+
+        if query and query.strip():
+            like_term = f"%{query.strip()}%"
+            stmt = stmt.where(
+                or_(
+                    MediaDocument.title.ilike(like_term),
+                    MediaDocument.url.ilike(like_term),
+                    MediaDocument.channel_or_author.ilike(like_term),
+                    UserIdentity.native_user_id.ilike(like_term),
+                )
+            )
+
+        total = (
+            await session.execute(select(func.count()).select_from(stmt.subquery()))
+        ).scalar_one()
+
+        rows = (await session.execute(stmt.limit(limit).offset(offset))).all()
+
+        items = [
+            {
+                "id": str(row[0]),
+                "url": row[1],
+                "media_type": row[2],
+                "title": row[3],
+                "channel_or_author": row[4],
+                "duration_seconds": row[5],
+                "summary": row[6],
+                "key_takeaways": row[7] or [],
+                "topics": row[8] or [],
+                "total_segments": row[9],
+                "has_embedding": row[10],
+                "created_at": row[11].isoformat() if row[11] else None,
+                "updated_at": row[12].isoformat() if row[12] else None,
+                "tombstoned_at": row[13].isoformat() if row[13] else None,
+                "status": "tombstoned" if row[13] is not None else "active",
+                "native_user_id": row[14],
+            }
+            for row in rows
+        ]
+
+        return {"total": total, "items": items, "limit": limit, "offset": offset}
+
+
+@router.get("/media/{media_id}", dependencies=[Depends(require_admin_session)])
+async def get_admin_media_detail(media_id: uuid.UUID, request: Request) -> dict[str, Any]:
+    """Fetch complete media document summary and timestamped segment breakdown."""
+    async with request.app.state.session_factory() as session:
+        stmt = (
+            select(MediaDocument, UserIdentity.native_user_id)
+            .join(UserIdentity, UserIdentity.id == MediaDocument.user_id)
+            .where(MediaDocument.id == media_id)
+        )
+        row = (await session.execute(stmt)).one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="media document not found")
+
+        doc, native_user_id = row
+
+        seg_stmt = (
+            select(MediaSegment)
+            .where(MediaSegment.document_id == doc.id)
+            .order_by(MediaSegment.segment_index.asc())
+        )
+        segments = list((await session.execute(seg_stmt)).scalars().all())
+
+        seg_items = [
+            {
+                "id": str(s.id),
+                "segment_index": s.segment_index,
+                "start_time_seconds": s.start_time_seconds,
+                "end_time_seconds": s.end_time_seconds,
+                "label": s.label,
+                "content": s.content,
+                "has_embedding": s.embedding is not None,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+            }
+            for s in segments
+        ]
+
+        return {
+            "id": str(doc.id),
+            "url": doc.url,
+            "media_type": doc.media_type,
+            "title": doc.title,
+            "description": doc.description,
+            "channel_or_author": doc.channel_or_author,
+            "duration_seconds": doc.duration_seconds,
+            "summary": doc.summary,
+            "key_takeaways": doc.key_takeaways or [],
+            "topics": doc.topics or [],
+            "total_segments": doc.total_segments,
+            "has_embedding": doc.embedding is not None,
+            "status": "tombstoned" if doc.tombstoned_at is not None else "active",
+            "created_at": doc.created_at.isoformat() if doc.created_at else None,
+            "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
+            "tombstoned_at": doc.tombstoned_at.isoformat() if doc.tombstoned_at else None,
+            "native_user_id": native_user_id,
+            "segments": seg_items,
+        }
+
+
+@router.post("/media/index-url", dependencies=[Depends(require_admin_session)])
+async def index_admin_media_url(
+    body: IndexMediaUrlRequest, request: Request
+) -> dict[str, Any]:
+    """Analyze and persist a media URL on demand."""
+    async with request.app.state.session_factory() as session:
+        user_res = (
+            await session.execute(
+                select(UserIdentity.id).where(UserIdentity.native_user_id == body.native_user_id)
+            )
+        ).scalar_one_or_none()
+        if user_res is None:
+            user_id = uuid.uuid4()
+            session.add(UserIdentity(id=user_id, native_user_id=body.native_user_id))
+            await session.flush()
+        else:
+            user_id = user_res
+
+        analyzer = get_media_analyzer(request.app.state.settings)
+        analysis = await analyzer.analyze_media(url=body.url, media_type=body.media_type)
+
+        embedder = None
+        try:
+            embedder = get_conversation_embedder(request.app.state.settings)
+        except Exception:  # noqa: BLE001
+            embedder = None
+
+        doc_emb: list[float] | None = None
+        seg_embs: list[list[float] | None] | None = None
+        if embedder is not None:
+            try:
+                doc_emb = await asyncio.to_thread(
+                    embedder.embed_one, f"{analysis.title}\n{analysis.summary}"
+                )
+            except Exception:  # noqa: BLE001
+                doc_emb = None
+
+            if analysis.segments:
+                seg_texts = [f"{s.label or ''}\n{s.content}" for s in analysis.segments]
+                try:
+                    seg_embs = [
+                        await asyncio.to_thread(embedder.embed_one, t) for t in seg_texts
+                    ]
+                except Exception:  # noqa: BLE001
+                    seg_embs = None
+
+        doc = await store_media_analysis(
+            session,
+            user_id=user_id,
+            analysis=analysis,
+            document_embedding=doc_emb,
+            segment_embeddings=seg_embs,
+        )
+        await session.commit()
+
+        return {
+            "status": "indexed",
+            "id": str(doc.id),
+            "url": doc.url,
+            "title": doc.title,
+            "total_segments": doc.total_segments,
+            "duration_seconds": doc.duration_seconds,
+            "summary": doc.summary,
+            "key_takeaways": doc.key_takeaways or [],
+            "topics": doc.topics or [],
+        }
+
+
+@router.delete("/media/{media_id}", dependencies=[Depends(require_admin_session)])
+async def delete_admin_media(
+    media_id: uuid.UUID,
+    request: Request,
+    permanent: bool = False,
+) -> dict[str, Any]:
+    """Tombstone or permanently delete a media document."""
+    async with request.app.state.session_factory() as session:
+        if permanent:
+            success = await delete_media_document(session, media_id)
+        else:
+            success = await tombstone_media_document(session, media_id)
+
+        if not success:
+            raise HTTPException(status_code=404, detail="media document not found")
+
+        await session.commit()
+        return {"status": "deleted" if permanent else "tombstoned", "id": str(media_id)}
+
 @router.post("/playground/search", dependencies=[Depends(require_admin_session)])
 async def playground_search(body: PlaygroundSearchRequest, request: Request) -> dict[str, Any]:
     """Execute hybrid or filtered search for dashboard inspection and prompt preview."""
@@ -1838,6 +2104,15 @@ async def playground_search(body: PlaygroundSearchRequest, request: Request) -> 
         episode_hits = []
         if body.source_type in ("all", "episodes"):
             episode_hits = await search_topic_episodes(
+                session,
+                native_user_id=body.native_user_id,
+                query_text=body.query,
+                query_embedding=query_embedding,
+                limit=body.limit,
+            )
+        media_hits = []
+        if body.source_type in ("all", "media"):
+            media_hits = await search_media_segments(
                 session,
                 native_user_id=body.native_user_id,
                 query_text=body.query,
@@ -1933,6 +2208,38 @@ async def playground_search(body: PlaygroundSearchRequest, request: Request) -> 
                 },
             }
         )
+    for med in media_hits:
+        start_sec = med.start_time_seconds or 0
+        end_sec = med.end_time_seconds or 0
+        m_min, m_sec = divmod(start_sec, 60)
+        e_min, e_sec = divmod(end_sec, 60)
+        time_str = f"[{m_min:02d}:{m_sec:02d} - {e_min:02d}:{e_sec:02d}]"
+        label_str = f" ({med.label})" if med.label else ""
+        preview_text = f"[{med.title} {time_str}{label_str}] {med.content[:200]}"
+        ranked.append(
+            {
+                "source_id": str(med.segment_id or med.document_id),
+                "source_type": "media",
+                "category": "media_segment",
+                "statement": med.content,
+                "preview": preview_text,
+                "rrf_score": round(med.score, 6),
+                "lexical_rank": None,
+                "vector_score": None,
+                "created_at": med.created_at.isoformat() if med.created_at else None,
+                "metadata": {
+                    "document_id": str(med.document_id),
+                    "url": med.url,
+                    "media_type": med.media_type,
+                    "title": med.title,
+                    "channel_or_author": med.channel_or_author,
+                    "start_time_seconds": med.start_time_seconds,
+                    "end_time_seconds": med.end_time_seconds,
+                    "label": med.label,
+                    "match_mode": med.match_mode,
+                },
+            }
+        )
 
     ranked.sort(key=lambda item: -item["rrf_score"])
     selected = ranked[: body.limit]
@@ -1964,6 +2271,14 @@ async def playground_search(body: PlaygroundSearchRequest, request: Request) -> 
                 )
                 context_lines.append(
                     f"- [Topic Episode #{idx}] ({meta.get('title')}, {item['category']}): {item['statement']}{dec_str}"
+                )
+            elif item["source_type"] == "media":
+                meta = item["metadata"]
+                s_sec = meta.get("start_time_seconds")
+                e_sec = meta.get("end_time_seconds")
+                time_s = f" ({s_sec}s - {e_sec}s)" if s_sec is not None else ""
+                context_lines.append(
+                    f"- [Media Segment #{idx}] ({meta.get('title')}{time_s}): {item['statement']}"
                 )
         context_lines.append("</retrieved_context>")
 

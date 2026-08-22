@@ -190,6 +190,19 @@ class Tools:
                     ep_title = result.get("title") or "Episode"
                     label = f"episode/{category} § {ep_title}"
                     provenance = f" (chat {chat_id})"
+                elif source_type == "media":
+                    med_title = result.get("title") or "Media"
+                    start_sec = result.get("start_time_seconds")
+                    end_sec = result.get("end_time_seconds")
+                    if start_sec is not None:
+                        m_min, m_sec = divmod(start_sec, 60)
+                        e_min, e_sec = divmod(end_sec or start_sec, 60)
+                        time_str = f" @ {m_min:02d}:{m_sec:02d}-{e_min:02d}:{e_sec:02d}" if end_sec is not None and end_sec != start_sec else f" @ {m_min:02d}:{m_sec:02d}"
+                    else:
+                        time_str = ""
+                    label = f"media/{med_title}{time_str}"
+                    label_val = result.get("label")
+                    provenance = f" ({label_val})" if label_val else ""
                 else:
                     return self._UNAVAILABLE
 
@@ -285,6 +298,24 @@ class Tools:
                     f"Category: {category}\n"
                     f"Turns Compiled: {turn_count}\n"
                     f"Source chat: {response.get('source_native_chat_id')}\n\n"
+                    f"{content}"
+                )
+            if source_type == "media":
+                title = response.get("title") or "Media"
+                url = response.get("url") or ""
+                start_sec = response.get("start_time_seconds")
+                end_sec = response.get("end_time_seconds")
+                if start_sec is not None:
+                    m_min, m_sec = divmod(start_sec, 60)
+                    e_min, e_sec = divmod(end_sec or start_sec, 60)
+                    time_str = f" @ {m_min:02d}:{m_sec:02d}-{e_min:02d}:{e_sec:02d}" if end_sec is not None and end_sec != start_sec else f" @ {m_min:02d}:{m_sec:02d}"
+                else:
+                    time_str = ""
+                return (
+                    f"Media source {source_id}:\n"
+                    f"Media: media/{title}{time_str}\n"
+                    f"URL: {url}\n"
+                    f"Category: {category}\n\n"
                     f"{content}"
                 )
             return self._UNAVAILABLE
@@ -517,3 +548,41 @@ class Tools:
             )
         except Exception:  # noqa: BLE001
             return f"Document '{file_id_or_name}' could not be found or is unavailable."
+
+    async def process_media_url(
+        self,
+        url: str,
+        __user__: dict | None = None,
+        __metadata__: dict | None = None,
+    ) -> str:
+        """Process and index a video/media URL (e.g. YouTube) for deep multimodal understanding."""
+        clean_url = url.strip()
+        if not clean_url:
+            return "Please provide a valid media URL."
+        native_user_id = self._optional_id(__user__, "id") or "unknown"
+        payload = {
+            "native_user_id": native_user_id,
+            "url": clean_url,
+        }
+        try:
+            response = await self._signed_json_post("/v1/personal-context/process-media", payload)
+            if not isinstance(response, dict):
+                return self._UNAVAILABLE
+            title = response.get("title") or clean_url
+            segments = response.get("total_segments", 0)
+            summary = response.get("summary") or ""
+            takeaways = response.get("key_takeaways") or []
+            lines = [
+                f"🎬 Processed & Indexed Media: {title}",
+                f"🔗 URL: {clean_url}",
+                f"📊 Timestamped Segments: {segments}",
+            ]
+            if summary:
+                lines.append(f"\nSummary:\n{summary}")
+            if takeaways and isinstance(takeaways, list):
+                lines.append("\nKey Takeaways:")
+                for t in takeaways:
+                    lines.append(f"- {t}")
+            return "\n".join(lines)
+        except Exception:  # noqa: BLE001
+            return self._UNAVAILABLE

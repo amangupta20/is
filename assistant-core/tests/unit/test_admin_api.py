@@ -36,9 +36,11 @@ class _FakeResult:
     def scalar_one_or_none(self) -> Any:
         return self._scalar
 
-    def first(self) -> Any:
+    def one_or_none(self) -> Any:
         return self._scalar or (self._rows[0] if self._rows else None)
 
+    def first(self) -> Any:
+        return self._scalar or (self._rows[0] if self._rows else None)
     def all(self) -> list[Any]:
         return self._scalars if self._scalars else self._rows
 
@@ -134,6 +136,8 @@ def test_admin_overview_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
             _FakeResult(scalar=4),  # active artifacts
             _FakeResult(scalar=8),  # total episodes
             _FakeResult(scalar=9),  # total artifact versions
+            _FakeResult(scalar=2),  # total media
+            _FakeResult(scalar=10),  # total media segments
             _FakeResult(scalar=3),  # total consolidation runs
             _FakeResult(scalar=2),  # total consolidation superseded count
             _FakeResult(scalar=1),  # total kb reconciliation runs
@@ -153,6 +157,9 @@ def test_admin_overview_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
     assert data["artifacts"]["active"] == 4
     assert data["artifacts"]["total_versions"] == 9
     assert data["total_episodes"] == 8
+    assert data["total_media"] == 2
+    assert data["media"]["active"] == 2
+    assert data["media"]["total_segments"] == 10
     assert data["consolidation"]["total_runs"] == 3
     assert data["consolidation"]["total_superseded"] == 2
     assert data["kb_reconciliation"]["total_runs"] == 1
@@ -432,6 +439,8 @@ def test_admin_consolidation_and_playground() -> None:
             # 3. search_file_passages
             _FakeResult(rows=[]),
             # 3b. search_topic_episodes: user identity lookup
+            _FakeResult(scalar=None),
+            # 3c. search_media_segments: user identity lookup
             _FakeResult(scalar=None),
             # 4. get_or_create_profile: User identity upsert
             _FakeResult(scalar=user_id),
@@ -749,3 +758,166 @@ def test_artifact_version_revert(tmp_path: Path) -> None:
     assert data["new_version_num"] == 3
     assert data["current_version_num"] == 3
     assert "Reverted to v1" in data["change_summary"]
+
+
+def test_admin_media_crud_and_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Admin media listing, detail retrieval, on-demand URL indexing, and deletion."""
+    from assistant_core.media.models import MediaDocument, MediaSegment
+    from assistant_core.media.schemas import MediaAnalysisResult, MediaSegmentAnalysis
+
+    secret = "admin-secret-at-least-32-chars-long"
+    settings = Settings(hmac_secret=secret)
+    app = create_app(settings)
+
+    media_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    now = datetime.now(UTC)
+
+    doc = MediaDocument(
+        id=media_id,
+        user_id=user_id,
+        url="https://www.youtube.com/watch?v=adminTest123",
+        media_type="youtube",
+        title="Admin Media Title",
+        description="Video description",
+        channel_or_author="Admin Creator",
+        duration_seconds=300,
+        summary="Admin media summary.",
+        key_takeaways=["Takeaway 1"],
+        topics=["Tech"],
+        total_segments=1,
+        tombstoned_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    seg = MediaSegment(
+        id=uuid.uuid4(),
+        document_id=media_id,
+        user_id=user_id,
+        segment_index=0,
+        start_time_seconds=0,
+        end_time_seconds=300,
+        label="Full Video",
+        content="Complete video transcript.",
+        created_at=now,
+    )
+
+    # 1. GET /v1/admin/media
+    list_row = (
+        doc.id,
+        doc.url,
+        doc.media_type,
+        doc.title,
+        doc.channel_or_author,
+        doc.duration_seconds,
+        doc.summary,
+        doc.key_takeaways,
+        doc.topics,
+        doc.total_segments,
+        False,
+        doc.created_at,
+        doc.updated_at,
+        doc.tombstoned_at,
+        "user-1",
+    )
+    list_session = _FakeSession(
+        [
+            _FakeResult(scalar=1),  # total count
+            _FakeResult(rows=[list_row]),  # items query
+        ]
+    )
+    app.state.session_factory = lambda: list_session
+    client = _get_authed_client(app, secret)
+
+    list_res = client.get("/v1/admin/media")
+    assert list_res.status_code == 200
+    list_data = list_res.json()
+    assert list_data["total"] == 1
+    assert list_data["items"][0]["title"] == "Admin Media Title"
+    assert list_data["items"][0]["url"] == "https://www.youtube.com/watch?v=adminTest123"
+
+    # 2. GET /v1/admin/media/{id}
+    detail_session = _FakeSession(
+        [
+            _FakeResult(scalar=(doc, "user-1")),  # doc query
+            _FakeResult(scalars_list=[seg]),  # segments query
+        ]
+    )
+    app.state.session_factory = lambda: detail_session
+    detail_res = client.get(f"/v1/admin/media/{media_id}")
+    assert detail_res.status_code == 200
+    detail_data = detail_res.json()
+    assert detail_data["title"] == "Admin Media Title"
+    assert len(detail_data["segments"]) == 1
+    assert detail_data["segments"][0]["label"] == "Full Video"
+
+    # 3. POST /v1/admin/media/index-url
+    fake_analysis = MediaAnalysisResult(
+        url="https://www.youtube.com/watch?v=indexOnDemand",
+        media_type="youtube",
+        title="On Demand Analysis",
+        description="On demand description",
+        channel_or_author="Analyst",
+        duration_seconds=120,
+        summary="On demand summary.",
+        key_takeaways=["Insight 1"],
+        topics=["AI"],
+        segments=[
+            MediaSegmentAnalysis(
+                segment_index=0,
+                start_time_seconds=0,
+                end_time_seconds=120,
+                label="Overview",
+                content="Content of segment.",
+            )
+        ],
+    )
+
+    class MockAnalyzer:
+        async def analyze_media(self, url: str, media_type: str = "youtube") -> MediaAnalysisResult:
+            return fake_analysis
+
+    monkeypatch.setattr(
+        "assistant_core.api.routes.admin.get_media_analyzer",
+        lambda _settings: MockAnalyzer(),
+    )
+
+    index_session = _FakeSession(
+        [
+            _FakeResult(scalar=user_id),  # user lookup
+            _FakeResult(scalar=None),  # check existing doc in store_media_analysis
+        ]
+    )
+    app.state.session_factory = lambda: index_session
+    index_res = client.post(
+        "/v1/admin/media/index-url",
+        json={"url": "https://www.youtube.com/watch?v=indexOnDemand", "native_user_id": "user-1"},
+    )
+    assert index_res.status_code == 200
+    index_data = index_res.json()
+    assert index_data["status"] == "indexed"
+    assert index_data["title"] == "On Demand Analysis"
+    assert index_data["total_segments"] == 1
+
+    # 4. DELETE /v1/admin/media/{id}
+    del_session = _FakeSession(
+        [
+            _FakeResult(rowcount=1),  # tombstone update
+        ]
+    )
+    app.state.session_factory = lambda: del_session
+    del_res = client.delete(f"/v1/admin/media/{media_id}")
+    assert del_res.status_code == 200
+    assert del_res.json() == {"status": "tombstoned", "id": str(media_id)}
+
+    # 5. Permanent DELETE /v1/admin/media/{id}?permanent=true
+    perm_del_session = _FakeSession(
+        [
+            _FakeResult(rowcount=1),  # permanent delete
+        ]
+    )
+    app.state.session_factory = lambda: perm_del_session
+    perm_del_res = client.delete(f"/v1/admin/media/{media_id}?permanent=true")
+    assert perm_del_res.status_code == 200
+    assert perm_del_res.json() == {"status": "deleted", "id": str(media_id)}

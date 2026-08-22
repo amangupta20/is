@@ -74,6 +74,8 @@ class _ContextSession:
             "FROM assistant_core.conversation_reference" in str(compiled)
             or "FROM assistant_core.file_reference" in str(compiled)
             or "FROM assistant_core.topic_episode" in str(compiled)
+            or "FROM assistant_core.media_segment" in str(compiled)
+            or "FROM assistant_core.media_document" in str(compiled)
         ):
             return _Result(row=None, rows=[])
         if "SELECT assistant_core.user_identity.id FROM assistant_core.user_identity" in str(
@@ -209,6 +211,12 @@ def test_search_previews_correct_user_memory_then_read_rejects_foreign_source() 
                 "open_loops": None,
                 "key_entities": None,
                 "turn_count": None,
+                "url": None,
+                "media_type": None,
+                "channel_or_author": None,
+                "start_time_seconds": None,
+                "end_time_seconds": None,
+                "label": None,
             }
         ],
     }
@@ -241,8 +249,16 @@ def test_search_previews_correct_user_memory_then_read_rejects_foreign_source() 
         "open_loops": None,
         "key_entities": None,
         "turn_count": None,
-        "neighbors": [],
         "full_source_available": False,
+        "url": None,
+        "media_type": None,
+        "channel_or_author": None,
+        "start_time_seconds": None,
+        "end_time_seconds": None,
+        "label": None,
+        "key_takeaways": None,
+        "topics": None,
+        "neighbors": [],
     }
     assert foreign_read.status_code == 404
     assert foreign_read.json() == {"detail": "memory source not found"}
@@ -328,6 +344,9 @@ def test_hybrid_conversation_hit_reads_bounded_neighbors_and_fails_open_lexicall
     monkeypatch.setattr(personal_context, "search_topic_episodes", no_memories)
     monkeypatch.setattr(personal_context, "get_topic_episode", no_memory_read)
 
+    monkeypatch.setattr(personal_context, "search_media_segments", no_memories)
+    monkeypatch.setattr(personal_context, "read_media_segment", no_memory_read)
+    monkeypatch.setattr(personal_context, "get_media_document", no_memory_read)
     monkeypatch.setattr(personal_context, "search_explicit_memory", no_memories)
     monkeypatch.setattr(personal_context, "search_conversation_context", search_conversations)
     monkeypatch.setattr(personal_context, "read_explicit_memory", no_memory_read)
@@ -396,6 +415,12 @@ def test_hybrid_conversation_hit_reads_bounded_neighbors_and_fails_open_lexicall
                 "native_file_id": None,
                 "header_path": None,
                 "chunk_ordinal": None,
+                "url": None,
+                "media_type": None,
+                "channel_or_author": None,
+                "start_time_seconds": None,
+                "end_time_seconds": None,
+                "label": None,
             }
         ],
     }
@@ -436,9 +461,16 @@ def test_hybrid_conversation_hit_reads_bounded_neighbors_and_fails_open_lexicall
         "key_entities": None,
         "turn_count": None,
         "full_source_available": False,
+        "url": None,
+        "media_type": None,
+        "channel_or_author": None,
+        "start_time_seconds": None,
+        "end_time_seconds": None,
+        "label": None,
+        "key_takeaways": None,
+        "topics": None,
     }
     assert foreign_read.status_code == 404
-
     fail_embedding = True
     lexical = anyio.run(
         lambda: _post(
@@ -520,6 +552,9 @@ def test_search_and_read_file_passages(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(personal_context, "read_file_passage_context", mock_read_file)
     monkeypatch.setattr(personal_context, "get_topic_episode", no_memory_read)
 
+    monkeypatch.setattr(personal_context, "search_media_segments", no_memories)
+    monkeypatch.setattr(personal_context, "read_media_segment", no_memory_read)
+    monkeypatch.setattr(personal_context, "get_media_document", no_memory_read)
     class FakeSession:
         async def __aenter__(self) -> Self:
             return self
@@ -699,6 +734,9 @@ def test_search_and_read_topic_episodes(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(personal_context, "read_explicit_memory", no_memory_read)
     monkeypatch.setattr(personal_context, "get_topic_episode", mock_get_episode)
 
+    monkeypatch.setattr(personal_context, "search_media_segments", no_memories)
+    monkeypatch.setattr(personal_context, "read_media_segment", no_memory_read)
+    monkeypatch.setattr(personal_context, "get_media_document", no_memory_read)
     class FakeSession:
         async def __aenter__(self) -> Self:
             return self
@@ -744,4 +782,133 @@ def test_search_and_read_topic_episodes(monkeypatch: pytest.MonkeyPatch) -> None
     assert "# Topic Episode: Docker & Traefik Architecture" in read_res["content"]
     assert "## Decisions Made" in read_res["content"]
     assert "## Open Loops / Pending Tasks" in read_res["content"]
+    assert read_res["full_source_available"] is True
+
+
+def test_search_and_read_media_segments(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hybrid search returns MediaSearchHit matches and read returns full formatted media segment."""
+    from assistant_core.api.routes import personal_context
+    from assistant_core.media.models import MediaDocument, MediaSegment
+    from assistant_core.media.schemas import MediaSearchHit
+
+    doc_id = uuid.uuid4()
+    seg_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+
+    med_hit = MediaSearchHit(
+        document_id=doc_id,
+        segment_id=seg_id,
+        url="https://www.youtube.com/watch?v=example123",
+        media_type="youtube",
+        title="System Design Primer",
+        channel_or_author="Tech Lead",
+        start_time_seconds=60,
+        end_time_seconds=180,
+        label="Database Sharding",
+        content="Consistent hashing allows horizontal scaling across nodes.",
+        score=0.95,
+        match_mode="hybrid",
+        created_at=datetime(2026, 8, 22, tzinfo=UTC),
+    )
+
+    doc_obj = MediaDocument(
+        id=doc_id,
+        user_id=user_id,
+        url="https://www.youtube.com/watch?v=example123",
+        media_type="youtube",
+        title="System Design Primer",
+        description="A complete guide to scaling.",
+        channel_or_author="Tech Lead",
+        duration_seconds=1200,
+        summary="Executive overview of distributed systems design.",
+        key_takeaways=["Partition data evenly", "Replicate for fault tolerance"],
+        topics=["Distributed Systems", "Databases"],
+        total_segments=5,
+        tombstoned_at=None,
+        created_at=datetime(2026, 8, 22, tzinfo=UTC),
+        updated_at=datetime(2026, 8, 22, tzinfo=UTC),
+    )
+
+    seg_obj = MediaSegment(
+        id=seg_id,
+        document_id=doc_id,
+        user_id=user_id,
+        segment_index=1,
+        start_time_seconds=60,
+        end_time_seconds=180,
+        label="Database Sharding",
+        content="Consistent hashing allows horizontal scaling across nodes.",
+        created_at=datetime(2026, 8, 22, tzinfo=UTC),
+    )
+
+    async def mock_search_media(*_args: object, **_kwargs: object) -> list[MediaSearchHit]:
+        return [med_hit]
+
+    async def mock_read_segment(*_args: object, **_kwargs: object) -> tuple[MediaSegment, MediaDocument] | None:
+        return seg_obj, doc_obj
+
+    async def no_memories(*_args: object, **_kwargs: object) -> list[object]:
+        return []
+
+    async def no_read(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(personal_context, "search_explicit_memory", no_memories)
+    monkeypatch.setattr(personal_context, "search_conversation_context", no_memories)
+    monkeypatch.setattr(personal_context, "search_file_passages", no_memories)
+    monkeypatch.setattr(personal_context, "search_topic_episodes", no_memories)
+    monkeypatch.setattr(personal_context, "search_media_segments", mock_search_media)
+    monkeypatch.setattr(personal_context, "read_explicit_memory", no_read)
+    monkeypatch.setattr(personal_context, "get_topic_episode", no_read)
+    monkeypatch.setattr(personal_context, "read_conversation_context", no_read)
+    monkeypatch.setattr(personal_context, "read_file_passage_context", no_read)
+    monkeypatch.setattr(personal_context, "read_media_segment", mock_read_segment)
+
+    class FakeSession:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    app = create_app(Settings(hmac_secret="a" * 32))
+    app.state.session_factory = lambda: FakeSession()
+
+    search = anyio.run(
+        lambda: _post(
+            app,
+            "/v1/personal-context/search",
+            {
+                "native_user_id": "user-1",
+                "query": "consistent hashing sharding",
+                "limit": 5,
+            },
+        )
+    )
+    assert search.status_code == 200
+    results = search.json()["results"]
+    assert len(results) == 1
+    res = results[0]
+    assert res["source_type"] == "media"
+    assert res["title"] == "System Design Primer"
+    assert res["channel_or_author"] == "Tech Lead"
+    assert res["start_time_seconds"] == 60
+    assert res["end_time_seconds"] == 180
+    assert res["label"] == "Database Sharding"
+    assert "System Design Primer" in res["preview"]
+
+    read = anyio.run(
+        lambda: _post(
+            app,
+            "/v1/personal-context/read",
+            {"native_user_id": "user-1", "memory_source_id": str(seg_id)},
+        )
+    )
+    assert read.status_code == 200
+    read_res = read.json()
+    assert read_res["source_type"] == "media"
+    assert read_res["title"] == "System Design Primer"
+    assert "# Media: System Design Primer" in read_res["content"]
+    assert "## Segment Observations & Transcript" in read_res["content"]
+    assert "## Key Takeaways" in read_res["content"]
     assert read_res["full_source_available"] is True

@@ -29,6 +29,11 @@ from assistant_core.files.repository import (
     read_file_passage_context,
     search_file_passages,
 )
+from assistant_core.media.repository import (
+    get_media_document,
+    read_media_segment,
+    search_media_segments,
+)
 from assistant_core.memory.repository import (
     forget_direct_memory,
     list_user_memories,
@@ -41,6 +46,17 @@ from assistant_core.memory.repository import (
 router = APIRouter(prefix="/v1/personal-context", tags=["personal-context"])
 LOGGER = structlog.get_logger("assistant_core.personal_context")
 RRF_K = 60
+
+def _format_seconds(seconds: int | None) -> str:
+    """Format seconds into MM:SS or HH:MM:SS."""
+    if seconds is None:
+        return "00:00"
+    m, s = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
 
 
 def _compact_preview(statement: str) -> str:
@@ -82,7 +98,7 @@ class PersonalContextPreview(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_id: uuid.UUID
-    source_type: Literal["memory", "conversation", "file", "episode"]
+    source_type: Literal["memory", "conversation", "file", "episode", "media"]
     category: str
     role: Literal["user", "assistant"] | None
     preview: str
@@ -103,6 +119,12 @@ class PersonalContextPreview(BaseModel):
     key_entities: list[str] | None = None
     turn_count: int | None = None
 
+    url: str | None = None
+    media_type: str | None = None
+    channel_or_author: str | None = None
+    start_time_seconds: int | None = None
+    end_time_seconds: int | None = None
+    label: str | None = None
 
 class PersonalContextSearchResponse(BaseModel):
     """Bounded personal-context results with declared retrieval mode."""
@@ -163,7 +185,7 @@ class PersonalContextReadResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_id: uuid.UUID
-    source_type: Literal["memory", "conversation", "file", "episode"]
+    source_type: Literal["memory", "conversation", "file", "episode", "media"]
     content: str
     category: str
     role: Literal["user", "assistant"] | None
@@ -188,6 +210,14 @@ class PersonalContextReadResponse(BaseModel):
     key_entities: list[str] | None = None
     turn_count: int | None = None
     full_source_available: bool = False
+    url: str | None = None
+    media_type: str | None = None
+    channel_or_author: str | None = None
+    start_time_seconds: int | None = None
+    end_time_seconds: int | None = None
+    label: str | None = None
+    key_takeaways: list[str] | None = None
+    topics: list[str] | None = None
 
 
 class MemoryItemResponse(BaseModel):
@@ -343,6 +373,13 @@ async def search_personal_context(
             native_project_id=body.native_project_id,
             native_folder_id=body.native_folder_id,
         )
+        media_hits = await search_media_segments(
+            session,
+            native_user_id=body.native_user_id,
+            query_text=body.query,
+            query_embedding=query_embedding,
+            limit=body.limit,
+        )
 
     ranked: list[tuple[float, int, str, PersonalContextPreview]] = []
     for rank, record in enumerate(memory_records, start=1):
@@ -433,6 +470,29 @@ async def search_personal_context(
             turn_count=ehit.turn_count,
         )
         ranked.append((ep_score, 0, str(ehit.episode_id), preview))
+    for mhit in media_hits:
+        time_str = f" [{_format_seconds(mhit.start_time_seconds)} - {_format_seconds(mhit.end_time_seconds)}]" if mhit.start_time_seconds is not None else ""
+        label_str = f" ({mhit.label})" if mhit.label else ""
+        preview_text = f"[{mhit.title}{time_str}{label_str}] {mhit.content}"
+        preview = PersonalContextPreview(
+            source_id=mhit.segment_id or mhit.document_id,
+            source_type="media",
+            category="media_segment",
+            role=None,
+            preview=_compact_preview(preview_text),
+            source_native_chat_id=None,
+            source_native_message_id=None,
+            source_native_project_id=None,
+            source_native_folder_id=None,
+            title=mhit.title,
+            url=mhit.url,
+            media_type=mhit.media_type,
+            channel_or_author=mhit.channel_or_author,
+            start_time_seconds=mhit.start_time_seconds,
+            end_time_seconds=mhit.end_time_seconds,
+            label=mhit.label,
+        )
+        ranked.append((mhit.score, 3, str(mhit.segment_id or mhit.document_id), preview))
 
     ranked.sort(key=lambda item: (-item[0], item[1], item[2]))
     selected = ranked[: body.limit]
@@ -448,6 +508,7 @@ async def search_personal_context(
         conversation_result_count=len(conversation_hits),
         file_result_count=len(file_hits),
         episode_result_count=len(episode_hits),
+        media_result_count=len(media_hits),
         result_count=len(selected),
         top_score=round(selected[0][0], 6) if selected else None,
         duration_ms=round((perf_counter() - started_at) * 1000, 3),
@@ -572,26 +633,125 @@ async def read_personal_context(
                     native_user_id=body.native_user_id,
                     reference_id=body.memory_source_id,
                 )
-                if file_result is None:
+                if file_result is not None:
+                    response = PersonalContextReadResponse(
+                        source_id=uuid.UUID(file_result.reference_id),
+                        source_type="file",
+                        content=file_result.content,
+                        category=file_result.mime_type,
+                        role=None,
+                        evidence_quote=None,
+                        source_native_chat_id=None,
+                        source_native_message_id=None,
+                        filename=file_result.filename,
+                        native_file_id=file_result.native_file_id,
+                        header_path=file_result.header_path,
+                        chunk_ordinal=file_result.chunk_ordinal,
+                        previous_chunk=file_result.previous_content,
+                        next_chunk=file_result.next_content,
+                        neighbors=[],
+                        full_source_available=True,
+                    )
+                elif (
+                    media_seg_res := await read_media_segment(
+                        session,
+                        segment_id=body.memory_source_id,
+                        native_user_id=body.native_user_id,
+                    )
+                ) is not None:
+                    seg, doc = media_seg_res
+                    time_range = f"{_format_seconds(seg.start_time_seconds)} - {_format_seconds(seg.end_time_seconds)}"
+                    timestamp_url = f"{doc.url}&t={seg.start_time_seconds}" if "youtube.com" in doc.url or "youtu.be" in doc.url else doc.url
+                    content_lines = [
+                        f"# Media: {doc.title}",
+                        f"**Source:** [{doc.media_type.upper()}]({doc.url}) | **Channel/Author:** {doc.channel_or_author or 'Unknown'}",
+                        f"**Segment Time:** {time_range} (at [{_format_seconds(seg.start_time_seconds)}]({timestamp_url}))",
+                    ]
+                    if seg.label:
+                        content_lines.append(f"**Topic/Chapter:** {seg.label}")
+                    content_lines.append(f"\n## Segment Observations & Transcript\n{seg.content}")
+                    if doc.summary:
+                        content_lines.append(f"\n## Video Overview Summary\n{doc.summary}")
+                    if doc.key_takeaways:
+                        content_lines.append("\n## Key Takeaways")
+                        for t in doc.key_takeaways:
+                            content_lines.append(f"- {t}")
+                    if doc.topics:
+                        content_lines.append(f"\n**Topics:** {', '.join(doc.topics)}")
+
+                    response = PersonalContextReadResponse(
+                        source_id=seg.id,
+                        source_type="media",
+                        content="\n".join(content_lines),
+                        category="media_segment",
+                        role=None,
+                        evidence_quote=None,
+                        source_native_chat_id=None,
+                        source_native_message_id=None,
+                        source_native_project_id=None,
+                        source_native_folder_id=None,
+                        title=doc.title,
+                        url=doc.url,
+                        media_type=doc.media_type,
+                        channel_or_author=doc.channel_or_author,
+                        start_time_seconds=seg.start_time_seconds,
+                        end_time_seconds=seg.end_time_seconds,
+                        label=seg.label,
+                        key_takeaways=doc.key_takeaways or [],
+                        topics=doc.topics or [],
+                        neighbors=[],
+                        full_source_available=True,
+                    )
+                elif (
+                    media_doc_res := await get_media_document(
+                        session,
+                        document_id=body.memory_source_id,
+                        native_user_id=body.native_user_id,
+                    )
+                ) is not None:
+                    content_lines = [
+                        f"# Media: {media_doc_res.title}",
+                        f"**Source:** [{media_doc_res.media_type.upper()}]({media_doc_res.url}) | **Channel/Author:** {media_doc_res.channel_or_author or 'Unknown'}",
+                        f"\n## Overview Summary\n{media_doc_res.summary}",
+                    ]
+                    if media_doc_res.key_takeaways:
+                        content_lines.append("\n## Key Takeaways")
+                        for t in media_doc_res.key_takeaways:
+                            content_lines.append(f"- {t}")
+                    if media_doc_res.topics:
+                        content_lines.append(f"\n**Topics:** {', '.join(media_doc_res.topics)}")
+                    if media_doc_res.segments:
+                        content_lines.append("\n## Timestamped Breakdown")
+                        for s in media_doc_res.segments:
+                            s_time = f"{_format_seconds(s.start_time_seconds)} - {_format_seconds(s.end_time_seconds)}"
+                            s_label = f" ({s.label})" if s.label else ""
+                            content_lines.append(f"- **{s_time}**{s_label}: {s.content}")
+
+                    response = PersonalContextReadResponse(
+                        source_id=media_doc_res.id,
+                        source_type="media",
+                        content="\n".join(content_lines),
+                        category="media_document",
+                        role=None,
+                        evidence_quote=None,
+                        source_native_chat_id=None,
+                        source_native_message_id=None,
+                        source_native_project_id=None,
+                        source_native_folder_id=None,
+                        title=media_doc_res.title,
+                        url=media_doc_res.url,
+                        media_type=media_doc_res.media_type,
+                        channel_or_author=media_doc_res.channel_or_author,
+                        start_time_seconds=0,
+                        end_time_seconds=media_doc_res.duration_seconds,
+                        label=None,
+                        key_takeaways=media_doc_res.key_takeaways or [],
+                        topics=media_doc_res.topics or [],
+                        neighbors=[],
+                        full_source_available=True,
+                    )
+                else:
                     raise HTTPException(status_code=404, detail="memory source not found")
-                response = PersonalContextReadResponse(
-                    source_id=uuid.UUID(file_result.reference_id),
-                    source_type="file",
-                    content=file_result.content,
-                    category=file_result.mime_type,
-                    role=None,
-                    evidence_quote=None,
-                    source_native_chat_id=None,
-                    source_native_message_id=None,
-                    filename=file_result.filename,
-                    native_file_id=file_result.native_file_id,
-                    header_path=file_result.header_path,
-                    chunk_ordinal=file_result.chunk_ordinal,
-                    previous_chunk=file_result.previous_content,
-                    next_chunk=file_result.next_content,
-                    neighbors=[],
-                    full_source_available=True,
-                )
     LOGGER.info(
         "personal_context_read_completed",
         native_user_id=body.native_user_id,
@@ -799,3 +959,104 @@ async def forget_memory(body: MemoryForgetRequest, request: Request) -> MemoryFo
         archived_ids=archived_ids,
         message=f"Archived {len(archived_ids)} memory record(s)",
     )
+
+
+class PersonalContextProcessMediaRequest(BaseModel):
+    """Native identity and URL for on-demand media understanding."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    native_user_id: str = Field(min_length=1, max_length=200)
+    url: str = Field(min_length=1, max_length=2048)
+    media_type: str = Field(default="youtube", min_length=1, max_length=64)
+
+
+class PersonalContextProcessMediaResponse(BaseModel):
+    """Structured response from on-demand media processing."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: uuid.UUID
+    url: str
+    title: str
+    total_segments: int
+    duration_seconds: int | None = None
+    summary: str
+    key_takeaways: list[str] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+
+
+@router.post(
+    "/process-media",
+    dependencies=[Depends(require_adapter_signature)],
+    response_model=PersonalContextProcessMediaResponse,
+)
+async def process_personal_context_media(
+    body: PersonalContextProcessMediaRequest, request: Request
+) -> PersonalContextProcessMediaResponse:
+    """Analyze and index a media URL on-demand for personal context."""
+    from sqlalchemy import select
+
+    from assistant_core.identity.models import UserIdentity
+    from assistant_core.jobs.worker import get_media_analyzer
+    from assistant_core.media.repository import store_media_analysis
+
+    async with request.app.state.session_factory() as session:
+        user_res = (
+            await session.execute(
+                select(UserIdentity.id).where(UserIdentity.native_user_id == body.native_user_id)
+            )
+        ).scalar_one_or_none()
+        if user_res is None:
+            user_id = uuid.uuid4()
+            session.add(UserIdentity(id=user_id, native_user_id=body.native_user_id))
+            await session.flush()
+        else:
+            user_id = user_res
+
+        analyzer = get_media_analyzer(request.app.state.settings)
+        analysis = await analyzer.analyze_media(url=body.url, media_type=body.media_type)
+
+        embedder = None
+        try:
+            embedder = get_conversation_embedder(request.app.state.settings)
+        except Exception:  # noqa: BLE001
+            embedder = None
+
+        doc_emb: list[float] | None = None
+        seg_embs: list[list[float] | None] | None = None
+        if embedder is not None:
+            try:
+                doc_emb = await asyncio.to_thread(
+                    embedder.embed_one, f"{analysis.title}\n{analysis.summary}"
+                )
+            except Exception:  # noqa: BLE001
+                doc_emb = None
+
+            if analysis.segments:
+                seg_texts = [f"{s.label or ''}\n{s.content}" for s in analysis.segments]
+                try:
+                    seg_embs = [
+                        await asyncio.to_thread(embedder.embed_one, t) for t in seg_texts
+                    ]
+                except Exception:  # noqa: BLE001
+                    seg_embs = None
+        doc = await store_media_analysis(
+            session,
+            user_id=user_id,
+            analysis=analysis,
+            document_embedding=doc_emb,
+            segment_embeddings=seg_embs,
+        )
+        await session.commit()
+
+        return PersonalContextProcessMediaResponse(
+            id=doc.id,
+            url=doc.url,
+            title=doc.title,
+            total_segments=doc.total_segments,
+            duration_seconds=doc.duration_seconds,
+            summary=doc.summary,
+            key_takeaways=doc.key_takeaways or [],
+            topics=doc.topics or [],
+        )

@@ -394,3 +394,77 @@ def test_read_full_document(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "Full Document: specs.pdf" in out
     assert "Chunks: 5" in out
     assert "# System Architecture\nComplete text here." in out
+
+
+def test_media_context_search_read_and_process_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+    source_id = "00000000-0000-0000-0000-000000000099"
+    responses = {
+        "/v1/personal-context/search": {
+            "mode": "hybrid",
+            "results": [
+                {
+                    "source_id": source_id,
+                    "source_type": "media",
+                    "category": "media_segment",
+                    "role": None,
+                    "preview": "Neural networks learn representations through backpropagation.",
+                    "title": "Deep Learning Fundamentals",
+                    "start_time_seconds": 125,
+                    "end_time_seconds": 240,
+                    "label": "Backprop Chapter",
+                }
+            ],
+        },
+        "/v1/personal-context/read": {
+            "source_id": source_id,
+            "source_type": "media",
+            "title": "Deep Learning Fundamentals",
+            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "category": "media_segment",
+            "start_time_seconds": 125,
+            "end_time_seconds": 240,
+            "content": "# Media: Deep Learning Fundamentals\nDetailed transcript of gradient descent.",
+        },
+        "/v1/personal-context/process-media": {
+            "id": source_id,
+            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "title": "Deep Learning Fundamentals",
+            "total_segments": 4,
+            "duration_seconds": 600,
+            "summary": "An introduction to deep learning and backprop.",
+            "key_takeaways": ["Gradient descent minimizes loss", "Activations introduce non-linearity"],
+            "topics": ["AI", "Machine Learning"],
+        },
+    }
+
+    class _RoutingClient:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, url: str, **_kwargs: Any) -> _Response:
+            path = "/" + url.split("/", 3)[3]
+            return _Response(responses[path])
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda *, timeout: _RoutingClient())
+    tool = module.Tools()
+    tool.valves.hmac_secret = "tool-test-secret"
+    user = {"id": "user-1"}
+
+    search_out = asyncio.run(tool.search_personal_context("backprop", __user__=user))
+    assert "media/Deep Learning Fundamentals @ 02:05-04:00" in search_out
+    assert "(Backprop Chapter)" in search_out
+
+    read_out = asyncio.run(tool.read_personal_context(source_id, __user__=user))
+    assert f"Media source {source_id}:" in read_out
+    assert "Media: media/Deep Learning Fundamentals @ 02:05-04:00" in read_out
+    assert "https://www.youtube.com/watch?v=dQw4w9WgXcQ" in read_out
+    assert "Detailed transcript of gradient descent." in read_out
+
+    process_out = asyncio.run(tool.process_media_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ", __user__=user))
+    assert "Processed & Indexed Media: Deep Learning Fundamentals" in process_out
+    assert "Timestamped Segments: 4" in process_out
+    assert "Gradient descent minimizes loss" in process_out
