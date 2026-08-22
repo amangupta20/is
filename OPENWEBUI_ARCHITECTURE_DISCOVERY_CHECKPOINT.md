@@ -1557,6 +1557,24 @@ Suggested manual post-upgrade checklist:
 
 Use plain terms such as `maintenance smoke checks` or `post-upgrade checks`, not `release gates`.
 
+### 19.21 Storage simplification and gateway deferral
+
+Recorded 2026-08-23. This section supersedes the unified-content-backbone storage framing in sections 19.14-19.15 and defers the Phase 4 semantic capability gateway (sections 19.8-19.9).
+
+Canonical content storage simplification selected: Open WebUI folders plus Postgres.
+
+- The separate `assistant-content` Garage bucket is no longer planned. Operating a second binary store for canonical content buys isolation this single-user deployment does not need.
+- User documents stay where they already live: Open WebUI native uploads plus its folder system are the user-visible organization layer, and the existing file catalog/indexing pipeline keeps referencing those files.
+- Generated content (artifacts, compiled documents, media derivatives) stays in Postgres and the existing local artifact storage, which already provide versioning and provenance.
+- Binary-level dedup or extraction reuse, where later wanted, can key off content hashes already stored in Postgres; no object store required.
+- Native Open WebUI upload storage (`STORAGE_PROVIDER`, Garage or otherwise) remains an independent Open WebUI configuration choice unaffected by this decision.
+
+Phase 4 semantic capability gateway placed on hold.
+
+- The current tool catalog is small enough that manual attachment is not a bottleneck; filling it out further is not intended now.
+- Discovery, compatibility filtering, chat-scoped promotion, and generic execution machinery stay unbuilt until tool count makes attachment management genuinely painful.
+- Revisit only from observed need, per the cross-phase rule against building later phases merely because they appear in this design.
+
 ## 20. Updated immediate continuation
 
 The context-threshold question is resolved: use 300k for every model and raise it only temporarily for an exceptional task.
@@ -2226,6 +2244,8 @@ Completion check:
 
 ### Phase 4 — semantic capability gateway
 
+Status (2026-08-23): on hold per section 19.21. The tool catalog is intentionally small; revisit only when attachment management becomes a real bottleneck.
+
 Goal: make a large tool catalog usable without manually attaching every heavy schema.
 
 - Inventory and normalize native, OpenAPI, MCP, oikb, GitHub, Terminal, and later custom capabilities.
@@ -2238,6 +2258,8 @@ Completion check:
 - Representative requests discover and execute the correct specialized capability, reuse it later in the same chat, reject an unauthorized/incompatible capability, and require confirmation for a deliberately consequential test action.
 
 ### Phase 5 — canonical content library and global deduplication
+
+Status (2026-08-23): re-scoped per section 19.21. No `assistant-content` Garage bucket; Open WebUI's folder system organizes user documents, Postgres/local artifact storage holds generated content, and dedup can key off hashes already stored in Postgres. Remaining optional work if ever needed: binary-level dedup/extraction reuse keyed on stored hashes; the Xberg extraction benchmark below still stands on its own.
 
 Goal: add durable retention, versioning, and processing reuse beneath the global file discovery delivered in Phase 3.
 
