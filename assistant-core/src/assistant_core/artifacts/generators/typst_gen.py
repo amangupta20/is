@@ -106,19 +106,23 @@ class TypstGenerator:
 
         contact_parts: list[str] = []
         if spec.email:
+            clean_email = spec.email.replace('"', "%22")
             esc_email = _escape_typst(spec.email)
-            contact_parts.append(f'#link("mailto:{spec.email}")[{esc_email}]')
+            contact_parts.append(f'#link("mailto:{clean_email}")[{esc_email}]')
         if spec.phone:
             contact_parts.append(_escape_typst(spec.phone))
         if spec.location:
             contact_parts.append(_escape_typst(spec.location))
         if spec.website:
+            clean_website = spec.website.replace('"', "%22")
             clean_url = spec.website.replace("https://", "").replace("http://", "").rstrip("/")
-            contact_parts.append(f'#link("{spec.website}")[{_escape_typst(clean_url)}]')
+            contact_parts.append(f'#link("{clean_website}")[{_escape_typst(clean_url)}]')
         if spec.github:
-            contact_parts.append(f'#link("{spec.github}")[GitHub]')
+            clean_github = spec.github.replace('"', "%22")
+            contact_parts.append(f'#link("{clean_github}")[GitHub]')
         if spec.linkedin:
-            contact_parts.append(f'#link("{spec.linkedin}")[LinkedIn]')
+            clean_linkedin = spec.linkedin.replace('"', "%22")
+            contact_parts.append(f'#link("{clean_linkedin}")[LinkedIn]')
 
         if contact_parts:
             sep = ' #text(fill: rgb("#94a3b8"))[·] '

@@ -297,8 +297,8 @@ async def handle_onlyoffice_callback(
         if settings.onlyoffice_jwt_secret:
             auth_header = request.headers.get("authorization")
             token: str | None = None
-            if auth_header and auth_header.startswith("Bearer "):
-                token = auth_header.removeprefix("Bearer ").strip()
+            if auth_header and auth_header.lower().startswith("bearer "):
+                token = auth_header[7:].strip()
             elif payload.get("token"):
                 token = str(payload["token"])
 
