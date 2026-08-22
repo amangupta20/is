@@ -1610,6 +1610,10 @@ class DashboardApp {
           </div>
 
           <div class="artifact-actions">
+            <button class="btn btn-secondary btn-sm" onclick="app.openArtifactVersions('${art.id}')">
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 14 14"/></svg>
+              Versions (v${art.current_version_num})
+            </button>
             <a href="${art.download_url}" class="btn btn-secondary btn-sm" download>
               <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
               Download
@@ -1626,6 +1630,196 @@ class DashboardApp {
       `;
       })
       .join('');
+  }
+
+  async openArtifactVersions(artifactId) {
+    let art = this.artifactsList?.find((a) => a.id === artifactId);
+    if (!art || !art.versions) {
+      try {
+        const data = await this.api('/v1/admin/artifacts?limit=100');
+        this.artifactsList = data.artifacts || [];
+        art = this.artifactsList.find((a) => a.id === artifactId);
+      } catch (err) {
+        this.showToast(`Failed to load artifact details: ${err.message}`, 'error');
+        return;
+      }
+    }
+
+    if (!art) {
+      this.showToast('Artifact not found', 'error');
+      return;
+    }
+
+    const modal = document.getElementById('artifact-versions-modal');
+    const titleEl = document.getElementById('artifact-versions-title');
+    const subtitleEl = document.getElementById('artifact-versions-subtitle');
+    const timelineEl = document.getElementById('artifact-versions-timeline');
+
+    if (titleEl) titleEl.innerText = `${art.title} - Version History`;
+    if (subtitleEl) {
+      subtitleEl.innerText = `Slug: ${art.slug} • Type: ${art.artifact_type.toUpperCase()} • Current: v${art.current_version_num} • User: ${art.native_user_id}`;
+    }
+
+    const sortedVersions = [...(art.versions || [])].sort((a, b) => b.version_num - a.version_num);
+
+    if (sortedVersions.length === 0) {
+      timelineEl.innerHTML = '<div class="empty-state">No version history available for this artifact.</div>';
+    } else {
+      timelineEl.innerHTML = sortedVersions
+        .map((ver) => {
+          const isCurrent = ver.version_num === art.current_version_num;
+          const sizeKb = ver.file_size_bytes ? `${Math.max(1, Math.round(ver.file_size_bytes / 1024))} KB (${ver.file_size_bytes.toLocaleString()} bytes)` : '0 bytes';
+          const shaShort = ver.content_sha256 ? ver.content_sha256.substring(0, 10) : '';
+          const downloadUrl = `/v1/artifacts/${art.id}/versions/${ver.version_num}/download`;
+
+          return `
+          <div class="version-item ${isCurrent ? 'version-current' : ''}">
+            <div class="version-item-header">
+              <div class="version-badge-group">
+                <span class="badge ${isCurrent ? 'badge-primary' : 'badge-version'}">v${ver.version_num}</span>
+                ${isCurrent ? '<span class="status-pill status-online"><span class="dot"></span> Current</span>' : ''}
+                <span class="version-date">${this.formatDate(ver.created_at)}</span>
+              </div>
+              <div class="version-actions">
+                <a href="${downloadUrl}" class="btn btn-secondary btn-sm" download title="Download version ${ver.version_num}">
+                  <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Download
+                </a>
+                ${!isCurrent ? `
+                  <button class="btn btn-secondary btn-sm" onclick="app.viewArtifactDiff('${art.id}', ${ver.version_num}, ${art.current_version_num})">
+                    <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="12 6 12 12 16 14"/></svg>
+                    Diff with Current (v${art.current_version_num})
+                  </button>
+                  <button class="btn btn-warning-ghost btn-sm" onclick="app.revertArtifactVersion('${art.id}', ${ver.version_num})">
+                    <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                    Revert to v${ver.version_num}
+                  </button>
+                ` : `
+                  ${ver.version_num > 1 ? `
+                    <button class="btn btn-secondary btn-sm" onclick="app.viewArtifactDiff('${art.id}', ${ver.version_num - 1}, ${ver.version_num})">
+                      <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="12 6 12 12 16 14"/></svg>
+                      Diff with v${ver.version_num - 1}
+                    </button>
+                  ` : ''}
+                `}
+              </div>
+            </div>
+            <div class="version-item-body">
+              ${ver.change_summary ? `<p class="version-summary"><em>"${this.escapeHtml(ver.change_summary)}"</em></p>` : '<p class="version-summary text-muted">No change summary provided</p>'}
+              <div class="version-meta">
+                <span>Size: <strong>${sizeKb}</strong></span>
+                ${shaShort ? `<span>SHA: <code>${shaShort}</code></span>` : ''}
+                ${ver.mime_type ? `<span>MIME: <code>${this.escapeHtml(ver.mime_type)}</code></span>` : ''}
+              </div>
+            </div>
+          </div>
+        `;
+        })
+        .join('');
+    }
+
+    modal.style.display = 'flex';
+  }
+
+  closeArtifactVersionsModal() {
+    const modal = document.getElementById('artifact-versions-modal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  async viewArtifactDiff(artifactId, v1, v2) {
+    const modal = document.getElementById('artifact-diff-modal');
+    const titleEl = document.getElementById('artifact-diff-title');
+    const subtitleEl = document.getElementById('artifact-diff-subtitle');
+    const statsEl = document.getElementById('artifact-diff-stats');
+    const contentEl = document.getElementById('artifact-diff-content');
+
+    const art = this.artifactsList?.find((a) => a.id === artifactId);
+    const artTitle = art ? art.title : 'Artifact';
+
+    if (titleEl) titleEl.innerText = `Diff: ${artTitle} (v${v1} ➔ v${v2})`;
+    if (subtitleEl) subtitleEl.innerText = `Comparing changes from version ${v1} to version ${v2}`;
+    if (statsEl) statsEl.innerHTML = '<span class="text-secondary">Computing unified diff...</span>';
+    if (contentEl) contentEl.innerHTML = '<div class="loading-state">Loading diff...</div>';
+
+    modal.style.display = 'flex';
+
+    try {
+      const data = await this.api(`/v1/admin/artifacts/${artifactId}/diff?v1=${v1}&v2=${v2}`);
+
+      if (statsEl) {
+        statsEl.innerHTML = `
+          <div class="diff-meta-item">
+            <span class="diff-meta-label">Base Version:</span>
+            <span class="badge badge-version">v${data.v1}</span>
+          </div>
+          <div class="diff-meta-item">
+            <span class="diff-meta-label">Target Version:</span>
+            <span class="badge badge-version">v${data.v2}</span>
+          </div>
+          <div class="diff-meta-item">
+            <span class="diff-meta-label">Additions:</span>
+            <span class="badge badge-success">+${data.additions} lines</span>
+          </div>
+          <div class="diff-meta-item">
+            <span class="diff-meta-label">Deletions:</span>
+            <span class="badge badge-danger">-${data.deletions} lines</span>
+          </div>
+        `;
+      }
+
+      if (!data.diff_lines || data.diff_lines.length === 0) {
+        contentEl.innerHTML = `<div class="diff-empty-state">No differences detected between v${v1} and v${v2}.</div>`;
+        return;
+      }
+
+      contentEl.innerHTML = data.diff_lines
+        .map((line) => {
+          let lineClass = 'diff-line diff-line-ctx';
+          if (line.startsWith('+++') || line.startsWith('---')) {
+            lineClass = 'diff-line diff-line-header';
+          } else if (line.startsWith('+')) {
+            lineClass = 'diff-line diff-line-add diff-add';
+          } else if (line.startsWith('-')) {
+            lineClass = 'diff-line diff-line-del diff-del';
+          } else if (line.startsWith('@@')) {
+            lineClass = 'diff-line diff-line-info';
+          }
+          return `<div class="${lineClass}"><span class="diff-line-content">${this.escapeHtml(line)}</span></div>`;
+        })
+        .join('');
+    } catch (err) {
+      if (contentEl) {
+        contentEl.innerHTML = `<div class="empty-state text-danger">Failed to load diff: ${this.escapeHtml(err.message)}</div>`;
+      }
+    }
+  }
+
+  closeArtifactDiffModal() {
+    const modal = document.getElementById('artifact-diff-modal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  async revertArtifactVersion(artifactId, targetVersionNum) {
+    if (
+      !confirm(
+        `Are you sure you want to revert this artifact to version v${targetVersionNum}?\n\nThis will create a new version with the content of v${targetVersionNum} as the latest active state.`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      const data = await this.api(`/v1/admin/artifacts/${artifactId}/revert`, {
+        method: 'POST',
+        body: JSON.stringify({ target_version_num: targetVersionNum }),
+      });
+      this.showToast(`Artifact reverted to v${targetVersionNum} (New version: v${data.new_version_num})`, 'success');
+      this.closeArtifactVersionsModal();
+      await this.loadArtifacts();
+      await this.loadOverview();
+    } catch (err) {
+      this.showToast(`Failed to revert artifact: ${err.message}`, 'error');
+    }
   }
 
   async launchOnlyOffice(artifactId) {

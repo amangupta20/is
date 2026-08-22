@@ -10,6 +10,7 @@
   /* Color Palette - Dark Mode */
   --bg-app: hsl(222, 47%, 7%);
   --bg-sidebar: hsl(222, 47%, 9%);
+  --bg-surface: hsl(222, 47%, 11%);
   --bg-card: hsl(222, 47%, 11%);
   --bg-card-hover: hsl(222, 47%, 14%);
   --bg-input: hsl(222, 47%, 13%);
@@ -1391,6 +1392,174 @@ select:focus {
   padding: 36px 20px;
   color: var(--text-muted);
   font-size: 14px;
+}
+
+/* --------------------------------------------------------------------------
+   Artifact Version Timeline & Diff Viewer Styles
+   -------------------------------------------------------------------------- */
+.version-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 65vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.version-item {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: var(--transition);
+}
+
+.version-item:hover {
+  border-color: var(--border-focus);
+}
+
+.version-item.version-current {
+  border-color: var(--primary);
+  background: hsla(217, 91%, 60%, 0.05);
+}
+
+.version-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.version-badge-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.version-date {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.version-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.version-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.version-summary {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.version-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+
+.version-meta code {
+  color: var(--primary);
+  background: var(--bg-card);
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+
+/* Unified Diff Viewer */
+.diff-viewer {
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  max-height: 60vh;
+  overflow-y: auto;
+  overflow-x: auto;
+  padding: 8px 0;
+  white-space: pre;
+}
+
+.diff-line {
+  padding: 2px 14px;
+  display: block;
+  font-family: var(--font-mono);
+}
+
+.diff-line-content {
+  display: inline;
+}
+
+.diff-line-header {
+  color: var(--text-muted);
+  background: hsla(220, 20%, 30%, 0.15);
+  font-weight: 600;
+}
+
+.diff-line-info {
+  color: hsl(217, 91%, 75%);
+  background: hsla(217, 91%, 60%, 0.12);
+  font-weight: 500;
+}
+
+.diff-line-add,
+.diff-add {
+  background: hsla(142, 71%, 45%, 0.15);
+  color: hsl(142, 71%, 70%);
+}
+
+.diff-line-del,
+.diff-del {
+  background: hsla(0, 84%, 60%, 0.15);
+  color: hsl(0, 84%, 75%);
+}
+
+.diff-line-ctx {
+  color: var(--text-secondary);
+}
+
+.btn-warning-ghost {
+  background: transparent;
+  color: var(--warning);
+  border: 1px solid var(--warning-subtle);
+}
+
+.btn-warning-ghost:hover {
+  background: var(--warning-subtle);
+  border-color: var(--warning);
+}
+
+.badge-primary {
+  background: var(--primary-subtle);
+  color: var(--primary);
+  border: 1px solid hsla(217, 91%, 60%, 0.3);
+}
+
+.badge-success {
+  background: var(--success-subtle);
+  color: var(--success);
+}
+
+.badge-danger {
+  background: var(--danger-subtle);
+  color: var(--danger);
 }
 
 /* --------------------------------------------------------------------------

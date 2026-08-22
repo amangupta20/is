@@ -973,6 +973,45 @@
       </div>
     </div>
 
+    <!-- Modal: Artifact Version History -->
+    <div id="artifact-versions-modal" class="modal-overlay" style="display: none;">
+      <div class="modal-card modal-lg">
+        <div class="modal-header">
+          <div>
+            <h2 id="artifact-versions-title">Artifact Version History</h2>
+            <p id="artifact-versions-subtitle" class="text-muted"></p>
+          </div>
+          <button class="modal-close" onclick="app.closeArtifactVersionsModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div id="artifact-versions-timeline" class="version-timeline"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="app.closeArtifactVersionsModal()">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Artifact Diff Viewer -->
+    <div id="artifact-diff-modal" class="modal-overlay" style="display: none;">
+      <div class="modal-card modal-lg">
+        <div class="modal-header">
+          <div>
+            <h2 id="artifact-diff-title">Artifact Version Diff</h2>
+            <p id="artifact-diff-subtitle" class="text-muted"></p>
+          </div>
+          <button class="modal-close" onclick="app.closeArtifactDiffModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div id="artifact-diff-stats" class="diff-meta-bar"></div>
+          <div id="artifact-diff-content" class="diff-viewer"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="app.closeArtifactDiffModal()">Close</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Toast Notifications -->
     <div id="toast-container" class="toast-container"></div>
   </div>
