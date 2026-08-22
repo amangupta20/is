@@ -58,6 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         @app.get("/", include_in_schema=False)
         async def serve_dashboard_ui() -> FileResponse:
-            return FileResponse(str(UI_DIR / "index.html"))
-
+            response = FileResponse(str(UI_DIR / "index.html"))
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            return response
     return app
