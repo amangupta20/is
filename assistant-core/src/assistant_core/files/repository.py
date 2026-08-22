@@ -679,17 +679,14 @@ async def reconcile_and_log_kb_documents(
 
     for doc_id, native_fid, fname, c_sha, uid in docs:
         match_type = None
+        clean_fname = fname.strip() if fname else ""
+        base_fname = clean_fname.replace("\\", "/").split("/")[-1].strip() if clean_fname else ""
         if native_fid in kb_file_ids:
             match_type = "kb_file_id"
         elif c_sha in kb_hashes:
             match_type = "kb_content_sha256"
-        elif (
-            fname in kb_filenames
-            and fname.lower().endswith((".md", ".txt", ".pdf"))
-            and native_fid.startswith("kb-")
-        ):
+        elif clean_fname and (clean_fname in kb_filenames or base_fname in kb_filenames):
             match_type = "kb_filename"
-
         if match_type:
             pruned_items.append(
                 {

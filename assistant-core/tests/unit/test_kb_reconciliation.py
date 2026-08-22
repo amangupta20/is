@@ -431,3 +431,103 @@ def test_fetch_all_kb_metadata_excludes_manual_chat_uploads() -> None:
         assert "manual-chat-upload-id" not in fids
         assert "venue.xlsx" not in fnames
         assert "update.pdf" not in fnames
+
+
+def test_reconcile_and_log_kb_documents_prunes_matching_filenames_without_kb_prefix() -> None:
+    """reconcile_and_log_kb_documents prunes documents matching KB filenames regardless of native_file_id format."""
+    user_id = uuid.uuid4()
+    doc1_id = uuid.uuid4()
+    doc2_id = uuid.uuid4()
+    doc3_id = uuid.uuid4()
+
+    # Doc 1: UUID native_file_id (no 'kb-' prefix) but matches '_MOC.md'
+    # Doc 2: UUID native_file_id matches 'DSA Notes.md'
+    # Doc 3: User uploaded PDF, does not match KB
+    mock_docs_rows = [
+        (doc1_id, "d58ef8e1-91ea-4bb6-b81b-5ef4c173c32c", "_MOC.md", "some-sha-1", user_id),
+        (doc2_id, "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", "DSA Notes.md", "some-sha-2", user_id),
+        (doc3_id, "f9e8d7c6-b5a4-3210-fedc-ba9876543210", "invoice.pdf", "some-sha-3", user_id),
+    ]
+
+    fake_session = _FakeSession(
+        [
+            _FakeResult(rows=mock_docs_rows),
+            _FakeResult(),
+            _FakeResult(),
+            _FakeResult(),
+        ]
+    )
+
+    with patch(
+        "assistant_core.files.repository.fetch_all_kb_metadata_and_hashes",
+        return_value=(
+            set(),  # no kb_file_ids match directly
+            set(),  # no kb_hashes match directly
+            {"_MOC.md", "DSA Notes.md"},  # kb_filenames match
+        ),
+    ):
+        import asyncio
+
+        run = asyncio.run(
+            reconcile_and_log_kb_documents(
+                fake_session,
+                base_url="http://open-webui:8080",
+                api_key=None,
+                trigger="manual_admin",
+            )
+        )
+
+        assert run.status == "success"
+        assert run.pruned_count == 2
+        assert len(run.details) == 2
+        assert run.details[0]["filename"] == "_MOC.md"
+        assert run.details[0]["match_type"] == "kb_filename"
+        assert run.details[1]["filename"] == "DSA Notes.md"
+        assert run.details[1]["match_type"] == "kb_filename"
+        assert fake_session.committed is True
+
+
+def test_trigger_kb_reconciliation_endpoint() -> None:
+    """POST /v1/admin/files/reconcile-kb triggers reconciliation and returns run details including pruned_count."""
+    run_id = uuid.uuid4()
+    now = datetime.now(UTC)
+    mock_run = KBReconciliationRun(
+        id=run_id,
+        trigger="manual_admin",
+        status="success",
+        kb_files_scanned=15,
+        pruned_count=3,
+        details=[
+            {
+                "document_id": str(uuid.uuid4()),
+                "native_file_id": "file-1",
+                "filename": "_MOC.md",
+                "content_sha256": "sha1",
+                "user_id": str(uuid.uuid4()),
+                "match_type": "kb_filename",
+                "reason": "Document matched active Knowledge Base (kb_filename)",
+            }
+        ],
+        error_message=None,
+        duration_ms=45.2,
+        created_at=now,
+    )
+
+    fake_session = _FakeSession()
+    client = _make_test_client(fake_session)
+
+    with patch(
+        "assistant_core.api.routes.admin.reconcile_and_log_kb_documents",
+        return_value=mock_run,
+    ) as mock_reconcile:
+        resp = client.post("/v1/admin/files/reconcile-kb")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == str(run_id)
+        assert data["status"] == "success"
+        assert data["trigger"] == "manual_admin"
+        assert data["pruned_count"] == 3
+        assert data["kb_files_scanned"] == 15
+        assert len(data["details"]) == 1
+        assert data["details"][0]["filename"] == "_MOC.md"
+        assert mock_reconcile.called

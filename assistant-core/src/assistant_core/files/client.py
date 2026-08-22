@@ -26,11 +26,17 @@ def _extract_files_from_dict(
         d.get("file_path")
         or d.get("path")
         or d.get("filename")
-        or d.get("name")
         or d.get("source_path")
         or d.get("target_path")
+        or d.get("rel_path")
+        or d.get("relative_path")
     )
-    if fname and isinstance(fname, str) and ("." in fname or "/" in fname or "\\" in fname):
+    if not fname and isinstance(d.get("name"), str):
+        raw_name = str(d["name"])
+        if "." in raw_name or "/" in raw_name or "\\" in raw_name:
+            fname = raw_name
+
+    if fname and isinstance(fname, str):
         clean_fname = fname.strip()
         base_fname = clean_fname.replace("\\", "/").split("/")[-1].strip()
         if clean_fname:
@@ -295,8 +301,83 @@ def fetch_openwebui_file(
     raw_meta = data.get("meta")
     meta_dict: dict[str, Any] = raw_meta if isinstance(raw_meta, dict) else {}
 
+    # Check direct metadata markers
+    source_val = str(data.get("source") or meta_dict.get("source") or "").strip().lower()
+    type_val = str(data.get("type") or meta_dict.get("type") or "").strip().lower()
+    if (
+        data.get("collection_id")
+        or data.get("collection_name")
+        or data.get("knowledge_id")
+        or data.get("knowledge_name")
+        or meta_dict.get("collection_id")
+        or meta_dict.get("collection_name")
+        or meta_dict.get("knowledge_id")
+        or meta_dict.get("knowledge_name")
+        or source_val in ("knowledge", "collection", "kb", "vault")
+        or type_val in ("collection", "knowledge", "kb", "vault")
+    ):
+        LOGGER.info(
+            "fetch_openwebui_file_skipped_kb_metadata",
+            file_id=file_id,
+            source=source_val,
+            type=type_val,
+        )
+        return None
+
     filename = str(data.get("filename") or meta_dict.get("name") or file_id)
     mime_type = str(meta_dict.get("content_type") or "text/plain")
+
+    # Check against knowledge registry
+    kb_file_ids: set[str] = set()
+    kb_hashes: set[str] = set()
+    kb_filenames: set[str] = set()
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            kb_resp = client.get(f"{clean_url}/api/v1/knowledge/", headers=headers)
+            if kb_resp.status_code == 200:
+                kb_data = kb_resp.json()
+                kb_list: list[dict[str, Any]] = []
+                if isinstance(kb_data, list):
+                    kb_list = [item for item in kb_data if isinstance(item, dict)]
+                elif isinstance(kb_data, dict):
+                    if isinstance(kb_data.get("items"), list):
+                        kb_list = [item for item in kb_data["items"] if isinstance(item, dict)]
+                    elif isinstance(kb_data.get("data"), list):
+                        kb_list = [item for item in kb_data["data"] if isinstance(item, dict)]
+                    else:
+                        kb_list = [kb_data]
+
+                for item in kb_list:
+                    kb_name = item.get("name")
+                    if kb_name:
+                        kb_filenames.add(str(kb_name).strip())
+                    _extract_files_from_dict(item, kb_file_ids, kb_hashes, kb_filenames)
+                    kb_id = item.get("id")
+                    if kb_id:
+                        try:
+                            detail_resp = client.get(
+                                f"{clean_url}/api/v1/knowledge/{kb_id}", headers=headers
+                            )
+                            if detail_resp.status_code == 200 and isinstance(
+                                detail_resp.json(), dict
+                            ):
+                                _extract_files_from_dict(
+                                    detail_resp.json(), kb_file_ids, kb_hashes, kb_filenames
+                                )
+                        except Exception:  # noqa: BLE001, S110
+                            pass
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.debug("fetch_openwebui_file_kb_registry_check_failed", error=str(exc))
+
+    clean_fname = filename.strip()
+    base_fname = clean_fname.replace("\\", "/").split("/")[-1].strip()
+    if file_id in kb_file_ids or clean_fname in kb_filenames or base_fname in kb_filenames:
+        LOGGER.info(
+            "fetch_openwebui_file_skipped_kb_registry_match",
+            file_id=file_id,
+            filename=filename,
+        )
+        return None
 
     # Check if extracted markdown content is already present in data.content
     content = ""
@@ -319,5 +400,16 @@ def fetch_openwebui_file(
             raise OpenWebUIFileFetchError(
                 f"Failed to fetch content for file {file_id}: {exc}", status_code=status
             ) from exc
+
+    if content.strip():
+        c_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if c_hash in kb_hashes:
+            LOGGER.info(
+                "fetch_openwebui_file_skipped_kb_hash_match",
+                file_id=file_id,
+                filename=filename,
+                content_sha256=c_hash,
+            )
+            return None
 
     return filename, mime_type, content

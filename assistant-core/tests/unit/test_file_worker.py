@@ -140,3 +140,158 @@ def test_fetch_openwebui_file_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result[0] == "guidelines.pdf"
     assert result[1] == "application/pdf"
     assert result[2] == "Extracted PDF text content"
+
+
+@pytest.mark.parametrize(
+    "kb_metadata",
+    [
+        {"collection_id": "coll-123"},
+        {"collection_name": "Obsidian Vault"},
+        {"knowledge_id": "kb-123"},
+        {"knowledge_name": "Vault Knowledge"},
+        {"meta": {"collection_id": "coll-456"}},
+        {"meta": {"collection_name": "Obsidian Vault"}},
+        {"meta": {"knowledge_id": "kb-456"}},
+        {"source": "knowledge"},
+        {"source": "collection"},
+        {"type": "collection"},
+        {"type": "knowledge"},
+        {"meta": {"source": "knowledge"}},
+        {"meta": {"type": "vault"}},
+    ],
+)
+def test_fetch_openwebui_file_skips_kb_metadata(
+    monkeypatch: pytest.MonkeyPatch, kb_metadata: dict[str, object]
+) -> None:
+    """fetch_openwebui_file returns None when file metadata marks it as a KB/collection document."""
+    import httpx
+
+    from assistant_core.files.client import fetch_openwebui_file
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/files/kb-meta-file-id":
+            data: dict[str, object] = {
+                "id": "kb-meta-file-id",
+                "filename": "notes.md",
+                "data": {"content": "Some markdown content"},
+            }
+            data.update(kb_metadata)
+            return httpx.Response(200, json=data)
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        "httpx.Client",
+        lambda *args, **kwargs: real_client(transport=transport),
+    )
+
+    result = fetch_openwebui_file(
+        base_url="http://openwebui:8080",
+        api_key=None,
+        file_id="kb-meta-file-id",
+    )
+    assert result is None
+
+
+def test_fetch_openwebui_file_skips_kb_registry_match(monkeypatch: pytest.MonkeyPatch) -> None:
+    """fetch_openwebui_file returns None when file is discovered in /api/v1/knowledge/."""
+    import httpx
+
+    from assistant_core.files.client import fetch_openwebui_file
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/files/vault-file-id":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "vault-file-id",
+                    "filename": "_MOC.md",
+                    "data": {"content": "Vault Map of Content"},
+                },
+            )
+        if request.url.path == "/api/v1/knowledge/":
+            return httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "id": "vault-kb",
+                            "name": "Obsidian Vault",
+                            "files": [{"id": "vault-file-id", "name": "_MOC.md"}],
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        "httpx.Client",
+        lambda *args, **kwargs: real_client(transport=transport),
+    )
+
+    result = fetch_openwebui_file(
+        base_url="http://openwebui:8080",
+        api_key=None,
+        file_id="vault-file-id",
+    )
+    assert result is None
+
+
+def test_fetch_openwebui_file_skips_kb_hash_match(monkeypatch: pytest.MonkeyPatch) -> None:
+    """fetch_openwebui_file returns None when content sha256 matches a KB document hash."""
+    import hashlib
+
+    import httpx
+
+    from assistant_core.files.client import fetch_openwebui_file
+
+    kb_content = "Unique KB content from obsidian vault"
+    kb_sha = hashlib.sha256(kb_content.encode("utf-8")).hexdigest()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/files/random-uuid-fid":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "random-uuid-fid",
+                    "filename": "unnamed_copy.md",
+                    "data": {"content": kb_content},
+                },
+            )
+        if request.url.path == "/api/v1/knowledge/":
+            return httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "id": "vault-kb",
+                            "name": "Obsidian Vault",
+                            "files": [
+                                {
+                                    "id": "other-fid",
+                                    "name": "original.md",
+                                    "meta": {"hash": kb_sha},
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        "httpx.Client",
+        lambda *args, **kwargs: real_client(transport=transport),
+    )
+
+    result = fetch_openwebui_file(
+        base_url="http://openwebui:8080",
+        api_key=None,
+        file_id="random-uuid-fid",
+    )
+    assert result is None

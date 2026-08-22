@@ -840,3 +840,68 @@ def test_outlet_captures_attached_file_ids_and_token(
     assert isinstance(payload, dict)
     assert payload.get("attached_file_ids") == ["file-user-attached-1", "file-user-attached-2"]
     assert payload.get("openwebui_token") == "jwt-session-token-123"
+
+
+def test_outlet_filters_kb_and_collection_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    """KB, collection, vault files, and local KB registry IDs are excluded from attached_file_ids."""
+    filter_ = Filter()
+    delivered_payload: dict[str, object] = {}
+
+    async def mock_post_signed(_path: str, payload: dict[str, object]) -> dict[str, object]:
+        delivered_payload.update(payload)
+        return {"status": "accepted"}
+
+    monkeypatch.setattr(filter_, "_post_signed", mock_post_signed)
+    monkeypatch.setattr(filter_, "_get_local_kb_file_ids", lambda: {"local-kb-fid-99"})
+
+    body, user, metadata = _outlet_fixture(
+        user_content="Here are several files.",
+        assistant_content="Understood.",
+    )
+    body["messages"][0]["files"] = [
+        {"id": "doc-collection-1", "type": "collection"},
+        {"id": "doc-knowledge-2", "type": "knowledge"},
+        {"id": "doc-kb-3", "type": "kb"},
+        {"id": "doc-vault-4", "type": "vault"},
+        {"id": "doc-coll-name-5", "collection_name": "Obsidian Vault"},
+        {"id": "doc-know-id-6", "knowledge_id": "k-123"},
+        {"id": "doc-src-know-7", "source": "knowledge"},
+        {"id": "doc-src-coll-8", "source": "collection"},
+        {"id": "doc-meta-kb-9", "meta": {"collection_id": "c-999"}},
+        {"id": "local-kb-fid-99", "type": "file"},
+        {"id": "valid-manual-file-1", "type": "file"},
+        {"id": "valid-manual-file-2"},
+    ]
+
+    assert anyio.run(filter_.outlet, body, user, metadata) is body
+    payload = delivered_payload.get("payload")
+    assert isinstance(payload, dict)
+    assert payload.get("attached_file_ids") == ["valid-manual-file-1", "valid-manual-file-2"]
+
+
+def test_outlet_skips_file_indexing_when_auto_index_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When auto_index_files is False, attached_file_ids is not populated."""
+    filter_ = Filter()
+    filter_.valves.auto_index_files = False
+    delivered_payload: dict[str, object] = {}
+
+    async def mock_post_signed(_path: str, payload: dict[str, object]) -> dict[str, object]:
+        delivered_payload.update(payload)
+        return {"status": "accepted"}
+
+    monkeypatch.setattr(filter_, "_post_signed", mock_post_signed)
+
+    body, user, metadata = _outlet_fixture(
+        user_content="Here is a file.",
+        assistant_content="Understood.",
+    )
+    body["messages"][0]["files"] = [
+        {"id": "valid-manual-file-1", "type": "file"},
+    ]
+
+    assert anyio.run(filter_.outlet, body, user, metadata) is body
+    payload = delivered_payload.get("payload")
+    assert isinstance(payload, dict)
+    assert "attached_file_ids" not in payload

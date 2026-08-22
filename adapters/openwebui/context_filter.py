@@ -414,14 +414,32 @@ class Filter:
             occurred_at = datetime.now(UTC).isoformat(timespec="microseconds")
 
             attached_file_ids: list[str] = []
-            if isinstance(user_matches[0].get("files"), list):
+            if self.valves.auto_index_files and isinstance(user_matches[0].get("files"), list):
+                kb_ids = self._get_local_kb_file_ids()
                 for f in user_matches[0]["files"]:
                     if isinstance(f, Mapping):
+                        f_meta = f.get("meta") if isinstance(f.get("meta"), Mapping) else {}
+                        f_type = str(f.get("type") or f_meta.get("type") or "").strip().lower()
+                        f_source = (
+                            str(f.get("source") or f_meta.get("source") or "").strip().lower()
+                        )
+                        if (
+                            f_type in ("collection", "knowledge", "kb", "vault")
+                            or f_source in ("knowledge", "collection", "kb", "vault")
+                            or f.get("collection_name")
+                            or f.get("collection_id")
+                            or f.get("knowledge_id")
+                            or f.get("knowledge_name")
+                            or f_meta.get("collection_name")
+                            or f_meta.get("collection_id")
+                            or f_meta.get("knowledge_id")
+                            or f_meta.get("knowledge_name")
+                        ):
+                            continue
                         fid = f.get("id") or f.get("file_id")
                         fid_str = str(fid).strip() if fid else ""
-                        if fid_str and fid_str not in attached_file_ids:
+                        if fid_str and fid_str not in kb_ids and fid_str not in attached_file_ids:
                             attached_file_ids.append(fid_str)
-
             openwebui_token: str | None = None
             if isinstance(__user__, Mapping) and isinstance(__user__.get("token"), str):
                 openwebui_token = str(__user__["token"])
