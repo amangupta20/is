@@ -2,6 +2,7 @@
 
 from assistant_core.artifacts.models import Artifact, ArtifactVersion, OnlyOfficeSession
 from assistant_core.conversation.models import ConversationReference, ConversationSegment
+from assistant_core.episodes.models import TopicEpisode
 from assistant_core.events.models import EventInbox
 from assistant_core.files.models import (
     FileDocument,
@@ -38,5 +39,6 @@ __all__ = [
     "MemoryEvidence",
     "MemoryRecord",
     "OnlyOfficeSession",
+    "TopicEpisode",
     "UserIdentity",
 ]

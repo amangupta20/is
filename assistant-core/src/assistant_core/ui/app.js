@@ -168,6 +168,13 @@ class DashboardApp {
       this.loadJobs();
     });
 
+    const epSearch = document.getElementById('episodes-search');
+    if (epSearch) {
+      epSearch.addEventListener('input', (e) => {
+        this.debounce('episodes', () => this.loadEpisodes(e.target.value), 300);
+      });
+    }
+
     // Memory form submit
     document.getElementById('memory-form').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -214,6 +221,7 @@ class DashboardApp {
       jobs: { title: 'Worker Jobs', sub: 'Monitor asynchronous indexing and re-queue dead jobs.' },
       consolidation: { title: 'Consolidation History', sub: 'Audit logs of AI conflict resolution, supersessions, and evolutionary memory diffs.' },
       artifacts: { title: 'Artifacts', sub: 'Inspect and launch web editing for generated spreadsheets and documents.' },
+      episodes: { title: 'Topic Episodes', sub: 'Inspect high-density 3-hour inactivity session summaries and decisions.' },
       playground: { title: 'Search Playground', sub: 'Interactive hybrid RRF retrieval tester and prompt context preview.' },
     };
 
@@ -247,6 +255,9 @@ class DashboardApp {
       case 'artifacts':
         this.loadArtifacts();
         break;
+      case 'episodes':
+        this.loadEpisodes();
+        break;
       case 'playground':
         break;
     }
@@ -279,6 +290,12 @@ class DashboardApp {
         if (consBadge) {
           consBadge.innerText = data.consolidation.total_runs;
         }
+      }
+      if (data.total_episodes !== undefined) {
+        document.getElementById('stat-episodes').innerText = data.total_episodes;
+        document.getElementById('stat-episodes-sub').innerText = `${data.total_episodes} session summaries`;
+        const epBadge = document.getElementById('badge-episodes');
+        if (epBadge) epBadge.innerText = data.total_episodes;
       }
 
       document.getElementById('stat-jobs').innerText = `${data.jobs.queued} queued`;
@@ -1650,6 +1667,144 @@ class DashboardApp {
       await this.api(`/v1/admin/artifacts/${artifactId}`, { method: 'DELETE' });
       this.showToast('Artifact deleted', 'success');
       this.loadArtifacts();
+      this.loadOverview();
+    } catch (err) {
+      this.showToast(`Delete failed: ${err.message}`, 'error');
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // Topic Episodes Tab
+  // ------------------------------------------------------------------------
+  async loadEpisodes(search = '') {
+    const tbody = document.getElementById('episodes-table-body');
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4">Loading topic episodes...</td></tr>';
+
+    try {
+      const data = await this.api('/v1/admin/episodes?limit=100');
+      this.episodesList = data.episodes || [];
+      this.renderEpisodes(search);
+    } catch {
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-danger">Failed to load topic episodes.</td></tr>';
+    }
+  }
+
+  renderEpisodes(search = '') {
+    const tbody = document.getElementById('episodes-table-body');
+    if (!tbody) return;
+
+    let episodes = this.episodesList || [];
+    if (search) {
+      const q = search.toLowerCase().trim();
+      episodes = episodes.filter(
+        (ep) =>
+          (ep.title && ep.title.toLowerCase().includes(q)) ||
+          (ep.native_chat_id && ep.native_chat_id.toLowerCase().includes(q)) ||
+          (ep.topic_category && ep.topic_category.toLowerCase().includes(q)) ||
+          (ep.summary && ep.summary.toLowerCase().includes(q))
+      );
+    }
+
+    if (episodes.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-secondary">No topic episodes found.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = episodes
+      .map((ep) => {
+        const decisionsCount = ep.decisions_made ? ep.decisions_made.length : 0;
+        const openLoopsCount = ep.open_loops ? ep.open_loops.length : 0;
+        const catBadge = `<span class="badge badge-category badge-${ep.topic_category || 'general'}">${this.escapeHtml(ep.topic_category || 'general')}</span>`;
+
+        return `
+          <tr>
+            <td>
+              <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 2px;">${this.escapeHtml(ep.title)}</div>
+              ${catBadge}
+            </td>
+            <td><code>${this.escapeHtml(ep.native_chat_id)}</code></td>
+            <td><span class="badge badge-muted">${ep.turn_count} turns</span></td>
+            <td>
+              <span class="badge badge-success">${decisionsCount} decisions</span>
+              ${openLoopsCount > 0 ? `<span class="badge badge-warning">${openLoopsCount} open loops</span>` : ''}
+            </td>
+            <td class="text-secondary text-sm">${this.formatDate(ep.created_at)}</td>
+            <td style="text-align: right;">
+              <button class="btn btn-secondary btn-sm" onclick="app.viewEpisode('${ep.id}')">View</button>
+              <button class="btn btn-danger-ghost btn-sm" onclick="app.deleteEpisode('${ep.id}')" title="Delete Episode">
+                <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </td>
+          </tr>
+        `;
+      })
+      .join('');
+  }
+
+  async viewEpisode(episodeId) {
+    try {
+      const ep = await this.api(`/v1/admin/episodes/${episodeId}`);
+      document.getElementById('episode-modal-title').innerText = ep.title;
+      document.getElementById('episode-modal-meta').innerText = `Chat: ${ep.native_chat_id} • Category: ${ep.topic_category} • ${ep.turn_count} turns • ${this.formatDate(ep.created_at)}`;
+      document.getElementById('episode-modal-summary').innerText = ep.summary;
+
+      const decList = document.getElementById('episode-modal-decisions');
+      if (ep.decisions_made && ep.decisions_made.length > 0) {
+        decList.innerHTML = ep.decisions_made.map((d) => `<li>${this.escapeHtml(d)}</li>`).join('');
+      } else {
+        decList.innerHTML = '<li class="text-secondary">No explicit decisions recorded</li>';
+      }
+
+      const loopList = document.getElementById('episode-modal-loops');
+      if (ep.open_loops && ep.open_loops.length > 0) {
+        loopList.innerHTML = ep.open_loops.map((l) => `<li>${this.escapeHtml(l)}</li>`).join('');
+      } else {
+        loopList.innerHTML = '<li class="text-secondary">No pending loops or tasks</li>';
+      }
+
+      const entityDiv = document.getElementById('episode-modal-entities');
+      if (ep.key_entities && ep.key_entities.length > 0) {
+        entityDiv.innerHTML = ep.key_entities.map((e) => `<span class="badge badge-muted" style="padding: 2px 8px; border-radius: 4px; font-size: 11px;">${this.escapeHtml(e)}</span>`).join('');
+      } else {
+        entityDiv.innerHTML = '<span class="text-secondary text-sm">None</span>';
+      }
+
+      document.getElementById('episode-modal').style.display = 'flex';
+    } catch (err) {
+      this.showToast(`Failed to load episode details: ${err.message}`, 'error');
+    }
+  }
+
+  closeEpisodeModal() {
+    document.getElementById('episode-modal').style.display = 'none';
+  }
+
+  async triggerEpisodeCompilation() {
+    try {
+      this.showToast('Compiling topic episodes...', 'info');
+      const res = await this.api('/v1/admin/episodes/compile', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      if (res.status === 'no_eligible_chats') {
+        this.showToast('No eligible uncompiled chats found.', 'info');
+      } else {
+        this.showToast(`Compiled ${res.episodes_created} topic episodes from ${res.chats_processed} chats!`, 'success');
+      }
+      this.loadEpisodes();
+      this.loadOverview();
+    } catch (err) {
+      this.showToast(`Compilation failed: ${err.message}`, 'error');
+    }
+  }
+
+  async deleteEpisode(episodeId) {
+    if (!confirm('Are you sure you want to delete this topic episode?')) return;
+    try {
+      await this.api(`/v1/admin/episodes/${episodeId}`, { method: 'DELETE' });
+      this.showToast('Topic episode deleted', 'success');
+      this.loadEpisodes();
       this.loadOverview();
     } catch (err) {
       this.showToast(`Delete failed: ${err.message}`, 'error');

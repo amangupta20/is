@@ -22,9 +22,16 @@ from assistant_core.turns.models import CompletedTurn
 
 
 class _Result:
-    def __init__(self, *, rows: list[object] | None = None, row: object | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        rows: list[object] | None = None,
+        row: object | None = None,
+        scalar: object | None = None,
+    ) -> None:
         self.rows = rows or []
         self.row = row
+        self.scalar = scalar
 
     def scalars(self) -> "_Result":
         return self
@@ -35,6 +42,12 @@ class _Result:
     def one_or_none(self) -> object | None:
         return self.row
 
+    def scalar_one_or_none(self) -> object | None:
+        if self.scalar is not None:
+            return self.scalar
+        if self.row is not None:
+            return self.row if not isinstance(self.row, tuple) else self.row[0]
+        return None
 
 class _ContextSession:
     def __init__(self, records: list[MemoryRecord], read_row: tuple[Any, ...]) -> None:
@@ -56,8 +69,10 @@ class _ContextSession:
         )
         if "ORDER BY assistant_core.memory_evidence.created_at" in str(compiled):
             return _Result(row=self.read_row if native_user_id == "user-1" else None)
-        if "conversation_reference" in str(compiled) or "file_reference" in str(compiled):
+        if "FROM assistant_core.conversation_reference" in str(compiled) or "FROM assistant_core.file_reference" in str(compiled) or "FROM assistant_core.topic_episode" in str(compiled):
             return _Result(row=None, rows=[])
+        if "SELECT assistant_core.user_identity.id FROM assistant_core.user_identity" in str(compiled):
+            return _Result(scalar=uuid.UUID("00000000-0000-0000-0000-000000000001"))
         return _Result(rows=[self.records[0]] if native_user_id == "user-1" else [])
 
 
@@ -182,6 +197,11 @@ def test_search_previews_correct_user_memory_then_read_rejects_foreign_source() 
                 "native_file_id": None,
                 "header_path": None,
                 "chunk_ordinal": None,
+                "title": None,
+                "decisions_made": None,
+                "open_loops": None,
+                "key_entities": None,
+                "turn_count": None,
             }
         ],
     }
@@ -209,6 +229,11 @@ def test_search_previews_correct_user_memory_then_read_rejects_foreign_source() 
         "chunk_ordinal": None,
         "previous_chunk": None,
         "next_chunk": None,
+        "title": None,
+        "decisions_made": None,
+        "open_loops": None,
+        "key_entities": None,
+        "turn_count": None,
         "neighbors": [],
         "full_source_available": False,
     }
@@ -292,6 +317,8 @@ def test_hybrid_conversation_hit_reads_bounded_neighbors_and_fails_open_lexicall
         return (
             conversation_read if native_user_id == "user-1" and source_id == hit.source_id else None
         )
+    monkeypatch.setattr(personal_context, "search_topic_episodes", no_memories)
+    monkeypatch.setattr(personal_context, "get_topic_episode", no_memory_read)
 
     monkeypatch.setattr(personal_context, "search_explicit_memory", no_memories)
     monkeypatch.setattr(personal_context, "search_conversation_context", search_conversations)
@@ -350,6 +377,11 @@ def test_hybrid_conversation_hit_reads_bounded_neighbors_and_fails_open_lexicall
                 "source_native_project_id": None,
                 "source_native_folder_id": None,
                 "valid_from": None,
+                "title": None,
+                "decisions_made": None,
+                "open_loops": None,
+                "key_entities": None,
+                "turn_count": None,
                 "expires_at": None,
                 "temporal_tag": None,
                 "filename": None,
@@ -390,6 +422,11 @@ def test_hybrid_conversation_hit_reads_bounded_neighbors_and_fails_open_lexicall
                 "source_native_folder_id": None,
             }
         ],
+        "title": None,
+        "decisions_made": None,
+        "open_loops": None,
+        "key_entities": None,
+        "turn_count": None,
         "full_source_available": False,
     }
     assert foreign_read.status_code == 404
@@ -469,9 +506,11 @@ def test_search_and_read_file_passages(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(personal_context, "search_explicit_memory", no_memories)
     monkeypatch.setattr(personal_context, "search_conversation_context", no_conversations)
     monkeypatch.setattr(personal_context, "search_file_passages", mock_search_files)
+    monkeypatch.setattr(personal_context, "search_topic_episodes", no_conversations)
     monkeypatch.setattr(personal_context, "read_explicit_memory", no_memory_read)
     monkeypatch.setattr(personal_context, "read_conversation_context", no_conversation_read)
     monkeypatch.setattr(personal_context, "read_file_passage_context", mock_read_file)
+    monkeypatch.setattr(personal_context, "get_topic_episode", no_memory_read)
 
     class FakeSession:
         async def __aenter__(self) -> Self:
@@ -579,3 +618,121 @@ def test_read_full_document_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
         )
     )
     assert missing.status_code == 404
+
+def test_search_and_read_topic_episodes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hybrid search returns TopicEpisode matches and read returns full formatted episode."""
+    from assistant_core.api.routes import personal_context
+    from assistant_core.episodes.schemas import TopicEpisodeDetail, TopicEpisodeHit
+
+    ep_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    ep_hit = TopicEpisodeHit(
+        episode_id=ep_id,
+        native_chat_id="chat-1",
+        native_project_id="proj-alpha",
+        native_folder_id=None,
+        title="Docker & Traefik Architecture",
+        topic_category="infrastructure",
+        summary="Configured Traefik reverse proxy and Let's Encrypt certificates.",
+        decisions_made=["Use automated TLS via Traefik"],
+        open_loops=["Configure DNS challenge"],
+        key_entities=["Docker", "Traefik", "Let's Encrypt"],
+        start_message_id="msg-1",
+        end_message_id="msg-4",
+        turn_count=2,
+        score=0.98,
+        match_mode="hybrid",
+        created_at=datetime(2026, 8, 22, tzinfo=UTC),
+    )
+    ep_detail = TopicEpisodeDetail(
+        id=ep_id,
+        user_id=user_id,
+        native_chat_id="chat-1",
+        native_project_id="proj-alpha",
+        native_folder_id=None,
+        title="Docker & Traefik Architecture",
+        topic_category="infrastructure",
+        summary="Configured Traefik reverse proxy and Let's Encrypt certificates.",
+        decisions_made=["Use automated TLS via Traefik"],
+        open_loops=["Configure DNS challenge"],
+        key_entities=["Docker", "Traefik", "Let's Encrypt"],
+        start_message_id="msg-1",
+        end_message_id="msg-4",
+        turn_count=2,
+        has_embedding=True,
+        tombstoned=False,
+        created_at=datetime(2026, 8, 22, tzinfo=UTC),
+        updated_at=datetime(2026, 8, 22, tzinfo=UTC),
+    )
+
+    async def mock_search_episodes(*_args: object, **_kwargs: object) -> list[TopicEpisodeHit]:
+        return [ep_hit]
+
+    async def mock_get_episode(*_args: object, **_kwargs: object) -> TopicEpisodeDetail | None:
+        return ep_detail
+
+    async def no_memories(*_args: object, **_kwargs: object) -> list[object]:
+        return []
+
+    async def no_conversations(*_args: object, **_kwargs: object) -> list[object]:
+        return []
+
+    async def no_files(*_args: object, **_kwargs: object) -> list[object]:
+        return []
+
+    async def no_memory_read(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(personal_context, "search_explicit_memory", no_memories)
+    monkeypatch.setattr(personal_context, "search_conversation_context", no_conversations)
+    monkeypatch.setattr(personal_context, "search_file_passages", no_files)
+    monkeypatch.setattr(personal_context, "search_topic_episodes", mock_search_episodes)
+    monkeypatch.setattr(personal_context, "read_explicit_memory", no_memory_read)
+    monkeypatch.setattr(personal_context, "get_topic_episode", mock_get_episode)
+
+    class FakeSession:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    app = create_app(Settings(hmac_secret="a" * 32))
+    app.state.session_factory = lambda: FakeSession()
+
+    search = anyio.run(
+        lambda: _post(
+            app,
+            "/v1/personal-context/search",
+            {
+                "native_user_id": "user-1",
+                "query": "traefik reverse proxy",
+                "limit": 5,
+            },
+        )
+    )
+    assert search.status_code == 200
+    results = search.json()["results"]
+    assert len(results) == 1
+    res = results[0]
+    assert res["source_type"] == "episode"
+    assert res["title"] == "Docker & Traefik Architecture"
+    assert res["category"] == "infrastructure"
+    assert "Configured Traefik" in res["preview"]
+    assert res["decisions_made"] == ["Use automated TLS via Traefik"]
+
+    read = anyio.run(
+        lambda: _post(
+            app,
+            "/v1/personal-context/read",
+            {"native_user_id": "user-1", "memory_source_id": str(ep_id)},
+        )
+    )
+    assert read.status_code == 200
+    read_res = read.json()
+    assert read_res["source_type"] == "episode"
+    assert read_res["title"] == "Docker & Traefik Architecture"
+    assert "# Topic Episode: Docker & Traefik Architecture" in read_res["content"]
+    assert "## Decisions Made" in read_res["content"]
+    assert "## Open Loops / Pending Tasks" in read_res["content"]
+    assert read_res["full_source_available"] is True

@@ -186,6 +186,10 @@ class Tools:
                     hpath = f" § {header_path}" if header_path else ""
                     label = f"file/{fname}{hpath}"
                     provenance = f" [chunk {chunk_ordinal}]"
+                elif source_type == "episode":
+                    ep_title = result.get("title") or "Episode"
+                    label = f"episode/{category} § {ep_title}"
+                    provenance = f" (chat {chat_id})"
                 else:
                     return self._UNAVAILABLE
 
@@ -271,6 +275,17 @@ class Tools:
                     f"Content:\n{content}\n\n"
                     f"Previous chunk:\n{prev}\n\n"
                     f"Next chunk:\n{nxt}"
+                )
+            if source_type == "episode":
+                title = response.get("title") or "Topic Episode"
+                turn_count = response.get("turn_count", 1)
+                return (
+                    f"Topic Episode source {source_id}:\n"
+                    f"Title: {title}\n"
+                    f"Category: {category}\n"
+                    f"Turns Compiled: {turn_count}\n"
+                    f"Source chat: {response.get('source_native_chat_id')}\n\n"
+                    f"{content}"
                 )
             return self._UNAVAILABLE
         except Exception:  # noqa: BLE001 - optional memory read must fail open.

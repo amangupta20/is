@@ -128,6 +128,7 @@ def test_admin_overview_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
             _FakeResult(scalar=80),  # active turns
             _FakeResult(scalar=120),  # indexed passages
             _FakeResult(scalar=4),  # active artifacts
+            _FakeResult(scalar=8),  # total episodes
             _FakeResult(scalar=9),  # total artifact versions
             _FakeResult(scalar=3),  # total consolidation runs
             _FakeResult(scalar=2),  # total consolidation superseded count
@@ -147,6 +148,7 @@ def test_admin_overview_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
     assert data["files"]["total_characters"] == 25000
     assert data["artifacts"]["active"] == 4
     assert data["artifacts"]["total_versions"] == 9
+    assert data["total_episodes"] == 8
     assert data["consolidation"]["total_runs"] == 3
     assert data["consolidation"]["total_superseded"] == 2
     assert data["kb_reconciliation"]["total_runs"] == 1
@@ -425,6 +427,8 @@ def test_admin_consolidation_and_playground() -> None:
             _FakeResult(rows=[]),
             # 3. search_file_passages
             _FakeResult(rows=[]),
+            # 3b. search_topic_episodes: user identity lookup
+            _FakeResult(scalar=None),
             # 4. get_or_create_profile: User identity upsert
             _FakeResult(scalar=user_id),
             # 5. get_or_create_profile: existing snapshot query
@@ -549,4 +553,75 @@ def test_admin_artifacts_list_and_purge(tmp_path: Path) -> None:
     assert p_res.status_code == 200
     assert p_res.json()["deleted"]["artifacts"] == 1
     assert p_res.json()["deleted"]["artifact_versions"] == 1
+
+
+def test_admin_episodes_crud_and_compile() -> None:
+    """Verify admin episode listing, detail, compile, and deletion."""
+    secret = "admin-secret-at-least-32-chars-long"
+    settings = Settings(
+        hmac_secret=secret,
+        task_model_base_url="http://mock-llm.local",
+        task_model_model="gpt-4o-mini",
+    )
+    app = create_app(settings)
+    client = _get_authed_client(app, secret)
+
+    ep_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    from assistant_core.episodes.models import TopicEpisode
+
+    fake_ep = TopicEpisode(
+        id=ep_id,
+        user_id=user_id,
+        native_chat_id="chat-1",
+        native_project_id=None,
+        native_folder_id=None,
+        title="Docker Setup",
+        topic_category="infrastructure",
+        summary="Configured Docker Compose stack",
+        decisions_made=["Use Dokploy for container management"],
+        open_loops=["Setup monitoring"],
+        key_entities=["Docker", "Dokploy"],
+        start_message_id="msg-1",
+        end_message_id="msg-2",
+        turn_count=1,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+    session = _FakeSession(
+        [
+            # 1. GET /v1/admin/episodes
+            _FakeResult(scalars_list=[fake_ep]),  # list
+            _FakeResult(scalar=1),  # count
+            # 2. GET /v1/admin/episodes/{id}
+            _FakeResult(scalar=fake_ep),
+            # 3. POST /v1/admin/episodes/compile (empty eligible chats)
+            _FakeResult(rows=[]),
+            # 4. DELETE /v1/admin/episodes/{id}
+            _FakeResult(rowcount=1),
+        ]
+    )
+    app.state.session_factory = lambda: session
+
+    # 1. List
+    list_res = client.get("/v1/admin/episodes")
+    assert list_res.status_code == 200
+    assert list_res.json()["total"] == 1
+    assert list_res.json()["episodes"][0]["title"] == "Docker Setup"
+
+    # 2. Detail
+    det_res = client.get(f"/v1/admin/episodes/{ep_id}")
+    assert det_res.status_code == 200
+    assert det_res.json()["title"] == "Docker Setup"
+
+    # 3. Compile
+    comp_res = client.post("/v1/admin/episodes/compile", json={})
+    assert comp_res.status_code == 200
+    assert comp_res.json()["status"] == "no_eligible_chats"
+
+    # 4. Delete
+    del_res = client.delete(f"/v1/admin/episodes/{ep_id}")
+    assert del_res.status_code == 200
+    assert del_res.json()["status"] == "deleted"
 

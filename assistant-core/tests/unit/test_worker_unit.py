@@ -397,10 +397,14 @@ def test_missing_embedding_configuration_keeps_worker_available_for_lexical_back
     async def enqueue_kb_reconcile(_session: object) -> int:
         return 0
 
+    async def enqueue_episodes(_session: object, **_kwargs: object) -> int:
+        return 0
+
     monkeypatch.setattr(worker, "create_database", lambda _url: (Engine(), Factory()))
     monkeypatch.setattr(worker, "enqueue_missing_conversation_jobs", enqueue)
     monkeypatch.setattr(worker, "enqueue_daily_consolidation_jobs", enqueue_consolidation)
     monkeypatch.setattr(worker, "enqueue_reconcile_kb_job", enqueue_kb_reconcile)
+    monkeypatch.setattr(worker, "enqueue_inactive_chat_episode_jobs", enqueue_episodes)
 
     async def exercise() -> None:
         stop_event = asyncio.Event()
@@ -461,6 +465,10 @@ def test_chat_deleted_routes_owner_and_chat_to_idempotent_tombstone(
 
     monkeypatch.setattr(worker, "tombstone_chat", tombstone, raising=False)
     monkeypatch.setattr(worker, "LOGGER", Logger())
+    async def no_tombstone_episodes(_session: object, **_kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr(worker, "tombstone_episodes_for_chat", no_tombstone_episodes)
 
     for _ in range(2):
         anyio.run(
@@ -946,12 +954,15 @@ def test_worker_builds_database_from_settings_and_always_disposes(
     monkeypatch.setattr(worker, "enqueue_missing_conversation_jobs", enqueue)
     monkeypatch.setattr(worker, "enqueue_daily_consolidation_jobs", enqueue_consolidation)
     monkeypatch.setattr(worker, "enqueue_reconcile_kb_job", enqueue_kb_reconcile)
+    async def enqueue_episodes(_session: object, **_kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr(worker, "enqueue_inactive_chat_episode_jobs", enqueue_episodes)
 
     async def exercise() -> None:
         stop_event = asyncio.Event()
         stop_event.set()
         await worker.run_worker(stop_event)
-
     anyio.run(exercise)
 
     assert created_urls == [database_url]

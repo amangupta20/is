@@ -65,6 +65,11 @@
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             <span>Conversations</span>
           </button>
+          <button class="nav-item" data-tab="episodes">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="12 6 12 12 16 14"/></svg>
+            <span>Episodes</span>
+            <span id="badge-episodes" class="nav-badge">0</span>
+          </button>
           <button class="nav-item" data-tab="jobs">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48 2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48 2.83-2.83"/></svg>
             <span>Worker Jobs</span>
@@ -155,6 +160,14 @@
                 <span id="stat-artifacts" class="stat-value">0</span>
                 <span class="stat-hint" id="stat-artifacts-sub">0 total versions</span>
               </div>
+            <div class="stat-card">
+              <div class="stat-icon icon-cyan">🌐</div>
+              <div class="stat-content">
+                <span class="stat-label">Topic Episodes</span>
+                <span id="stat-episodes" class="stat-value">0</span>
+                <span class="stat-hint" id="stat-episodes-sub">0 session summaries</span>
+              </div>
+            </div>
             </div>
             <div class="stat-card">
               <div class="stat-icon icon-amber">⚙️</div>
@@ -514,6 +527,7 @@
                     <option value="memories">Memories Only</option>
                     <option value="files">Documents Only</option>
                     <option value="conversations">Conversations Only</option>
+                    <option value="episodes">Topic Episodes Only</option>
                   </select>
                 </div>
                 <div class="form-group" style="width: 90px;">
@@ -557,6 +571,44 @@
               <div class="card playground-preview-card">
                 <pre><code id="playground-rendered-preview"></code></pre>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Tab: Topic Episodes -->
+        <section id="tab-episodes" class="tab-pane">
+          <div class="table-card">
+            <div class="card-header flex-between">
+              <div class="header-left">
+                <div class="search-box">
+                  <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                  <input type="text" id="episodes-search" placeholder="Filter topic episodes by title or chat ID...">
+                </div>
+              </div>
+              <div class="header-right">
+                <button class="btn btn-primary" onclick="app.triggerEpisodeCompilation()">
+                  <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                  ⚡ Compile Episodes
+                </button>
+              </div>
+            </div>
+
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Title & Category</th>
+                    <th>Chat ID</th>
+                    <th>Turns</th>
+                    <th>Decisions & Open Loops</th>
+                    <th>Created</th>
+                    <th style="text-align: right;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="episodes-table-body">
+                  <tr><td colspan="6" class="text-center py-4">Loading topic episodes...</td></tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </section>
@@ -881,6 +933,42 @@
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" onclick="app.closeKBReconciliationLogsModal()">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Topic Episode Detail -->
+    <div id="episode-modal" class="modal-overlay" style="display: none;">
+      <div class="modal-card modal-lg">
+        <div class="modal-header">
+          <div>
+            <h2 id="episode-modal-title">Topic Episode</h2>
+            <div id="episode-modal-meta" class="text-secondary text-sm"></div>
+          </div>
+          <button class="modal-close" onclick="app.closeEpisodeModal()">&times;</button>
+        </div>
+        <div class="modal-body" style="padding: 16px; display: flex; flex-direction: column; gap: 16px;">
+          <div>
+            <label style="font-weight: 600; font-size: 13px; margin-bottom: 4px; display: block;">Executive Summary</label>
+            <div id="episode-modal-summary" style="padding: 12px; background: var(--bg-sidebar); border-radius: 6px; font-size: 13px; line-height: 1.5;"></div>
+          </div>
+          <div class="form-row" style="display: flex; gap: 16px;">
+            <div style="flex: 1;">
+              <label style="font-weight: 600; font-size: 13px; margin-bottom: 4px; display: block;">Decisions Made</label>
+              <ul id="episode-modal-decisions" style="padding-left: 20px; font-size: 13px; margin: 0;"></ul>
+            </div>
+            <div style="flex: 1;">
+              <label style="font-weight: 600; font-size: 13px; margin-bottom: 4px; display: block;">Open Loops / Pending Tasks</label>
+              <ul id="episode-modal-loops" style="padding-left: 20px; font-size: 13px; margin: 0;"></ul>
+            </div>
+          </div>
+          <div>
+            <label style="font-weight: 600; font-size: 13px; margin-bottom: 4px; display: block;">Key Entities & Technologies</label>
+            <div id="episode-modal-entities" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="app.closeEpisodeModal()">Close</button>
         </div>
       </div>
     </div>

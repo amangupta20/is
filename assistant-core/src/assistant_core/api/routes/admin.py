@@ -29,6 +29,17 @@ from assistant_core.conversation.embedder import (
 )
 from assistant_core.conversation.models import ConversationReference, ConversationSegment
 from assistant_core.conversation.repository import search_conversation_context
+from assistant_core.episodes.extractor import TurnSummaryInput
+from assistant_core.episodes.models import TopicEpisode
+from assistant_core.episodes.repository import (
+    create_topic_episode,
+    delete_topic_episode,
+    detect_inactive_chats_for_compilation,
+    get_topic_episode,
+    get_uncompiled_turns_for_chat,
+    list_topic_episodes,
+    search_topic_episodes,
+)
 from assistant_core.events.models import EventInbox
 from assistant_core.files.models import (
     FileDocument,
@@ -45,6 +56,7 @@ from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
 from assistant_core.jobs.worker import (
     TaskModelConfigurationError,
+    get_episode_extractor,
     get_memory_consolidator,
 )
 from assistant_core.memory.consolidator import MemoryConsolidationError
@@ -90,7 +102,13 @@ class PlaygroundSearchRequest(BaseModel):
     native_user_id: str = Field(default="user-1", min_length=1, max_length=200)
     query: str = Field(min_length=1, max_length=1000)
     limit: int = Field(default=10, ge=1, le=50)
-    source_type: Literal["all", "memories", "files", "conversations"] = "all"
+    source_type: Literal["all", "memories", "files", "conversations", "episodes"] = "all"
+
+
+class CompileEpisodesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    native_chat_id: str | None = None
+    native_user_id: str | None = "user-1"
 
 
 class AdminLoginResponse(BaseModel):
@@ -253,6 +271,13 @@ async def get_overview_telemetry(request: Request) -> dict[str, Any]:
                 select(func.count(Artifact.id)).where(Artifact.tombstoned_at.is_(None))
             )
         ).scalar_one()
+        # Topic Episodes
+        total_episodes = (
+            await session.execute(
+                select(func.count(TopicEpisode.id)).where(TopicEpisode.tombstoned_at.is_(None))
+            )
+        ).scalar_one()
+
         total_artifact_versions = (
             await session.execute(select(func.count(ArtifactVersion.id)))
         ).scalar_one()
@@ -299,6 +324,7 @@ async def get_overview_telemetry(request: Request) -> dict[str, Any]:
                 "embedded_segments": embedded_segments,
                 "deduplicated_references": max(0, total_references - total_segments),
             },
+            "total_episodes": total_episodes,
             "conversations": {
                 "active_turns": total_turns,
                 "indexed_passages": total_conv_segments,
@@ -1551,6 +1577,150 @@ async def get_kb_reconciliation_run(run_id: uuid.UUID, request: Request) -> dict
         }
 
 
+@router.get("/episodes", dependencies=[Depends(require_admin_session)])
+async def list_admin_topic_episodes(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    native_chat_id: str | None = None,
+    include_tombstoned: bool = False,
+) -> dict[str, Any]:
+    """List topic episodes with paging and filtering."""
+    async with request.app.state.session_factory() as session:
+        episodes = await list_topic_episodes(
+            session,
+            native_chat_id=native_chat_id,
+            include_tombstoned=include_tombstoned,
+            limit=limit,
+            offset=offset,
+        )
+        total_stmt = select(func.count(TopicEpisode.id))
+        if not include_tombstoned:
+            total_stmt = total_stmt.where(TopicEpisode.tombstoned_at.is_(None))
+        total_count = (await session.execute(total_stmt)).scalar_one()
+
+    return {
+        "total": total_count,
+        "limit": limit,
+        "offset": offset,
+        "episodes": [ep.model_dump(mode="json") for ep in episodes],
+    }
+
+
+@router.get("/episodes/{episode_id}", dependencies=[Depends(require_admin_session)])
+async def get_admin_topic_episode(episode_id: uuid.UUID, request: Request) -> dict[str, Any]:
+    """Get single topic episode details."""
+    async with request.app.state.session_factory() as session:
+        detail = await get_topic_episode(session, episode_id=episode_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="topic episode not found")
+        return detail.model_dump(mode="json")
+
+
+@router.post("/episodes/compile", dependencies=[Depends(require_admin_session)])
+async def compile_admin_topic_episodes(
+    body: CompileEpisodesRequest, request: Request
+) -> dict[str, Any]:
+    """Trigger on-demand topic episode compilation for a chat or all eligible chats."""
+    started_at = perf_counter()
+    async with request.app.state.session_factory() as session:
+        if body.native_chat_id:
+            user_row = (
+                await session.execute(
+                    select(UserIdentity.id).where(UserIdentity.native_user_id == body.native_user_id)
+                )
+            ).scalar_one_or_none()
+            if user_row is None:
+                raise HTTPException(status_code=404, detail="user not found")
+            chats = [(user_row, body.native_user_id or "user-1", body.native_chat_id)]
+        else:
+            chats = await detect_inactive_chats_for_compilation(session, inactivity_hours=0.0, limit=10)
+
+        if not chats:
+            return {"status": "no_eligible_chats", "compiled_count": 0, "duration_ms": 0.0}
+
+        compiled_total = 0
+        total_turns = 0
+        extractor = get_episode_extractor(request.app.state.settings)
+        embedder = None
+        try:
+            embedder = get_conversation_embedder(request.app.state.settings)
+        except Exception:  # noqa: BLE001
+            embedder = None
+
+        for user_id, _native_uid, native_chat_id in chats:
+            turns = await get_uncompiled_turns_for_chat(
+                session, user_id=user_id, native_chat_id=native_chat_id
+            )
+            if not turns:
+                continue
+            turn_inputs = [
+                TurnSummaryInput(
+                    user_message_id=t.native_user_message_id,
+                    assistant_message_id=t.native_assistant_message_id,
+                    user_content=t.user_content,
+                    assistant_content=t.assistant_content,
+                    occurred_at=t.occurred_at,
+                )
+                for t in turns
+            ]
+            try:
+                extractions = await extractor.extract_episodes(turn_inputs)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("admin_compile_episodes_failed", chat_id=native_chat_id, error=str(exc))
+                continue
+
+            for ext in extractions:
+                vector = None
+                if embedder is not None:
+                    text_to_embed = (
+                        f"Title: {ext.title}\n"
+                        f"Category: {ext.topic_category}\n"
+                        f"Summary: {ext.summary}\n"
+                        f"Decisions: {', '.join(ext.decisions_made)}\n"
+                        f"Entities: {', '.join(ext.key_entities)}"
+                    )
+                    try:
+                        vector = await asyncio.to_thread(embedder.embed_one, text_to_embed)
+                    except Exception:  # noqa: BLE001
+                        vector = None
+                await create_topic_episode(
+                    session,
+                    user_id=user_id,
+                    native_chat_id=native_chat_id,
+                    native_project_id=turns[0].native_project_id,
+                    native_folder_id=turns[0].native_folder_id,
+                    extraction=ext,
+                    turn_count=len(turns),
+                    embedding=vector,
+                )
+                compiled_total += 1
+            total_turns += len(turns)
+
+        await session.commit()
+
+    duration_ms = round((perf_counter() - started_at) * 1000, 2)
+    return {
+        "status": "completed",
+        "chats_processed": len(chats),
+        "total_turns_compiled": total_turns,
+        "episodes_created": compiled_total,
+        "duration_ms": duration_ms,
+    }
+
+
+@router.delete("/episodes/{episode_id}", dependencies=[Depends(require_admin_session)])
+async def delete_admin_topic_episode(episode_id: uuid.UUID, request: Request) -> dict[str, Any]:
+    """Delete a topic episode."""
+    async with request.app.state.session_factory() as session:
+        deleted = await delete_topic_episode(session, episode_id=episode_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="topic episode not found")
+        await session.commit()
+    return {"status": "deleted", "id": str(episode_id)}
+
+
+
 @router.post("/playground/search", dependencies=[Depends(require_admin_session)])
 async def playground_search(body: PlaygroundSearchRequest, request: Request) -> dict[str, Any]:
     """Execute hybrid or filtered search for dashboard inspection and prompt preview."""
@@ -1587,6 +1757,16 @@ async def playground_search(body: PlaygroundSearchRequest, request: Request) -> 
                 query_embedding=query_embedding,
                 limit=body.limit,
             )
+        episode_hits = []
+        if body.source_type in ("all", "episodes"):
+            episode_hits = await search_topic_episodes(
+                session,
+                native_user_id=body.native_user_id,
+                query_text=body.query,
+                query_embedding=query_embedding,
+                limit=body.limit,
+            )
+
 
         profile_snapshot = await get_or_create_profile(
             session,
@@ -1654,6 +1834,29 @@ async def playground_search(body: PlaygroundSearchRequest, request: Request) -> 
                 },
             }
         )
+    for ep in episode_hits:
+        ranked.append(
+            {
+                "source_id": str(ep.episode_id),
+                "source_type": "episode",
+                "category": ep.topic_category,
+                "statement": ep.summary,
+                "preview": f"[{ep.title}] {ep.summary[:200]}...",
+                "rrf_score": round(ep.score, 6),
+                "lexical_rank": None,
+                "vector_score": None,
+                "created_at": ep.created_at.isoformat() if ep.created_at else None,
+                "metadata": {
+                    "title": ep.title,
+                    "native_chat_id": ep.native_chat_id,
+                    "decisions_made": ep.decisions_made,
+                    "open_loops": ep.open_loops,
+                    "key_entities": ep.key_entities,
+                    "turn_count": ep.turn_count,
+                },
+            }
+        )
+
 
     ranked.sort(key=lambda item: -item["rrf_score"])
     selected = ranked[: body.limit]
@@ -1675,6 +1878,12 @@ async def playground_search(body: PlaygroundSearchRequest, request: Request) -> 
             elif item["source_type"] == "conversation":
                 context_lines.append(
                     f"- [Prior Turn #{idx}] ({item.get('role', 'user')}): {item['statement']}"
+                )
+            elif item["source_type"] == "episode":
+                meta = item["metadata"]
+                dec_str = f" | Decisions: {'; '.join(meta.get('decisions_made', []))}" if meta.get('decisions_made') else ""
+                context_lines.append(
+                    f"- [Topic Episode #{idx}] ({meta.get('title')}, {item['category']}): {item['statement']}{dec_str}"
                 )
         context_lines.append("</retrieved_context>")
 

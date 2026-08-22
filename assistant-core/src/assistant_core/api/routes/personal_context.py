@@ -20,6 +20,10 @@ from assistant_core.conversation.repository import (
     read_conversation_context,
     search_conversation_context,
 )
+from assistant_core.episodes.repository import (
+    get_topic_episode,
+    search_topic_episodes,
+)
 from assistant_core.files.repository import (
     get_full_file_content,
     read_file_passage_context,
@@ -78,7 +82,7 @@ class PersonalContextPreview(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_id: uuid.UUID
-    source_type: Literal["memory", "conversation", "file"]
+    source_type: Literal["memory", "conversation", "file", "episode"]
     category: str
     role: Literal["user", "assistant"] | None
     preview: str
@@ -93,6 +97,11 @@ class PersonalContextPreview(BaseModel):
     native_file_id: str | None = None
     header_path: str | None = None
     chunk_ordinal: int | None = None
+    title: str | None = None
+    decisions_made: list[str] | None = None
+    open_loops: list[str] | None = None
+    key_entities: list[str] | None = None
+    turn_count: int | None = None
 
 
 class PersonalContextSearchResponse(BaseModel):
@@ -154,7 +163,7 @@ class PersonalContextReadResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_id: uuid.UUID
-    source_type: Literal["memory", "conversation", "file"]
+    source_type: Literal["memory", "conversation", "file", "episode"]
     content: str
     category: str
     role: Literal["user", "assistant"] | None
@@ -173,6 +182,11 @@ class PersonalContextReadResponse(BaseModel):
     previous_chunk: str | None = None
     next_chunk: str | None = None
     neighbors: list[PersonalContextNeighbor] = Field(default_factory=list)
+    title: str | None = None
+    decisions_made: list[str] | None = None
+    open_loops: list[str] | None = None
+    key_entities: list[str] | None = None
+    turn_count: int | None = None
     full_source_available: bool = False
 
 
@@ -320,6 +334,15 @@ async def search_personal_context(
             query_embedding=query_embedding,
             limit=body.limit,
         )
+        episode_hits = await search_topic_episodes(
+            session,
+            native_user_id=body.native_user_id,
+            query_text=body.query,
+            query_embedding=query_embedding,
+            limit=body.limit,
+            native_project_id=body.native_project_id,
+            native_folder_id=body.native_folder_id,
+        )
 
     ranked: list[tuple[float, int, str, PersonalContextPreview]] = []
     for rank, record in enumerate(memory_records, start=1):
@@ -383,6 +406,33 @@ async def search_personal_context(
             chunk_ordinal=fhit.chunk_ordinal,
         )
         ranked.append((fhit.score, 2, fhit.reference_id, preview))
+    for ehit in episode_hits:
+        ep_score = ehit.score
+        if (target_folder_id and ehit.native_folder_id == target_folder_id) or (
+            target_project_id and ehit.native_project_id == target_project_id
+        ):
+            ep_score += 0.15
+        elif target_chat_id and ehit.native_chat_id == target_chat_id:
+            ep_score += 0.05
+
+        preview_text = f"[{ehit.title}] {ehit.summary}"
+        preview = PersonalContextPreview(
+            source_id=ehit.episode_id,
+            source_type="episode",
+            category=ehit.topic_category,
+            role=None,
+            preview=_compact_preview(preview_text),
+            source_native_chat_id=ehit.native_chat_id,
+            source_native_message_id=ehit.start_message_id,
+            source_native_project_id=ehit.native_project_id,
+            source_native_folder_id=ehit.native_folder_id,
+            title=ehit.title,
+            decisions_made=ehit.decisions_made,
+            open_loops=ehit.open_loops,
+            key_entities=ehit.key_entities,
+            turn_count=ehit.turn_count,
+        )
+        ranked.append((ep_score, 0, str(ehit.episode_id), preview))
 
     ranked.sort(key=lambda item: (-item[0], item[1], item[2]))
     selected = ranked[: body.limit]
@@ -397,6 +447,7 @@ async def search_personal_context(
         memory_result_count=len(memory_records),
         conversation_result_count=len(conversation_hits),
         file_result_count=len(file_hits),
+        episode_result_count=len(episode_hits),
         result_count=len(selected),
         top_score=round(selected[0][0], 6) if selected else None,
         duration_ms=round((perf_counter() - started_at) * 1000, 3),
@@ -440,6 +491,48 @@ async def read_personal_context(
                 temporal_tag=record.temporal_tag,
                 neighbors=[],
                 full_source_available=False,
+            )
+        elif (
+            episode_result := await get_topic_episode(
+                session,
+                episode_id=body.memory_source_id,
+                native_user_id=body.native_user_id,
+            )
+        ) is not None:
+            content_lines = [
+                f"# Topic Episode: {episode_result.title}",
+                f"**Category:** {episode_result.topic_category} | **Turns:** {episode_result.turn_count}",
+                f"\n## Summary\n{episode_result.summary}",
+            ]
+            if episode_result.decisions_made:
+                content_lines.append("\n## Decisions Made")
+                for dec in episode_result.decisions_made:
+                    content_lines.append(f"- {dec}")
+            if episode_result.open_loops:
+                content_lines.append("\n## Open Loops / Pending Tasks")
+                for loop in episode_result.open_loops:
+                    content_lines.append(f"- {loop}")
+            if episode_result.key_entities:
+                content_lines.append(f"\n**Entities:** {', '.join(episode_result.key_entities)}")
+
+            response = PersonalContextReadResponse(
+                source_id=episode_result.id,
+                source_type="episode",
+                content="\n".join(content_lines),
+                category=episode_result.topic_category,
+                role=None,
+                evidence_quote=None,
+                source_native_chat_id=episode_result.native_chat_id,
+                source_native_message_id=episode_result.start_message_id,
+                source_native_project_id=episode_result.native_project_id,
+                source_native_folder_id=episode_result.native_folder_id,
+                title=episode_result.title,
+                decisions_made=episode_result.decisions_made,
+                open_loops=episode_result.open_loops,
+                key_entities=episode_result.key_entities,
+                turn_count=episode_result.turn_count,
+                neighbors=[],
+                full_source_available=True,
             )
         else:
             conversation_result = await read_conversation_context(

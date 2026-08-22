@@ -33,6 +33,17 @@ from assistant_core.conversation.repository import (
     tombstone_chat,
 )
 from assistant_core.db.session import create_database
+from assistant_core.episodes.extractor import (
+    EpisodeExtractionError,
+    TaskModelEpisodeExtractor,
+    TurnSummaryInput,
+)
+from assistant_core.episodes.repository import (
+    create_topic_episode,
+    detect_inactive_chats_for_compilation,
+    get_uncompiled_turns_for_chat,
+    tombstone_episodes_for_chat,
+)
 from assistant_core.events.models import EventInbox
 from assistant_core.files.client import OpenWebUIFileFetchError, fetch_openwebui_file
 from assistant_core.files.models import FileDocument
@@ -138,6 +149,20 @@ def get_memory_consolidator(settings: Settings | None = None) -> TaskModelMemory
     )
 
 
+def get_episode_extractor(settings: Settings | None = None) -> TaskModelEpisodeExtractor:
+    """Build the task-model episode extractor."""
+    resolved_settings = settings or get_settings()
+    base_url, model = _task_model_configuration(resolved_settings)
+    api_key = resolved_settings.task_model_api_key
+    timeout = max(60.0, resolved_settings.task_model_timeout_seconds)
+    return TaskModelEpisodeExtractor(
+        base_url=base_url,
+        api_key=api_key.get_secret_value() if api_key is not None else None,
+        model=model,
+        timeout_seconds=timeout,
+    )
+
+
 def get_conversation_embedder(
     settings: Settings | None = None,
 ) -> OpenAICompatibleEmbedder:
@@ -201,6 +226,11 @@ async def _handle_process_event(session: AsyncSession, payload: dict[str, JsonVa
             user_id=event.user_id,
             native_chat_id=native_chat_id,
             occurred_at=event.occurred_at,
+        )
+        await tombstone_episodes_for_chat(
+            session,
+            user_id=event.user_id,
+            native_chat_id=native_chat_id,
         )
         LOGGER.info(
             "conversation_chat_tombstoned",
@@ -568,6 +598,110 @@ async def _handle_index_file(session: AsyncSession, payload: dict[str, JsonValue
         embedded_count=embedded_count,
         duration_ms=round(duration_ms, 2),
     )
+async def _handle_compile_topic_episodes(
+    session: AsyncSession, payload: dict[str, JsonValue]
+) -> None:
+    """Compile un-summarized turns from an inactive chat into structured topic episodes."""
+    user_id_str = payload.get("user_id")
+    native_chat_id = payload.get("native_chat_id")
+    if not isinstance(user_id_str, str) or not isinstance(native_chat_id, str):
+        raise InvalidTurnPayloadError(INVALID_TURN_PAYLOAD_ERROR)
+
+    user_id = uuid.UUID(user_id_str)
+    turns = await get_uncompiled_turns_for_chat(
+        session, user_id=user_id, native_chat_id=native_chat_id
+    )
+    if not turns:
+        LOGGER.info("no_uncompiled_turns_for_episodes", chat_id=native_chat_id)
+        return
+
+    turn_inputs = [
+        TurnSummaryInput(
+            user_message_id=t.native_user_message_id,
+            assistant_message_id=t.native_assistant_message_id,
+            user_content=t.user_content,
+            assistant_content=t.assistant_content,
+            occurred_at=t.occurred_at,
+        )
+        for t in turns
+    ]
+
+    await session.rollback()
+    extractor = get_episode_extractor()
+    extractions = await extractor.extract_episodes(turn_inputs)
+    if not extractions:
+        return
+
+    embedder: OpenAICompatibleEmbedder | None = None
+    try:
+        embedder = get_conversation_embedder()
+    except Exception:  # noqa: BLE001
+        embedder = None
+
+    for ext in extractions:
+        vector: list[float] | None = None
+        if embedder is not None:
+            text_to_embed = (
+                f"Title: {ext.title}\n"
+                f"Category: {ext.topic_category}\n"
+                f"Summary: {ext.summary}\n"
+                f"Decisions: {', '.join(ext.decisions_made)}\n"
+                f"Entities: {', '.join(ext.key_entities)}"
+            )
+            try:
+                vector = await asyncio.to_thread(embedder.embed_one, text_to_embed)
+            except Exception:  # noqa: BLE001
+                vector = None
+
+        await create_topic_episode(
+            session,
+            user_id=user_id,
+            native_chat_id=native_chat_id,
+            native_project_id=turns[0].native_project_id,
+            native_folder_id=turns[0].native_folder_id,
+            extraction=ext,
+            turn_count=len(turns),
+            embedding=vector,
+        )
+
+    await session.commit()
+    LOGGER.info(
+        "topic_episodes_compiled",
+        user_id=str(user_id),
+        chat_id=native_chat_id,
+        turn_count=len(turns),
+        episodes_count=len(extractions),
+    )
+
+
+async def enqueue_inactive_chat_episode_jobs(
+    session: AsyncSession, inactivity_hours: float = 3.0
+) -> int:
+    """Enqueue compilation jobs for chats with >= 3 hours of inactivity and uncompiled turns."""
+    chats = await detect_inactive_chats_for_compilation(
+        session, inactivity_hours=inactivity_hours, limit=20
+    )
+    enqueued = 0
+    now_hour_str = datetime.now(UTC).strftime("%Y-%m-%d-%H")
+    for user_id, _native_user_id, native_chat_id in chats:
+        res = await session.execute(
+            insert(Job)
+            .values(
+                id=uuid.uuid4(),
+                identity_key=f"episodes:{user_id}:{native_chat_id}:{now_hour_str}",
+                kind="compile_topic_episodes",
+                status="queued",
+                payload={"user_id": str(user_id), "native_chat_id": native_chat_id},
+                attempts=0,
+            )
+            .on_conflict_do_nothing(index_elements=[Job.identity_key])
+            .returning(Job.id)
+        )
+        if res.scalar_one_or_none() is not None:
+            enqueued += 1
+    return enqueued
+
+
 
 
 async def handle(
@@ -588,6 +722,8 @@ async def handle(
         await _handle_index_file(session, payload)
     elif kind == "reconcile_kb_files":
         await _handle_reconcile_kb_files(session, payload)
+    elif kind == "compile_topic_episodes":
+        await _handle_compile_topic_episodes(session, payload)
     else:
         raise UnsupportedJobKindError(UNSUPPORTED_KIND_ERROR)
 
@@ -623,6 +759,8 @@ async def process_one(session: AsyncSession) -> bool:
         error_code = MEMORY_EXTRACTION_FAILED_ERROR
     except MemoryConsolidationError:
         error_code = MEMORY_CONSOLIDATION_FAILED_ERROR
+    except EpisodeExtractionError:
+        error_code = "episode_extraction_failed"
     except (ConversationEmbeddingError, EmbeddingConfigurationError):
         error_code = CONVERSATION_EMBEDDING_FAILED_ERROR
     except OpenWebUIFileFetchError as exc:
@@ -658,11 +796,13 @@ async def run_worker(stop_event: asyncio.Event | None = None) -> None:
             consolidation_count = await enqueue_daily_consolidation_jobs(session)
             kb_reconcile_count = await enqueue_reconcile_kb_job(session)
             await session.commit()
+            episodes_enqueued = await enqueue_inactive_chat_episode_jobs(session, inactivity_hours=3.0)
         LOGGER.info(
             "worker_startup_jobs_enqueued",
             conversation_backfill=backfill_count,
             daily_consolidation=consolidation_count,
             kb_reconcile=kb_reconcile_count,
+            inactive_episodes=episodes_enqueued,
         )
 
         for signum in (signal.SIGINT, signal.SIGTERM):
@@ -683,6 +823,7 @@ async def run_worker(stop_event: asyncio.Event | None = None) -> None:
                     async with session_factory() as session:
                         await enqueue_daily_consolidation_jobs(session)
                         await enqueue_reconcile_kb_job(session)
+                        await enqueue_inactive_chat_episode_jobs(session, inactivity_hours=3.0)
                         await session.commit()
                 except Exception:  # noqa: BLE001
                     LOGGER.warning("periodic_jobs_enqueue_failed")
