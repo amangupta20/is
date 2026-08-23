@@ -1117,7 +1117,7 @@ class PersonalContextProcessMediaResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["queued", "duplicate"]
+    status: Literal["queued", "requeued", "duplicate"]
     url: str
     media_type: str
 
@@ -1131,17 +1131,22 @@ async def process_personal_context_media(
     body: PersonalContextProcessMediaRequest, request: Request
 ) -> PersonalContextProcessMediaResponse:
     """Queue one media URL for deep multimodal indexing by the background worker."""
-    from sqlalchemy import select
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select, update
 
     from assistant_core.identity.models import UserIdentity
     from assistant_core.jobs.models import Job
     from assistant_core.media.analyzer import canonical_media_url
+    from assistant_core.media.repository import get_media_document_by_url
 
     clean_url = body.url.strip()
     if body.media_type == "youtube":
         canonical = canonical_media_url(clean_url)
         if canonical is not None:
             clean_url = canonical
+    identity_key = f"media:{clean_url}"
+
     async with request.app.state.session_factory() as session:
         user_res = (
             await session.execute(
@@ -1155,11 +1160,66 @@ async def process_personal_context_media(
         else:
             user_id = user_res
 
+        existing_job = (
+            await session.execute(select(Job).where(Job.identity_key == identity_key))
+        ).scalar_one_or_none()
+
+        if existing_job is not None:
+            live_document = await get_media_document_by_url(
+                session, user_id=user_id, url=clean_url
+            )
+            in_flight = existing_job.status in ("queued", "running")
+            if in_flight or live_document is not None:
+                LOGGER.info(
+                    "personal_context_media_queued",
+                    native_user_id=body.native_user_id,
+                    url=clean_url,
+                    media_type=body.media_type,
+                    queued=False,
+                    job_status=existing_job.status,
+                    has_live_document=live_document is not None,
+                )
+                return PersonalContextProcessMediaResponse(
+                    status="duplicate",
+                    url=clean_url,
+                    media_type=body.media_type,
+                )
+
+            # Terminal job without a surviving document (deleted doc, stale
+            # pre-fix analysis, or exhausted retries): reset so the worker reruns.
+            await session.execute(
+                update(Job)
+                .where(Job.id == existing_job.id, Job.status == existing_job.status)
+                .values(
+                    status="queued",
+                    attempts=0,
+                    available_at=datetime.now(UTC),
+                    claimed_at=None,
+                    completed_at=None,
+                    last_error_code=None,
+                )
+            )
+            await session.commit()
+            LOGGER.info(
+                "personal_context_media_queued",
+                native_user_id=body.native_user_id,
+                url=clean_url,
+                media_type=body.media_type,
+                queued=True,
+                requeued_stale=True,
+                previous_status=existing_job.status,
+            )
+            return PersonalContextProcessMediaResponse(
+                status="requeued",
+                url=clean_url,
+                media_type=body.media_type,
+            )
+
         result = await session.execute(
             insert(Job)
             .values(
                 id=uuid.uuid4(),
-                identity_key=f"media:{clean_url}",
+                identity_key=identity_key,
                 kind="index_media",
                 status="queued",
                 payload={"url": clean_url, "user_id": str(user_id)},

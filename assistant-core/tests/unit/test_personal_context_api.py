@@ -1019,3 +1019,143 @@ def test_media_detail_returns_full_document_or_not_found(
         "topics": [],
         "segments": [],
     }
+
+
+def test_process_media_requeues_stale_terminal_job_without_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A completed/dead job with no surviving document is reset, not deduped."""
+    from datetime import UTC
+    from datetime import datetime as dt
+
+    from assistant_core.jobs.models import Job
+
+    app = create_app(Settings(hmac_secret="a" * 32))
+    user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    stale_job = Job(
+        id=uuid.uuid4(),
+        identity_key="media:https://www.youtube.com/watch?v=abc12345678",
+        kind="index_media",
+        status="completed",
+        payload={"url": "https://www.youtube.com/watch?v=abc12345678", "user_id": str(user_id)},
+        attempts=1,
+        completed_at=dt.now(UTC),
+    )
+
+    class _Session:
+        def __init__(self) -> None:
+            self.values = [user_id, stale_job]
+            self.statements: list[object] = []
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def flush(self) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+        async def execute(self, statement: object) -> _Result:
+            self.statements.append(statement)
+            if "INSERT INTO assistant_core.job" in str(statement):
+                raise AssertionError("must requeue, not insert a duplicate")
+            value = self.values.pop(0) if self.values else None
+            return _Result(scalar=value)
+
+    session = _Session()
+    app.state.session_factory = lambda: session
+
+    async def no_document(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("assistant_core.media.repository.get_media_document_by_url", no_document)
+
+    response = anyio.run(
+        lambda: _post(
+            app,
+            "/v1/personal-context/process-media",
+            {
+                "native_user_id": "user-1",
+                "url": "https://youtu.be/abc12345678?si=z",
+            },
+        )
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "requeued"
+    assert data["url"] == "https://www.youtube.com/watch?v=abc12345678"
+
+    update_stmts = [s for s in session.statements if type(s).__name__ == "Update"]
+    assert len(update_stmts) == 1
+    compiled = update_stmts[0].compile(dialect=postgresql.dialect())
+    assert compiled.params["status"] == "queued"
+    assert compiled.params["attempts"] == 0
+
+
+def test_process_media_duplicate_when_document_is_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC
+    from datetime import datetime as dt
+
+    from assistant_core.jobs.models import Job
+
+    app = create_app(Settings(hmac_secret="a" * 32))
+    user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    running_job = Job(
+        id=uuid.uuid4(),
+        identity_key="media:https://www.youtube.com/watch?v=abc12345678",
+        kind="index_media",
+        status="running",
+        payload={"url": "https://www.youtube.com/watch?v=abc12345678", "user_id": str(user_id)},
+        attempts=0,
+        available_at=dt.now(UTC),
+    )
+
+    class _Session:
+        def __init__(self) -> None:
+            self.values = [user_id, running_job]
+            self.statements: list[object] = []
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def flush(self) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+        async def execute(self, statement: object) -> _Result:
+            self.statements.append(statement)
+            value = self.values.pop(0) if self.values else None
+            return _Result(scalar=value)
+
+    session = _Session()
+    app.state.session_factory = lambda: session
+
+    class _Doc:
+        id = uuid.uuid4()
+
+    async def live_document(*args: object, **kwargs: object) -> _Doc:
+        return _Doc()
+
+    monkeypatch.setattr("assistant_core.media.repository.get_media_document_by_url", live_document)
+
+    response = anyio.run(
+        lambda: _post(
+            app,
+            "/v1/personal-context/process-media",
+            {"native_user_id": "user-1", "url": "https://youtu.be/abc12345678"},
+        )
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "duplicate"
+    assert not [s for s in session.statements if type(s).__name__ == "Update"]
