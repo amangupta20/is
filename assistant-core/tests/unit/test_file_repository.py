@@ -205,3 +205,71 @@ def test_get_full_file_content() -> None:
     assert res.total_characters == 60
     assert "# Overview" in res.content
     assert "## Details" in res.content
+
+
+def test_transient_pasted_file_detection() -> None:
+    from assistant_core.files.transient import is_transient_pasted_file
+
+    assert is_transient_pasted_file("Pasted_Text_1755555555555.txt")
+    assert is_transient_pasted_file("pasted_text_123.txt")
+    assert is_transient_pasted_file("  Pasted_Text_9.txt  ")
+    assert not is_transient_pasted_file("Pasted_Text_1.pdf")
+    assert not is_transient_pasted_file("notes.txt")
+    assert not is_transient_pasted_file("")
+    assert not is_transient_pasted_file("Pasted_Text.txt")
+
+
+def test_materialize_marks_pasted_text_transient() -> None:
+    from sqlalchemy.dialects import postgresql
+
+    user_id = uuid.uuid4()
+    seg_id = uuid.uuid4()
+    session = FakeSession(
+        [
+            FakeResult(),  # document upsert
+            FakeResult(scalar=seg_id),  # segment insert
+            FakeResult(),  # reference insert
+        ]
+    )
+
+    async def exercise() -> None:
+        await materialize_file_passages(
+            session,  # type: ignore[arg-type]
+            user_id=user_id,
+            native_file_id="file-paste-1",
+            filename="Pasted_Text_1755555555555.txt",
+            mime_type="text/plain",
+            markdown_text="# Title\n\nPasted body",
+            transient=True,
+        )
+
+    anyio.run(exercise)
+
+    doc_insert = session.statements[0].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+    ref_insert = session.statements[2].compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+    assert doc_insert.params["transient"] is True
+    assert ref_insert.params["transient"] is True
+
+
+def test_search_excludes_transient_references_by_default() -> None:
+    from sqlalchemy.dialects import postgresql
+
+    session = FakeSession([FakeResult(rows=[])])
+
+    async def exercise(include_transient: bool) -> None:
+        await search_file_passages(
+            session,  # type: ignore[arg-type]
+            native_user_id="user-1",
+            query_text="logs",
+            query_embedding=None,
+            limit=5,
+            include_transient=include_transient,
+        )
+
+    anyio.run(exercise, False)
+    lexical_sql = str(session.statements[-1].compile(dialect=postgresql.dialect()))
+    assert "transient" in lexical_sql
+
+    anyio.run(exercise, True)
+    lexical_sql_open = str(session.statements[-1].compile(dialect=postgresql.dialect()))
+    assert "transient" not in lexical_sql_open

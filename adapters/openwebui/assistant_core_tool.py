@@ -158,13 +158,24 @@ class Tools:
         self,
         query: str,
         limit: int = 5,
+        include_pasted_files: bool = False,
         __user__: dict | None = None,
         __metadata__: dict | None = None,
     ) -> str:
-        """Search durable memory, past conversation evidence, and uploaded document passages."""
+        """Search durable memory, past conversation evidence, and uploaded document passages.
+
+        :param include_pasted_files: Also search transient auto-saved pasted-text files
+            when the user explicitly asks for their content.
+        """
         try:
             payload = self._context_payload(__user__, __metadata__)
-            payload.update({"query": query.strip(), "limit": limit})
+            payload.update(
+                {
+                    "query": query.strip(),
+                    "limit": limit,
+                    "include_pasted_files": bool(include_pasted_files),
+                }
+            )
             response = await self._signed_json_post("/v1/personal-context/search", payload)
             if not isinstance(response, dict) or set(response) != {"mode", "results"}:
                 return self._UNAVAILABLE

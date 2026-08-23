@@ -69,6 +69,7 @@ async def get_or_create_profile(
         select(MemoryRecord)
         .where(
             MemoryRecord.user_id == user_id,
+            MemoryRecord.kind == "explicit",
             MemoryRecord.state == "active",
             MemoryRecord.category.in_(("preference", "instruction")),
             MemoryRecord.expires_at.is_(None) | (MemoryRecord.expires_at > func.now()),

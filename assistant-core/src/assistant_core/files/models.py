@@ -6,6 +6,7 @@ from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Computed,
     DateTime,
@@ -119,6 +120,9 @@ class FileReference(Base):
     filename: Mapped[str] = mapped_column(String(500), default="", nullable=False)
     mime_type: Mapped[str] = mapped_column(String(100), default="", nullable=False)
     header_path: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    transient: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     chunk_ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -158,6 +162,9 @@ class FileDocument(Base):
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     total_chunks: Mapped[int] = mapped_column(Integer, nullable=False)
     total_characters: Mapped[int] = mapped_column(Integer, nullable=False)
+    transient: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

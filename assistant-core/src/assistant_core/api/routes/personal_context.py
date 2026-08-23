@@ -47,6 +47,7 @@ router = APIRouter(prefix="/v1/personal-context", tags=["personal-context"])
 LOGGER = structlog.get_logger("assistant_core.personal_context")
 RRF_K = 60
 
+
 def _format_seconds(seconds: int | None) -> str:
     """Format seconds into MM:SS or HH:MM:SS."""
     if seconds is None:
@@ -58,11 +59,15 @@ def _format_seconds(seconds: int | None) -> str:
     return f"{m:02d}:{s:02d}"
 
 
-
 def _compact_preview(statement: str) -> str:
     """Normalize a statement and cap its preview at 240 characters."""
     normalized = " ".join(statement.split())
     return normalized if len(normalized) <= 240 else normalized[:239] + "…"
+
+
+def _memory_kind(value: str) -> Literal["explicit", "inferred"]:
+    """Narrow the DB-backed kind string to the API contract."""
+    return "inferred" if value == "inferred" else "explicit"
 
 
 class PersonalContextSearchRequest(BaseModel):
@@ -77,6 +82,10 @@ class PersonalContextSearchRequest(BaseModel):
     native_message_id: str | None = Field(default=None, min_length=1, max_length=200)
     query: str
     limit: int = Field(default=5, ge=1, le=10)
+    include_pasted_files: bool = Field(
+        default=False,
+        description="Include transient pasted-text file passages in retrieval.",
+    )
 
     @field_validator("query", mode="before")
     @classmethod
@@ -125,6 +134,7 @@ class PersonalContextPreview(BaseModel):
     start_time_seconds: int | None = None
     end_time_seconds: int | None = None
     label: str | None = None
+
 
 class PersonalContextSearchResponse(BaseModel):
     """Bounded personal-context results with declared retrieval mode."""
@@ -190,6 +200,7 @@ class PersonalContextReadResponse(BaseModel):
     category: str
     role: Literal["user", "assistant"] | None
     evidence_quote: str | None
+    memory_kind: Literal["explicit", "inferred"] | None = None
     source_native_chat_id: str | None
     source_native_message_id: str | None
     source_native_project_id: str | None = None
@@ -229,6 +240,7 @@ class MemoryItemResponse(BaseModel):
     key: str
     category: str
     statement: str
+    kind: Literal["explicit", "inferred"] = "explicit"
     temporal_tag: str | None = None
     expires_at: datetime | None = None
     created_at: datetime
@@ -363,6 +375,7 @@ async def search_personal_context(
             query_text=body.query,
             query_embedding=query_embedding,
             limit=body.limit,
+            include_transient=body.include_pasted_files,
         )
         episode_hits = await search_topic_episodes(
             session,
@@ -383,12 +396,15 @@ async def search_personal_context(
 
     ranked: list[tuple[float, int, str, PersonalContextPreview]] = []
     for rank, record in enumerate(memory_records, start=1):
+        statement_preview = _compact_preview(record.statement)
+        if record.kind == "inferred":
+            statement_preview = f"[inferred] {statement_preview}"
         preview = PersonalContextPreview(
             source_id=record.id,
             source_type="memory",
             category=record.category,
             role=None,
-            preview=_compact_preview(record.statement),
+            preview=statement_preview,
             source_native_chat_id=None,
             source_native_message_id=None,
             source_native_project_id=None,
@@ -471,7 +487,11 @@ async def search_personal_context(
         )
         ranked.append((ep_score, 0, str(ehit.episode_id), preview))
     for mhit in media_hits:
-        time_str = f" [{_format_seconds(mhit.start_time_seconds)} - {_format_seconds(mhit.end_time_seconds)}]" if mhit.start_time_seconds is not None else ""
+        time_str = (
+            f" [{_format_seconds(mhit.start_time_seconds)} - {_format_seconds(mhit.end_time_seconds)}]"
+            if mhit.start_time_seconds is not None
+            else ""
+        )
         label_str = f" ({mhit.label})" if mhit.label else ""
         preview_text = f"[{mhit.title}{time_str}{label_str}] {mhit.content}"
         preview = PersonalContextPreview(
@@ -543,6 +563,7 @@ async def read_personal_context(
                 category=record.category,
                 role=None,
                 evidence_quote=evidence.evidence_quote,
+                memory_kind=_memory_kind(record.kind),
                 source_native_chat_id=turn.native_chat_id,
                 source_native_message_id=turn.native_user_message_id,
                 source_native_project_id=turn.native_project_id,
@@ -661,7 +682,11 @@ async def read_personal_context(
                 ) is not None:
                     seg, doc = media_seg_res
                     time_range = f"{_format_seconds(seg.start_time_seconds)} - {_format_seconds(seg.end_time_seconds)}"
-                    timestamp_url = f"{doc.url}&t={seg.start_time_seconds}" if "youtube.com" in doc.url or "youtu.be" in doc.url else doc.url
+                    timestamp_url = (
+                        f"{doc.url}&t={seg.start_time_seconds}"
+                        if "youtube.com" in doc.url or "youtu.be" in doc.url
+                        else doc.url
+                    )
                     content_lines = [
                         f"# Media: {doc.title}",
                         f"**Source:** [{doc.media_type.upper()}]({doc.url}) | **Channel/Author:** {doc.channel_or_author or 'Unknown'}",
@@ -828,6 +853,7 @@ async def list_memories(body: MemoryListRequest, request: Request) -> MemoryList
             key=r.key,
             category=r.category,
             statement=r.statement,
+            kind=_memory_kind(r.kind),
             temporal_tag=r.temporal_tag,
             expires_at=r.expires_at,
             created_at=r.created_at or datetime.now(UTC),
@@ -872,6 +898,7 @@ async def save_memory(body: MemorySaveRequest, request: Request) -> MemorySaveRe
             key=record.key,
             category=record.category,
             statement=record.statement,
+            kind=_memory_kind(record.kind),
             temporal_tag=record.temporal_tag,
             expires_at=record.expires_at,
             created_at=record.created_at or datetime.now(UTC),
@@ -917,6 +944,7 @@ async def update_memory(body: MemoryUpdateRequest, request: Request) -> MemoryUp
             key=record.key,
             category=record.category,
             statement=record.statement,
+            kind=_memory_kind(record.kind),
             temporal_tag=record.temporal_tag,
             expires_at=record.expires_at,
             created_at=record.created_at or datetime.now(UTC),
@@ -1036,9 +1064,7 @@ async def process_personal_context_media(
             if analysis.segments:
                 seg_texts = [f"{s.label or ''}\n{s.content}" for s in analysis.segments]
                 try:
-                    seg_embs = [
-                        await asyncio.to_thread(embedder.embed_one, t) for t in seg_texts
-                    ]
+                    seg_embs = [await asyncio.to_thread(embedder.embed_one, t) for t in seg_texts]
                 except Exception:  # noqa: BLE001
                     seg_embs = None
         doc = await store_media_analysis(

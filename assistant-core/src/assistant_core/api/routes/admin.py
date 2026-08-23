@@ -117,6 +117,7 @@ class PlaygroundSearchRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=50)
     source_type: Literal["all", "memories", "files", "conversations", "episodes", "media"] = "all"
 
+
 class CompileEpisodesRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     native_chat_id: str | None = None
@@ -163,7 +164,9 @@ class BatchDeleteFilesRequest(BaseModel):
 class PurgeSystemRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     confirmation: str
-    scope: Literal["all", "memories", "files", "conversations", "jobs", "artifacts", "episodes", "media"] = "all"
+    scope: Literal[
+        "all", "memories", "files", "conversations", "jobs", "artifacts", "episodes", "media"
+    ] = "all"
 
 
 class IndexMediaUrlRequest(BaseModel):
@@ -171,6 +174,7 @@ class IndexMediaUrlRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     native_user_id: str = Field(default="user-1", min_length=1, max_length=200)
     media_type: str = Field(default="youtube", min_length=1, max_length=64)
+
 
 # ---------------------------------------------------------------------------
 # Authentication Routes
@@ -766,6 +770,7 @@ async def list_files(
                 FileDocument.total_characters,
                 FileDocument.created_at,
                 FileDocument.tombstoned_at,
+                FileDocument.transient,
                 UserIdentity.native_user_id,
             )
             .join(UserIdentity, UserIdentity.id == FileDocument.user_id)
@@ -804,7 +809,8 @@ async def list_files(
                 "created_at": row[6].isoformat() if row[6] else None,
                 "tombstoned_at": row[7].isoformat() if row[7] else None,
                 "status": "tombstoned" if row[7] is not None else "active",
-                "native_user_id": row[8],
+                "transient": bool(row[8]),
+                "native_user_id": row[9],
             }
             for row in rows
         ]
@@ -863,8 +869,43 @@ async def get_file_detail(native_file_id: str, request: Request) -> dict[str, An
             "content": doc.content,
             "created_at": doc.created_at.isoformat() if doc.created_at else None,
             "tombstoned_at": doc.tombstoned_at.isoformat() if doc.tombstoned_at else None,
+            "transient": bool(doc.transient),
             "chunks": chunks,
         }
+
+
+@router.post("/files/{native_file_id}/promote", dependencies=[Depends(require_admin_session)])
+async def promote_transient_file(native_file_id: str, request: Request) -> dict[str, Any]:
+    """Clear the transient flag so a pasted-text file joins default retrieval."""
+    async with request.app.state.session_factory() as session:
+        doc = (
+            await session.execute(
+                select(FileDocument).where(FileDocument.native_file_id == native_file_id)
+            )
+        ).scalar_one_or_none()
+        if doc is None:
+            raise HTTPException(status_code=404, detail="file document not found")
+
+        ref_result = await session.execute(
+            update(FileReference)
+            .where(
+                FileReference.native_file_id == native_file_id,
+                FileReference.user_id == doc.user_id,
+                FileReference.transient.is_(True),
+            )
+            .values(transient=False)
+        )
+        references_updated = ref_result.rowcount or 0
+
+        was_transient = bool(doc.transient)
+        doc.transient = False
+        await session.commit()
+
+    return {
+        "status": "promoted" if was_transient or references_updated else "already_promoted",
+        "native_file_id": native_file_id,
+        "references_updated": references_updated,
+    }
 
 
 @router.delete("/files/{native_file_id}", dependencies=[Depends(require_admin_session)])
@@ -1836,7 +1877,6 @@ async def delete_admin_topic_episode(episode_id: uuid.UUID, request: Request) ->
     return {"status": "deleted", "id": str(episode_id)}
 
 
-
 # ---------------------------------------------------------------------------
 # Media Understanding & Segment Management
 # ---------------------------------------------------------------------------
@@ -1980,9 +2020,7 @@ async def get_admin_media_detail(media_id: uuid.UUID, request: Request) -> dict[
 
 
 @router.post("/media/index-url", dependencies=[Depends(require_admin_session)])
-async def index_admin_media_url(
-    body: IndexMediaUrlRequest, request: Request
-) -> dict[str, Any]:
+async def index_admin_media_url(body: IndexMediaUrlRequest, request: Request) -> dict[str, Any]:
     """Analyze and persist a media URL on demand."""
     async with request.app.state.session_factory() as session:
         user_res = (
@@ -2019,9 +2057,7 @@ async def index_admin_media_url(
             if analysis.segments:
                 seg_texts = [f"{s.label or ''}\n{s.content}" for s in analysis.segments]
                 try:
-                    seg_embs = [
-                        await asyncio.to_thread(embedder.embed_one, t) for t in seg_texts
-                    ]
+                    seg_embs = [await asyncio.to_thread(embedder.embed_one, t) for t in seg_texts]
                 except Exception:  # noqa: BLE001
                     seg_embs = None
 
@@ -2065,6 +2101,7 @@ async def delete_admin_media(
 
         await session.commit()
         return {"status": "deleted" if permanent else "tombstoned", "id": str(media_id)}
+
 
 @router.post("/playground/search", dependencies=[Depends(require_admin_session)])
 async def playground_search(body: PlaygroundSearchRequest, request: Request) -> dict[str, Any]:

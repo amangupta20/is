@@ -55,6 +55,7 @@ from assistant_core.files.repository import (
     store_file_segment_embedding,
     tombstone_file_references,
 )
+from assistant_core.files.transient import is_transient_pasted_file
 from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
 from assistant_core.jobs.repository import claim_next_job, complete_job, fail_job
@@ -170,6 +171,7 @@ def get_episode_extractor(settings: Settings | None = None) -> TaskModelEpisodeE
         timeout_seconds=timeout,
     )
 
+
 def get_conversation_embedder(
     settings: Settings | None = None,
 ) -> OpenAICompatibleEmbedder:
@@ -190,6 +192,7 @@ def get_media_analyzer(settings: Settings | None = None) -> MediaAnalyzer:
         model=model,
         timeout_seconds=timeout,
     )
+
 
 async def _handle_process_event(session: AsyncSession, payload: dict[str, JsonValue]) -> None:
     """Route one received event to its durable materialization."""
@@ -357,6 +360,7 @@ async def _handle_extract_memory(session: AsyncSession, payload: dict[str, JsonV
         .where(
             FileDocument.user_id == turn.user_id,
             FileDocument.tombstoned_at.is_(None),
+            FileDocument.transient.is_(False),
         )
         .order_by(FileDocument.created_at.desc())
         .limit(3)
@@ -577,6 +581,7 @@ async def _handle_index_file(session: AsyncSession, payload: dict[str, JsonValue
         return
 
     filename, mime_type, content = file_info
+    transient = is_transient_pasted_file(filename)
 
     materialization = await materialize_file_passages(
         session,
@@ -585,6 +590,7 @@ async def _handle_index_file(session: AsyncSession, payload: dict[str, JsonValue
         filename=filename,
         mime_type=mime_type,
         markdown_text=content,
+        transient=transient,
     )
     await session.commit()
 
@@ -625,6 +631,7 @@ async def _handle_index_file(session: AsyncSession, payload: dict[str, JsonValue
         file_id=file_id,
         user_id=str(user_id),
         filename=filename,
+        transient=transient,
         total_chunks=materialization.total_chunks,
         inserted_segments=materialization.inserted_segments,
         reused_segments=materialization.reused_segments,

@@ -41,6 +41,7 @@ async def materialize_file_passages(
     filename: str,
     mime_type: str,
     markdown_text: str,
+    transient: bool = False,
 ) -> FileMaterializationResult:
     """Chunk markdown, store full un-chunked document, and persist deduplicated segments."""
     chunks = chunk_markdown(markdown_text)
@@ -67,6 +68,7 @@ async def materialize_file_passages(
             content_sha256=doc_sha,
             total_chunks=len(chunks),
             total_characters=len(markdown_text),
+            transient=transient,
             tombstoned_at=None,
         )
         .on_conflict_do_update(
@@ -78,6 +80,7 @@ async def materialize_file_passages(
                 "content_sha256": doc_sha,
                 "total_chunks": len(chunks),
                 "total_characters": len(markdown_text),
+                "transient": transient,
                 "tombstoned_at": None,
             },
         )
@@ -143,6 +146,7 @@ async def materialize_file_passages(
                 filename=filename,
                 mime_type=mime_type,
                 header_path=chunk.header_path,
+                transient=transient,
                 chunk_ordinal=chunk.chunk_ordinal,
             )
             .on_conflict_do_nothing(constraint="uq_file_reference_user_file_chunk")
@@ -232,6 +236,7 @@ async def search_file_passages(
     query_text: str,
     query_embedding: list[float] | None = None,
     limit: int = 10,
+    include_transient: bool = False,
 ) -> list[FileHit]:
     """Retrieve top file passages using hybrid FTS + pgvector cosine similarity."""
     lexical_hits: dict[uuid.UUID, FileHit] = {}
@@ -241,6 +246,8 @@ async def search_file_passages(
         user_filters.append(FileReference.user_id == user_id)
     elif native_user_id is not None:
         user_filters.append(UserIdentity.native_user_id == native_user_id)
+    if not include_transient:
+        user_filters.append(FileReference.transient.is_(False))
 
     # Lexical search via TSVECTOR
     if query_text.strip():

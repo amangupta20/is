@@ -24,10 +24,20 @@ Given a list of active personal memories for a user, perform a comprehensive rev
    - Review categories to ensure memories are grouped into clean, descriptive domain slugs (e.g. "career", "infrastructure", "homelab", "preference", "fact", "project", "tooling", "learning", "finance", "health").
    - Example: Move job applications from "project" or "fact" to "career". Move Docker/Compose/server setups to "infrastructure" or "homelab".
 
-Return a JSON object with three arrays:
+4. Inferred Promotions (Corroboration Gate):
+   - Records listed with "kind": "inferred" are tentative observed patterns stored at confidence 0; they are invisible to personalization until confirmed.
+   - Promote an inferred record ONLY when the surrounding explicit memories or its accumulated evidence_count clearly corroborate it as a stable, accurate pattern.
+   - Never promote a pattern that is contradicted by any explicit memory or that rests on a single weak observation.
+
+5. Inferred Discards (Cleanup):
+   - Discard inferred records that are contradicted by newer explicit facts, were never corroborated and look stale relative to Current Reference UTC Time, or describe transient situations that no longer apply.
+
+Return a JSON object with five arrays:
 - "supersessions": [{"superseded_id": UUID, "superseded_by_id": UUID, "reason": str}]
 - "validity_updates": [{"memory_id": UUID, "action": "set_expiration" | "extend_expiration" | "expire_now" | "mark_permanent", "expires_at": ISO8601_string | null, "temporal_tag": str | null, "reason": str}]
 - "reclassifications": [{"memory_id": UUID, "new_category": str, "reason": str}]
+- "promotions": [{"memory_id": UUID, "reason": str}]
+- "discards": [{"memory_id": UUID, "reason": str}]
 
 If no changes are needed in an area, return an empty array for that key."""
 
@@ -79,6 +89,24 @@ class MemoryReclassificationDecision(BaseModel):
     )
 
 
+class MemoryPromotionDecision(BaseModel):
+    """Confirming one inferred pattern as an explicit memory after corroboration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: uuid.UUID = Field(description="UUID of the inferred record to promote")
+    reason: str = Field(min_length=1, max_length=500, description="Corroboration evidence")
+
+
+class MemoryDiscardDecision(BaseModel):
+    """Archiving one inferred pattern that was never or no longer plausible."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: uuid.UUID = Field(description="UUID of the inferred record to discard")
+    reason: str = Field(min_length=1, max_length=500, description="Reason for the discard")
+
+
 class ConsolidationResult(BaseModel):
     """Strict validation of the task model's multi-action consolidation response."""
 
@@ -87,6 +115,8 @@ class ConsolidationResult(BaseModel):
     supersessions: list[MemorySupersessionDecision] = Field(default_factory=list)
     validity_updates: list[MemoryValidityDecision] = Field(default_factory=list)
     reclassifications: list[MemoryReclassificationDecision] = Field(default_factory=list)
+    promotions: list[MemoryPromotionDecision] = Field(default_factory=list)
+    discards: list[MemoryDiscardDecision] = Field(default_factory=list)
 
 
 # Backward compatibility alias
@@ -121,8 +151,9 @@ class TaskModelMemoryConsolidator:
         *,
         reference_time: datetime | None = None,
     ) -> ConsolidationResult:
-        """Submit active memories to the task model and parse supersessions, validity updates, and reclassifications."""
-        if len(memories) <= 1:
+        """Submit active memories to the task model and parse supersessions, validity updates, reclassifications, and inferred lifecycle decisions."""
+        has_inferred = any(m.get("kind") == "inferred" for m in memories)
+        if len(memories) <= 1 and not has_inferred:
             return ConsolidationResult()
 
         headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -133,6 +164,8 @@ class TaskModelMemoryConsolidator:
             {
                 "id": str(m["id"]),
                 "key": m.get("key", ""),
+                "kind": m.get("kind", "explicit"),
+                "evidence_count": int(m.get("evidence_count") or 0),
                 "category": m.get("category", ""),
                 "statement": m.get("statement", ""),
                 "temporal_tag": m.get("temporal_tag") or "permanent",
@@ -190,6 +223,10 @@ class TaskModelMemoryConsolidator:
                 parsed_dict["validity_updates"] = []
             if "reclassifications" not in parsed_dict:
                 parsed_dict["reclassifications"] = []
+            if "promotions" not in parsed_dict:
+                parsed_dict["promotions"] = []
+            if "discards" not in parsed_dict:
+                parsed_dict["discards"] = []
 
             return ConsolidationResult.model_validate(parsed_dict)
         except (httpx.HTTPError, KeyError, TypeError, ValueError, ValidationError) as exc:

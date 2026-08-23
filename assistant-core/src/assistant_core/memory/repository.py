@@ -47,7 +47,7 @@ async def search_explicit_memory(
     query: str,
     limit: int,
 ) -> list[MemoryRecord]:
-    """Return active explicit records ranked by normalized exact/token overlap."""
+    """Return active explicit and inferred records ranked by normalized exact/token overlap."""
     normalized_query = " ".join(query.split()).casefold()
     query_tokens = set(_normalized_tokens(normalized_query))
     if not query_tokens:
@@ -58,7 +58,7 @@ async def search_explicit_memory(
         .join(UserIdentity, MemoryRecord.user_id == UserIdentity.id)
         .where(
             UserIdentity.native_user_id == native_user_id,
-            MemoryRecord.kind == "explicit",
+            MemoryRecord.kind.in_(("explicit", "inferred")),
             MemoryRecord.state == "active",
             MemoryRecord.expires_at.is_(None) | (MemoryRecord.expires_at > func.now()),
             MemoryRecord.valid_from.is_(None) | (MemoryRecord.valid_from <= func.now()),
@@ -99,7 +99,7 @@ async def read_explicit_memory(
         .where(
             UserIdentity.native_user_id == native_user_id,
             MemoryRecord.id == memory_source_id,
-            MemoryRecord.kind == "explicit",
+            MemoryRecord.kind.in_(("explicit", "inferred")),
             MemoryRecord.state == "active",
             CompletedTurn.user_id == MemoryRecord.user_id,
             CompletedTurn.tombstoned_at.is_(None),
@@ -165,6 +165,8 @@ def _memory_snapshot(record: MemoryRecord | None) -> dict[str, Any] | None:
         "category": record.category,
         "statement": record.statement,
         "state": record.state,
+        "kind": record.kind,
+        "confidence": record.confidence,
         "temporal_tag": record.temporal_tag,
         "expires_at": record.expires_at.isoformat() if record.expires_at else None,
         "valid_from": record.valid_from.isoformat() if record.valid_from else None,
@@ -202,18 +204,93 @@ async def log_memory_change(
     return log_entry
 
 
+async def _apply_inferred_candidate(
+    session: AsyncSession,
+    turn: CompletedTurn,
+    candidate: ExplicitMemoryCandidate,
+) -> MemoryRecord | None:
+    """Store or refresh one tentative inferred pattern without touching confirmed records."""
+    active = await _active_record(session, turn, candidate.key)
+    if active is not None and active.kind == "explicit":
+        return None
+
+    if active is not None:
+        prev_snap = _memory_snapshot(active)
+        changed = False
+        if active.statement != candidate.statement:
+            active.statement = candidate.statement
+            active.category = candidate.category
+            changed = True
+        if not await _has_evidence(session, active, turn, candidate.evidence_quote):
+            await _insert_evidence(session, active, turn, candidate.evidence_quote)
+        if changed:
+            await session.flush()
+            await log_memory_change(
+                session,
+                user_id=turn.user_id,
+                memory_id=active.id,
+                change_source="turn_extraction",
+                action="update",
+                previous_state=prev_snap,
+                new_state=_memory_snapshot(active),
+                reason=(
+                    "Refreshed inferred pattern from conversation evidence: "
+                    f'"{candidate.evidence_quote[:100]}"'
+                ),
+            )
+        return active
+
+    statement = (
+        insert(MemoryRecord)
+        .values(
+            id=uuid.uuid4(),
+            user_id=turn.user_id,
+            key=candidate.key,
+            category=candidate.category,
+            statement=candidate.statement,
+            kind="inferred",
+            confidence=0,
+            state="active",
+        )
+        .returning(MemoryRecord)
+    )
+    record = (await session.execute(statement)).scalar_one_or_none()
+    if not isinstance(record, MemoryRecord):
+        raise TypeError("memory record insertion did not return a record")
+    await _insert_evidence(session, record, turn, candidate.evidence_quote)
+
+    await log_memory_change(
+        session,
+        user_id=turn.user_id,
+        memory_id=record.id,
+        change_source="turn_extraction",
+        action="create",
+        previous_state=None,
+        new_state=_memory_snapshot(record),
+        reason=f'Inferred from conversation evidence: "{candidate.evidence_quote[:100]}"',
+    )
+    return record
+
+
 async def apply_explicit_candidates(
     session: AsyncSession,
     turn: CompletedTurn,
     candidates: list[ExplicitMemoryCandidate],
 ) -> list[MemoryRecord]:
-    """Apply exact-quote candidates once, retaining prior facts on correction."""
+    """Apply exact-quote candidates once; explicit records supersede, inferred accumulate."""
     full_turn_text = f"{turn.user_content}\n{turn.assistant_content}"
     if any(candidate.evidence_quote not in full_turn_text for candidate in candidates):
         raise ValueError("memory evidence quote is not present in the completed turn content")
 
     applied: list[MemoryRecord] = []
-    for candidate in candidates:
+    ordered = sorted(candidates, key=lambda c: 0 if c.kind == "explicit" else 1)
+    for candidate in ordered:
+        if candidate.kind == "inferred":
+            record = await _apply_inferred_candidate(session, turn, candidate)
+            if record is not None:
+                applied.append(record)
+            continue
+
         active = await _active_record(session, turn, candidate.key)
         if active is not None and active.statement == candidate.statement:
             if await _has_evidence(session, active, turn, candidate.evidence_quote):
@@ -295,13 +372,14 @@ async def consolidate_user_memories(
         .join(UserIdentity, MemoryRecord.user_id == UserIdentity.id)
         .where(
             UserIdentity.native_user_id == native_user_id,
-            MemoryRecord.kind == "explicit",
+            MemoryRecord.kind.in_(("explicit", "inferred")),
             MemoryRecord.state == "active",
         )
         .order_by(MemoryRecord.created_at.asc())
     )
     records = list((await session.execute(statement)).scalars().all())
-    if len(records) <= 1:
+    has_inferred = any(record.kind == "inferred" for record in records)
+    if len(records) <= 1 and not has_inferred:
         duration_ms = (perf_counter() - started_at) * 1000
         run_log = ConsolidationRun(
             id=uuid.uuid4(),
@@ -317,10 +395,24 @@ async def consolidate_user_memories(
         session.add(run_log)
         return []
 
+    evidence_counts: dict[uuid.UUID, int] = {}
+    if records:
+        counts_stmt = (
+            select(MemoryEvidence.memory_record_id, func.count(MemoryEvidence.id))
+            .where(MemoryEvidence.memory_record_id.in_([record.id for record in records]))
+            .group_by(MemoryEvidence.memory_record_id)
+        )
+        evidence_counts = {
+            record_id: int(count)
+            for record_id, count in (await session.execute(counts_stmt)).all()
+        }
+
     memory_dicts = [
         {
             "id": r.id,
             "key": r.key,
+            "kind": r.kind,
+            "evidence_count": evidence_counts.get(r.id, 0),
             "category": r.category,
             "statement": r.statement,
             "temporal_tag": r.temporal_tag or "permanent",
@@ -518,6 +610,71 @@ async def consolidate_user_memories(
             previous_state=rec_snap,
             new_state=_memory_snapshot(rec),
             reason=r.reason,
+        )
+
+    # 4. Process Inferred Promotions
+    for p in result.promotions:
+        rec = record_by_id.get(p.memory_id)
+        if rec is None or rec.state != "active" or rec.kind != "inferred":
+            continue
+        rec_snap = _memory_snapshot(rec)
+        await session.execute(
+            update(MemoryRecord)
+            .where(MemoryRecord.id == rec.id)
+            .values(kind="explicit", confidence=1)
+        )
+        rec.kind = "explicit"
+        rec.confidence = 1
+        applied.append(
+            {
+                "type": "promotion",
+                "memory_id": str(rec.id),
+                "statement": rec.statement,
+                "reason": p.reason,
+            }
+        )
+        await log_memory_change(
+            session,
+            native_user_id=native_user_id,
+            user_id=user_id,
+            memory_id=rec.id,
+            change_source="consolidation",
+            action="promote",
+            previous_state=rec_snap,
+            new_state=_memory_snapshot(rec),
+            reason=p.reason,
+        )
+
+    # 5. Process Inferred Discards
+    for d in result.discards:
+        rec = record_by_id.get(d.memory_id)
+        if rec is None or rec.state != "active" or rec.kind != "inferred":
+            continue
+        rec_snap = _memory_snapshot(rec)
+        await session.execute(
+            update(MemoryRecord)
+            .where(MemoryRecord.id == rec.id)
+            .values(state="archived", archived_at=func.now())
+        )
+        rec.state = "archived"
+        applied.append(
+            {
+                "type": "discard",
+                "memory_id": str(rec.id),
+                "statement": rec.statement,
+                "reason": d.reason,
+            }
+        )
+        await log_memory_change(
+            session,
+            native_user_id=native_user_id,
+            user_id=user_id,
+            memory_id=rec.id,
+            change_source="consolidation",
+            action="archive",
+            previous_state=rec_snap,
+            new_state=_memory_snapshot(rec),
+            reason=d.reason,
         )
 
     duration_ms = (perf_counter() - started_at) * 1000
@@ -877,6 +1034,46 @@ async def revert_consolidation_item(
                 previous_state=prev_snap,
                 new_state=_memory_snapshot(rec),
                 reason=f"Reverted consolidation category reclassification #{item_index + 1} from run {run.id}",
+            )
+    elif item_type == "promotion":
+        memory_id = uuid.UUID(item["memory_id"])
+        reverted_memory_id = memory_id
+        rec_stmt = select(MemoryRecord).where(MemoryRecord.id == memory_id).with_for_update()
+        rec = (await session.execute(rec_stmt)).scalar_one_or_none()
+        if rec is not None and rec.kind == "explicit":
+            prev_snap = _memory_snapshot(rec)
+            rec.kind = "inferred"
+            rec.confidence = 0
+            await log_memory_change(
+                session,
+                native_user_id=run.native_user_id,
+                user_id=run.user_id,
+                memory_id=rec.id,
+                change_source="admin_ui",
+                action="revert_promotion",
+                previous_state=prev_snap,
+                new_state=_memory_snapshot(rec),
+                reason=f"Reverted inferred-memory promotion #{item_index + 1} from run {run.id}",
+            )
+    elif item_type == "discard":
+        memory_id = uuid.UUID(item["memory_id"])
+        reverted_memory_id = memory_id
+        rec_stmt = select(MemoryRecord).where(MemoryRecord.id == memory_id).with_for_update()
+        rec = (await session.execute(rec_stmt)).scalar_one_or_none()
+        if rec is not None:
+            prev_snap = _memory_snapshot(rec)
+            rec.state = "active"
+            rec.archived_at = None
+            await log_memory_change(
+                session,
+                native_user_id=run.native_user_id,
+                user_id=run.user_id,
+                memory_id=rec.id,
+                change_source="admin_ui",
+                action="revert_discard",
+                previous_state=prev_snap,
+                new_state=_memory_snapshot(rec),
+                reason=f"Reverted inferred-memory discard #{item_index + 1} from run {run.id}",
             )
 
     item["reverted"] = True

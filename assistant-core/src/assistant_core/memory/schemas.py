@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -6,7 +7,7 @@ MemoryCategory = str
 
 
 class ExplicitMemoryCandidate(BaseModel):
-    """One quoted, user-authored statement suitable for durable explicit memory."""
+    """One quoted, user-authored statement suitable for durable memory storage."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -23,6 +24,13 @@ class ExplicitMemoryCandidate(BaseModel):
     )
     statement: str = Field(min_length=1, max_length=2_000)
     evidence_quote: str = Field(min_length=1, max_length=1_000)
+    kind: Literal["explicit", "inferred"] = Field(
+        default="explicit",
+        description=(
+            "explicit for directly stated or agreed facts; inferred for tentative "
+            "cross-turn patterns that require corroboration before promotion."
+        ),
+    )
     valid_from: datetime | None = Field(default=None)
     expires_at: datetime | None = Field(default=None)
     temporal_tag: str | None = Field(default=None, max_length=50)

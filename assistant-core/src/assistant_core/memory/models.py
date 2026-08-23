@@ -22,7 +22,7 @@ from assistant_core.db.base import Base
 
 
 class MemoryRecord(Base):
-    """A durable explicit memory, retained across supersession."""
+    """A durable memory: explicit (confirmed) or inferred (unconfirmed pattern)."""
 
     __tablename__ = "memory_record"
     __table_args__ = (
@@ -30,8 +30,8 @@ class MemoryRecord(Base):
             "char_length(category) >= 2 AND char_length(category) <= 50",
             name="memory_record_category_len",
         ),
-        CheckConstraint("kind = 'explicit'", name="memory_record_kind"),
-        CheckConstraint("confidence = 1", name="memory_record_confidence"),
+        CheckConstraint("kind IN ('explicit', 'inferred')", name="memory_record_kind"),
+        CheckConstraint("confidence IN (0, 1)", name="memory_record_confidence"),
         CheckConstraint(
             "char_length(statement) <= 2000",
             name="memory_record_statement_length",

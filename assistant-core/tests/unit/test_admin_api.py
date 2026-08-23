@@ -11,6 +11,7 @@ from starlette.testclient import TestClient
 from assistant_core.artifacts.models import Artifact, ArtifactVersion
 from assistant_core.auth.admin import create_admin_session_token
 from assistant_core.config import Settings
+from assistant_core.files.models import FileDocument
 from assistant_core.jobs.models import Job
 from assistant_core.main import create_app
 from assistant_core.memory.models import ChatProfileSnapshot, MemoryEvidence, MemoryRecord
@@ -246,6 +247,7 @@ def test_admin_files_and_jobs_endpoints() -> None:
         user_id = uuid.uuid4()
         created_at = now
         tombstoned_at = None
+        transient = False
 
     session = _FakeSession(
         [
@@ -262,6 +264,7 @@ def test_admin_files_and_jobs_endpoints() -> None:
                         1500,
                         now,
                         None,
+                        False,
                         "user-1",
                     )
                 ]
@@ -965,3 +968,42 @@ def test_admin_create_memory_rejects_oversized_explicit_evidence_quote() -> None
         },
     )
     assert resp.status_code == 422
+
+
+def test_admin_promote_transient_file() -> None:
+    secret = "admin-secret-at-least-32-chars-long"
+    app = create_app(Settings(hmac_secret=secret))
+    client = _get_authed_client(app, secret)
+    user_id = uuid.uuid4()
+
+    doc = FileDocument(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        native_file_id="paste-1",
+        filename="Pasted_Text_1755555555555.txt",
+        mime_type="text/plain",
+        content="log line 1",
+        content_sha256="c" * 64,
+        total_chunks=1,
+        total_characters=10,
+        transient=True,
+    )
+    session = _FakeSession([_FakeResult(scalar=doc)])
+    app.state.session_factory = lambda: session
+
+    resp = client.post("/v1/admin/files/paste-1/promote")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "promoted"
+    assert data["references_updated"] == 1
+    assert doc.transient is False
+
+
+def test_admin_promote_transient_file_404_when_missing() -> None:
+    secret = "admin-secret-at-least-32-chars-long"
+    app = create_app(Settings(hmac_secret=secret))
+    client = _get_authed_client(app, secret)
+    app.state.session_factory = lambda: _FakeSession([_FakeResult(scalar=None)])
+
+    resp = client.post("/v1/admin/files/missing/promote")
+    assert resp.status_code == 404
