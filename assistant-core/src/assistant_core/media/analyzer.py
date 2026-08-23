@@ -42,9 +42,10 @@ Rules:
 class MediaAnalysisError(ValueError):
     """Raised when Gemini media analysis fails or produces invalid output."""
 
-    def __init__(self, code: str) -> None:
-        super().__init__(code)
+    def __init__(self, code: str, detail: str | None = None) -> None:
+        super().__init__(f"{code}: {detail}" if detail else code)
         self.code = code
+        self.detail = detail
 
 
 def canonical_media_url(url: str) -> str | None:
@@ -124,8 +125,24 @@ class MediaAnalyzer:
                 )
                 response.raise_for_status()
                 data = response.json()
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            provider_detail = ""
+            try:
+                error_body = exc.response.json().get("error", {})
+                provider_detail = str(error_body.get("status") or error_body.get("message") or "")[
+                    :300
+                ]
+            except Exception:  # noqa: BLE001 - detail is best-effort only
+                provider_detail = ""
+            raise MediaAnalysisError(
+                MEDIA_ANALYSIS_FAILED_ERROR,
+                f"http_{status_code}:{provider_detail}",
+            ) from None
         except Exception as exc:
-            raise MediaAnalysisError(MEDIA_ANALYSIS_FAILED_ERROR) from exc
+            raise MediaAnalysisError(
+                MEDIA_ANALYSIS_FAILED_ERROR, f"transport_{type(exc).__name__}"
+            ) from exc
 
         try:
             candidates = data["candidates"]

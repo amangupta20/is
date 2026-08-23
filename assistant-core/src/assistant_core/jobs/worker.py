@@ -60,6 +60,8 @@ from assistant_core.identity.models import UserIdentity
 from assistant_core.jobs.models import Job
 from assistant_core.jobs.repository import claim_next_job, complete_job, fail_job
 from assistant_core.media.analyzer import (
+    MEDIA_ANALYSIS_FAILED_ERROR,
+    MediaAnalysisError,
     MediaAnalyzer,
     canonical_media_url,
 )
@@ -884,6 +886,23 @@ async def process_one(session: AsyncSession) -> bool:
     except OpenWebUIFileFetchError as exc:
         error_code = (
             f"file_fetch_failed_{exc.status_code}" if exc.status_code else "file_fetch_failed"
+        )
+    except MediaConfigurationError as exc:
+        error_code = MEDIA_CONFIGURATION_ERROR
+        LOGGER.warning(
+            "media_job_configuration_failed",
+            job_id=job_id,
+            url=job.payload.get("url") if isinstance(job.payload, dict) else None,
+            reason=str(exc),
+        )
+    except MediaAnalysisError as exc:
+        error_code = (exc.code or MEDIA_ANALYSIS_FAILED_ERROR)[:120]
+        LOGGER.warning(
+            "media_job_analysis_failed",
+            job_id=job_id,
+            url=job.payload.get("url") if isinstance(job.payload, dict) else None,
+            attempts=job.attempts,
+            reason=str(exc)[:300],
         )
     except Exception:  # noqa: BLE001 - all ordinary handler failures share one safe code
         error_code = "handler_failed"

@@ -1165,9 +1165,7 @@ async def process_personal_context_media(
         ).scalar_one_or_none()
 
         if existing_job is not None:
-            live_document = await get_media_document_by_url(
-                session, user_id=user_id, url=clean_url
-            )
+            live_document = await get_media_document_by_url(session, user_id=user_id, url=clean_url)
             in_flight = existing_job.status in ("queued", "running")
             if in_flight or live_document is not None:
                 LOGGER.info(
