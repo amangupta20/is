@@ -516,7 +516,34 @@ async def search_personal_context(
         ranked.append((mhit.score, 3, str(mhit.segment_id or mhit.document_id), preview))
 
     ranked.sort(key=lambda item: (-item[0], item[1], item[2]))
-    selected = ranked[: body.limit]
+
+    # Corpus-fair selection: guarantee every source type is represented before
+    # filling remaining slots purely by fused score, so scoped-boosted corpora
+    # cannot permanently bury global ones like media segments or file passages.
+    pools_by_type: dict[str, list[tuple[float, int, str, PersonalContextPreview]]] = {}
+    for item in ranked:
+        pools_by_type.setdefault(item[3].source_type, []).append(item)
+
+    rotation_order = ["memory", "conversation", "file", "episode", "media"]
+    cursors = {source_type: 0 for source_type in pools_by_type}
+    selected: list[tuple[float, int, str, PersonalContextPreview]] = []
+    while len(selected) < body.limit:
+        progressed = False
+        for source_type in rotation_order:
+            pool = pools_by_type.get(source_type)
+            if not pool:
+                continue
+            cursor = cursors[source_type]
+            if cursor >= len(pool):
+                continue
+            selected.append(pool[cursor])
+            cursors[source_type] = cursor + 1
+            progressed = True
+            if len(selected) >= body.limit:
+                break
+        if not progressed:
+            break
+
     LOGGER.info(
         "personal_context_search_completed",
         native_user_id=body.native_user_id,
@@ -998,6 +1025,91 @@ class PersonalContextProcessMediaRequest(BaseModel):
     native_user_id: str = Field(min_length=1, max_length=200)
     url: str = Field(min_length=1, max_length=2048)
     media_type: str = Field(default="youtube", min_length=1, max_length=64)
+
+
+class PersonalContextMediaDetailSegment(BaseModel):
+    """One timestamped segment of an indexed media document."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    segment_index: int
+    start_time_seconds: int
+    end_time_seconds: int
+    label: str | None = None
+    content: str
+
+
+class PersonalContextMediaDetailResponse(BaseModel):
+    """Complete indexed result for one media URL, bypassing search ranking."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    found: bool
+    url: str | None = None
+    media_id: uuid.UUID | None = None
+    title: str | None = None
+    channel_or_author: str | None = None
+    duration_seconds: int | None = None
+    summary: str | None = None
+    key_takeaways: list[str] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+    segments: list[PersonalContextMediaDetailSegment] = Field(default_factory=list)
+
+
+@router.post(
+    "/media-detail",
+    dependencies=[Depends(require_adapter_signature)],
+    response_model=PersonalContextMediaDetailResponse,
+)
+async def personal_context_media_detail(
+    body: PersonalContextProcessMediaRequest, request: Request
+) -> PersonalContextMediaDetailResponse:
+    """Fetch the entire indexed media document for one canonical URL."""
+    from sqlalchemy import select
+
+    from assistant_core.identity.models import UserIdentity
+    from assistant_core.media.analyzer import canonical_media_url
+    from assistant_core.media.repository import get_media_document_by_url
+
+    clean_url = body.url.strip()
+    canonical = canonical_media_url(clean_url)
+    if canonical is not None:
+        clean_url = canonical
+
+    not_found = PersonalContextMediaDetailResponse(found=False, url=clean_url)
+    async with request.app.state.session_factory() as session:
+        user_res = (
+            await session.execute(
+                select(UserIdentity.id).where(UserIdentity.native_user_id == body.native_user_id)
+            )
+        ).scalar_one_or_none()
+        if user_res is None:
+            return not_found
+        detail = await get_media_document_by_url(session, user_id=user_res, url=clean_url)
+        if detail is None:
+            return not_found
+
+    return PersonalContextMediaDetailResponse(
+        found=True,
+        url=detail.url,
+        media_id=detail.id,
+        title=detail.title,
+        channel_or_author=detail.channel_or_author,
+        duration_seconds=detail.duration_seconds,
+        summary=detail.summary,
+        key_takeaways=list(detail.key_takeaways or []),
+        topics=list(detail.topics or []),
+        segments=[
+            PersonalContextMediaDetailSegment(
+                segment_index=segment.segment_index,
+                start_time_seconds=segment.start_time_seconds,
+                end_time_seconds=segment.end_time_seconds,
+                label=segment.label,
+                content=segment.content,
+            )
+            for segment in sorted(detail.segments, key=lambda s: s.segment_index)
+        ],
+    )
 
 
 class PersonalContextProcessMediaResponse(BaseModel):

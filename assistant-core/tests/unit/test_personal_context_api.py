@@ -17,6 +17,7 @@ from assistant_core.api.routes.personal_context import PersonalContextSearchRequ
 from assistant_core.auth.hmac import sign_request
 from assistant_core.config import Settings
 from assistant_core.main import create_app
+from assistant_core.media.schemas import MediaDocumentDetail, MediaSegmentDetail
 from assistant_core.memory.models import MemoryEvidence, MemoryRecord
 from assistant_core.turns.models import CompletedTurn
 
@@ -918,3 +919,103 @@ def test_search_and_read_media_segments(monkeypatch: pytest.MonkeyPatch) -> None
     assert "## Segment Observations & Transcript" in read_res["content"]
     assert "## Key Takeaways" in read_res["content"]
     assert read_res["full_source_available"] is True
+
+
+def test_media_detail_returns_full_document_or_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonical-URL detail returns the entire indexed document, else found=false."""
+    app = create_app(Settings(hmac_secret="a" * 32))
+
+    media_id = uuid.uuid4()
+    user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    detail = MediaDocumentDetail(
+        id=media_id,
+        user_id=user_id,
+        url="https://www.youtube.com/watch?v=abc12345678",
+        media_type="youtube",
+        title="Real Video Title",
+        channel_or_author="Real Channel",
+        duration_seconds=540,
+        summary="Actual content summary.",
+        key_takeaways=["Fact one"],
+        topics=["testing"],
+        total_segments=1,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        segments=[
+            MediaSegmentDetail(
+                id=uuid.uuid4(),
+                document_id=media_id,
+                user_id=user_id,
+                segment_index=0,
+                start_time_seconds=0,
+                end_time_seconds=540,
+                label="Whole video",
+                content="Verbatim-ish transcript span.",
+                created_at=datetime.now(UTC),
+            )
+        ],
+    )
+
+    async def fake_get(*args: object, **kwargs: object) -> MediaDocumentDetail | None:
+        return detail
+
+    async def fake_none(*args: object, **kwargs: object) -> None:
+        return None
+
+    target = "assistant_core.media.repository.get_media_document_by_url"
+    monkeypatch.setattr(target, fake_get)
+
+    class _UserIdSession:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def execute(self, _statement: object) -> _Result:
+            return _Result(scalar=user_id)
+
+    app.state.session_factory = lambda: _UserIdSession()
+
+    response = anyio.run(
+        lambda: _post(
+            app,
+            "/v1/personal-context/media-detail",
+            {
+                "native_user_id": "user-1",
+                "url": "https://youtu.be/abc12345678?si=xyz",
+            },
+        )
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["found"] is True
+    assert data["url"] == "https://www.youtube.com/watch?v=abc12345678"
+    assert data["title"] == "Real Video Title"
+    assert data["channel_or_author"] == "Real Channel"
+    assert data["duration_seconds"] == 540
+    assert data["segments"][0]["content"] == "Verbatim-ish transcript span."
+
+    monkeypatch.setattr(target, fake_none)
+    missing = anyio.run(
+        lambda: _post(
+            app,
+            "/v1/personal-context/media-detail",
+            {"native_user_id": "user-1", "url": "https://youtu.be/abc12345678"},
+        )
+    )
+    assert missing.status_code == 200
+    assert missing.json() == {
+        "found": False,
+        "url": "https://www.youtube.com/watch?v=abc12345678",
+        "media_id": None,
+        "title": None,
+        "channel_or_author": None,
+        "duration_seconds": None,
+        "summary": None,
+        "key_takeaways": [],
+        "topics": [],
+        "segments": [],
+    }

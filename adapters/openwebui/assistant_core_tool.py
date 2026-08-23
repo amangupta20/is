@@ -640,8 +640,94 @@ class Tools:
             return (
                 f"🎬 Queued for deep media indexing: {clean_url}\n"
                 "Background analysis usually takes a few minutes. Once it completes, "
-                "answer questions about this media via search_personal_context, "
-                "which returns timestamped segments."
+                "call get_media_details with this exact URL to retrieve the full "
+                "timestamped breakdown, or answer via search_personal_context."
             )
         except Exception:  # noqa: BLE001
+            return self._UNAVAILABLE
+
+    @staticmethod
+    def _format_duration(seconds: object) -> str:
+        """Render one duration value as H:MM:SS or MM:SS."""
+        if isinstance(seconds, bool) or not isinstance(seconds, int | float):
+            return ""
+        total = max(0, int(seconds))
+        hours, remainder = divmod(total, 3600)
+        minutes, secs = divmod(remainder, 60)
+        if hours:
+            return f"{hours}:{minutes:02d}:{secs:02d}"
+        return f"{minutes:02d}:{secs:02d}"
+
+    async def get_media_details(
+        self,
+        url: str,
+        __user__: dict | None = None,
+    ) -> str:
+        """Retrieve the complete indexed analysis of one processed YouTube/media URL.
+
+        Use this instead of search_personal_context when the user asks about a
+        specific video by link or title and you need its full timestamped
+        breakdown: transcript-style segments, summary, takeaways, and metadata.
+        :param url: The exact media URL previously queued via process_media_url.
+        """
+        clean_url = url.strip()
+        if not clean_url:
+            return "Please provide a valid media URL."
+        native_user_id = self._optional_id(__user__, "id") or "unknown"
+        payload = {
+            "native_user_id": native_user_id,
+            "url": clean_url,
+        }
+        try:
+            response = await self._signed_json_post("/v1/personal-context/media-detail", payload)
+            if not isinstance(response, dict) or not isinstance(response.get("found"), bool):
+                return self._UNAVAILABLE
+            if not response["found"]:
+                return (
+                    f"Media is not indexed yet: {response.get('url') or clean_url}\n"
+                    "If it was just shared, call process_media_url first, wait a few "
+                    "minutes for background analysis, then retry get_media_details."
+                )
+
+            lines = [
+                f"🎬 Indexed Media: {response.get('title') or clean_url}",
+            ]
+            channel = response.get("channel_or_author")
+            if channel:
+                lines.append(f"📺 Channel/Author: {channel}")
+            duration = response.get("duration_seconds")
+            if duration is not None:
+                rendered = self._format_duration(duration)
+                if rendered:
+                    lines.append(f"⏱️ Duration: {rendered}")
+            lines.append(f"🔗 URL: {response.get('url') or clean_url}")
+
+            takeaways = response.get("key_takeaways")
+            if isinstance(takeaways, list) and takeaways:
+                lines.append("\nKey Takeaways:")
+                for takeaway in takeaways:
+                    lines.append(f"- {takeaway}")
+
+            segments = response.get("segments")
+            if isinstance(segments, list) and segments:
+                lines.append("\nTimestamped Breakdown:")
+                for segment in segments:
+                    if not isinstance(segment, dict):
+                        continue
+                    start = segment.get("start_time_seconds")
+                    end = segment.get("end_time_seconds")
+                    span = self._media_time_str(start, end).removeprefix(" @ ")
+                    label = segment.get("label")
+                    header = f"[{span}]" if span else ""
+                    if label:
+                        header = f"{header} {label}:"
+                    lines.append(f"\n{header}".strip())
+                    content = segment.get("content")
+                    if isinstance(content, str):
+                        lines.append(content)
+            else:
+                lines.append("\nNo timestamped segments stored yet.")
+
+            return "\n".join(lines)
+        except Exception:  # noqa: BLE001 - optional media detail must fail open.
             return self._UNAVAILABLE

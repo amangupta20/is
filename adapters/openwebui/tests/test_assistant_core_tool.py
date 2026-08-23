@@ -557,3 +557,79 @@ def test_media_search_read_survive_fractional_seconds(monkeypatch: pytest.Monkey
     read_out = asyncio.run(tool.read_personal_context(source_id, __user__=user))
     assert f"Media source {source_id}:" in read_out
     assert "Media: media/Deep Learning Fundamentals @ 02:05" in read_out
+
+
+def test_get_media_details_renders_full_breakdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _module()
+    payloads = {
+        "/v1/personal-context/media-detail": {
+            "found": True,
+            "url": "https://www.youtube.com/watch?v=abc12345678",
+            "media_id": "00000000-0000-0000-0000-000000000001",
+            "title": "Real Video Title",
+            "channel_or_author": "Real Channel",
+            "duration_seconds": 540,
+            "summary": "Actual summary.",
+            "key_takeaways": ["Fact one"],
+            "topics": ["testing"],
+            "segments": [
+                {
+                    "segment_index": 0,
+                    "start_time_seconds": 0,
+                    "end_time_seconds": 300.5,
+                    "label": "Intro",
+                    "content": "First spoken span.",
+                },
+                {
+                    "segment_index": 1,
+                    "start_time_seconds": 300,
+                    "end_time_seconds": 540,
+                    "label": None,
+                    "content": "Second spoken span.",
+                },
+            ],
+        }
+    }
+
+    class _Client:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, url: str, **_kwargs: Any) -> _Response:
+            path = "/" + url.split("/", 3)[3]
+            return _Response(payloads[path])
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda *, timeout: _Client())
+    tool = module.Tools()
+    tool.valves.hmac_secret = "tool-test-secret"
+
+    out = asyncio.run(
+        tool.get_media_details("https://youtu.be/abc12345678?si=z", __user__={"id": "user-1"})
+    )
+    assert "Indexed Media: Real Video Title" in out
+    assert "Channel/Author: Real Channel" in out
+    assert "Duration: 09:00" in out
+    assert "[00:00-05:00] Intro:\nFirst spoken span." in out
+    assert "[05:00-09:00]\nSecond spoken span." in out
+    assert "First spoken span." in out
+
+    payloads["/v1/personal-context/media-detail"] = {
+        "found": False,
+        "url": "https://www.youtube.com/watch?v=abc12345678",
+        "media_id": None,
+        "title": None,
+        "channel_or_author": None,
+        "duration_seconds": None,
+        "summary": None,
+        "key_takeaways": [],
+        "topics": [],
+        "segments": [],
+    }
+    missing = asyncio.run(
+        tool.get_media_details("https://www.youtube.com/watch?v=abc12345678", __user__={"id": "user-1"})
+    )
+    assert "not indexed yet" in missing
+    assert "process_media_url" in missing
