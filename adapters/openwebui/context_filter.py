@@ -25,6 +25,26 @@ class Filter:
     _EVENT_SOURCE = "openwebui_outlet_filter"
     _MAX_EVENT_BYTES = 524_288
     _UNSAVED_CHAT_PREFIXES = ("temporary:", "local:", "channel:")
+    _TOOL_POLICY = (
+        "<tool_policy>\n"
+        "Personal-memory tools are attached to you. Use them proactively:\n"
+        "- Before answering anything about the user's preferences, past conversations, "
+        "decisions, projects, uploaded documents, or previously discussed topics, call "
+        "search_personal_context first, then read_personal_context on relevant hits "
+        "before asserting specifics.\n"
+        "- Never invent what the user previously said or decided. If a search returns "
+        "nothing relevant, say so and answer from general knowledge.\n"
+        "- When the user states a new durable fact or preference about themselves, or "
+        "corrects an existing one, call save_memory.\n"
+        "- If the user asks about a pasted-text log or earlier upload whose content is "
+        "not visible in this chat, retry search_personal_context with "
+        "include_pasted_files=true, or use read_full_document with the filename.\n"
+        "- For YouTube or other media links worth remembering in depth, call "
+        "process_media_url once, then answer from its timestamped segments.\n"
+        "- Do not search for general knowledge, coding help, current events, or "
+        "anything already visible in this conversation.\n"
+        "</tool_policy>"
+    )
 
     class Valves(BaseModel):
         """Administrator-managed companion connection settings."""
@@ -44,6 +64,10 @@ class Filter:
         inject_temporal_anchor: bool = Field(
             default=True,
             description="Inject real-world date, time, day of week, and timezone into assistant context",
+        )
+        inject_tool_policy: bool = Field(
+            default=True,
+            description="Inject the aggressive personal-tool usage policy into assistant context",
         )
         auto_index_files: bool = Field(
             default=True,
@@ -208,6 +232,12 @@ class Filter:
                 project_id = cls._plain_id(chat.get("project_id"))
         return folder_id, project_id
 
+    def _format_tool_policy(self) -> str:
+        """Return the static aggressive tool-usage policy block when enabled."""
+        if not self.valves.inject_tool_policy:
+            return ""
+        return self._TOOL_POLICY
+
     def _format_temporal_anchor(self) -> str:
         """Format real-world datetime anchor in user's configured timezone (e.g. IST)."""
         if not self.valves.inject_temporal_anchor:
@@ -302,8 +332,11 @@ class Filter:
             context_text = None
 
         temporal_anchor = self._format_temporal_anchor()
+        tool_policy = self._format_tool_policy()
 
         sections: list[str] = []
+        if tool_policy:
+            sections.append(tool_policy)
         if temporal_anchor:
             sections.append(temporal_anchor)
         if isinstance(context_text, str) and context_text.strip():

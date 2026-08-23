@@ -107,7 +107,11 @@ class Tools:
         __user__: dict | None = None,
         __metadata__: dict | None = None,
     ) -> str:
-        """Display the frozen current-chat profile and its source IDs."""
+        """Show the personalization profile currently loaded into this chat, with source memory IDs.
+
+        Use when the user asks what you know or remember about them, or to verify
+        context before answering a personal question.
+        """
         try:
             payload = await self._signed_json_post(
                 "/v1/context", self._context_payload(__user__, __metadata__)
@@ -162,10 +166,16 @@ class Tools:
         __user__: dict | None = None,
         __metadata__: dict | None = None,
     ) -> str:
-        """Search durable memory, past conversation evidence, and uploaded document passages.
+        """Search the user's durable memories, past conversations, indexed documents, topic episodes, and processed media.
 
-        :param include_pasted_files: Also search transient auto-saved pasted-text files
-            when the user explicitly asks for their content.
+        ALWAYS call this before stating or assuming anything about the user's
+        preferences, history, prior decisions, projects, or uploaded files, and before
+        answering questions about earlier discussions. Do not use for general
+        knowledge, coding help, or anything already visible in this chat.
+        :param query: Natural-language search text (keywords work best).
+        :param limit: Maximum results to return (1-10).
+        :param include_pasted_files: Also search transient auto-saved pasted-text files,
+            e.g. when the user asks about a log or text they pasted earlier.
         """
         try:
             payload = self._context_payload(__user__, __metadata__)
@@ -239,7 +249,13 @@ class Tools:
         memory_source_id: str,
         __user__: dict | None = None,
     ) -> str:
-        """Expand one memory, conversation passage, or file chunk with bounded provenance."""
+        """Expand one source found by search_personal_context into full bounded content.
+
+        Call this on a result's source_id when its preview is relevant but you need
+        the surrounding text, exact wording, evidence quote, or neighboring messages
+        before answering.
+        :param memory_source_id: The source_id from search_personal_context results.
+        """
         try:
             payload = {
                 "native_user_id": self._optional_id(__user__, "id") or "unknown",
@@ -343,7 +359,11 @@ class Tools:
         __user__: dict | None = None,
         __metadata__: dict | None = None,
     ) -> str:
-        """Check whether Assistant Core is available and show aggregate queue counts."""
+        """Check Assistant Core availability and aggregate queue health.
+
+        Diagnostic use only: when the user reports memory/recall not working, or you
+        suspect the companion is degraded.
+        """
         native_user_id = self._optional_id(__user__, "id") or "unknown"
         payload = {
             "native_user_id": native_user_id,
@@ -380,7 +400,12 @@ class Tools:
         __user__: dict | None = None,
         __metadata__: dict | None = None,
     ) -> str:
-        """Show the most recent conversation references without content."""
+        """List the most recent indexed conversations (references only, no content).
+
+        Use to orient when the user vaguely references "that chat about..." and a
+        keyword search is not landing; follow up with search_personal_context.
+        :param limit: How many recent conversations to show (1-10).
+        """
         if not isinstance(limit, int) or limit < 1 or limit > 10:
             limit = 5
         native_user_id = self._optional_id(__user__, "id") or "unknown"
@@ -422,7 +447,11 @@ class Tools:
         __user__: dict | None = None,
         __metadata__: dict | None = None,
     ) -> str:
-        """Show aggregate conversation index counters without content."""
+        """Show aggregate conversation index counters without content.
+
+        Diagnostic use only, e.g. when recall quality seems off or the user asks how
+        much of their history is indexed.
+        """
         native_user_id = self._optional_id(__user__, "id") or "unknown"
         payload = {
             "native_user_id": native_user_id,
@@ -463,7 +492,11 @@ class Tools:
         __user__: dict | None = None,
         __metadata__: dict | None = None,
     ) -> str:
-        """Show aggregate file indexing counters, active documents, and recent files."""
+        """Show aggregate file indexing counters, active documents, and recent files.
+
+        Diagnostic use only; for actual document content use search_personal_context
+        or read_full_document.
+        """
         native_user_id = self._optional_id(__user__, "id") or "unknown"
         payload = {
             "native_user_id": native_user_id,
@@ -505,7 +538,11 @@ class Tools:
         __user__: dict | None = None,
         __metadata__: dict | None = None,
     ) -> str:
-        """Show dead/failed background indexing jobs with error codes and attempt counts."""
+        """Show dead/failed background indexing jobs with error codes and attempt counts.
+
+        Diagnostic use only: when files or conversations are not being remembered,
+        this reveals whether background indexing is failing.
+        """
         native_user_id = self._optional_id(__user__, "id") or "unknown"
         payload = {
             "native_user_id": native_user_id,
@@ -537,7 +574,12 @@ class Tools:
         file_id_or_name: str,
         __user__: dict | None = None,
     ) -> str:
-        """Fetch and reconstruct the complete full text of an indexed document."""
+        """Fetch and reconstruct the complete text of an indexed document by file id or exact filename.
+
+        Use when the user asks for the full contents of an uploaded or pasted file, or
+        when a relevant passage needs its complete surrounding document.
+        :param file_id_or_name: The native file id, or the exact filename (e.g. "specs.md").
+        """
         try:
             payload = {
                 "native_user_id": self._optional_id(__user__, "id") or "unknown",
@@ -571,7 +613,13 @@ class Tools:
         __user__: dict | None = None,
         __metadata__: dict | None = None,
     ) -> str:
-        """Process and index a video/media URL (e.g. YouTube) for deep multimodal understanding."""
+        """Process and deeply index a YouTube/media URL with timestamped multimodal understanding.
+
+        Use ONCE per new media link when the user shares one and its content matters
+        beyond this chat; afterwards answer media questions via
+        search_personal_context, which returns timestamped segments.
+        :param url: The YouTube or supported media URL to analyze and index.
+        """
         clean_url = url.strip()
         if not clean_url:
             return "Please provide a valid media URL."

@@ -77,9 +77,10 @@ def test_filter_valves_reject_noncanonical_or_out_of_range_budgets(value: object
 
 
 def test_empty_context_leaves_the_native_body_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An intentionally empty response does not alter the native prompt when temporal anchor is off."""
+    """An intentionally empty response does not alter the native prompt when all injections are off."""
     filter_ = Filter()
     filter_.valves.inject_temporal_anchor = False
+    filter_.valves.inject_tool_policy = False
     body = {"messages": [{"role": "user", "content": "hello"}]}
     original = copy.deepcopy(body)
 
@@ -92,9 +93,10 @@ def test_empty_context_leaves_the_native_body_unchanged(monkeypatch: pytest.Monk
 
 
 def test_timeout_leaves_the_native_body_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A bounded companion timeout is invisible to the native chat request when temporal anchor is off."""
+    """A bounded companion timeout is invisible to the native chat request when all injections are off."""
     filter_ = Filter()
     filter_.valves.inject_temporal_anchor = False
+    filter_.valves.inject_tool_policy = False
     body = {"messages": [{"role": "user", "content": "hello"}]}
     original = copy.deepcopy(body)
 
@@ -112,6 +114,7 @@ def test_malformed_response_leaves_the_native_body_unchanged(
     """A successful but invalid companion payload is also fail-open."""
     filter_ = Filter()
     filter_.valves.inject_temporal_anchor = False
+    filter_.valves.inject_tool_policy = False
     body = {"messages": [{"role": "user", "content": "hello"}]}
     original = copy.deepcopy(body)
 
@@ -133,6 +136,7 @@ def test_filter_signs_exact_compact_sorted_bytes_sent_to_companion(
         assistant_core_url="http://companion.test",
         hmac_secret=secret,
         inject_temporal_anchor=False,
+        inject_tool_policy=False,
     )
     expected_payload = {
         "native_user_id": "u-1",
@@ -213,6 +217,7 @@ def test_nonempty_context_is_inserted_at_the_fixed_system_prefix(
     """Frozen context follows leading system policy and precedes conversation history."""
     filter_ = Filter()
     filter_.valves.inject_temporal_anchor = False
+    filter_.valves.inject_tool_policy = False
     body = {
         "messages": [
             {"role": "system", "content": "Native policy"},
@@ -241,6 +246,46 @@ def test_nonempty_context_is_inserted_at_the_fixed_system_prefix(
         {"role": "user", "content": "Latest request"},
         {"role": "assistant", "content": "Generated continuation"},
     ]
+
+
+def test_tool_policy_is_injected_by_default_and_survives_companion_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The static policy block is cache-stable, first in context, and fail-open."""
+    filter_ = Filter()
+    filter_.valves.inject_temporal_anchor = False
+    body = {"messages": [{"role": "user", "content": "hello"}]}
+
+    async def timeout(_: dict) -> dict:
+        raise httpx.ReadTimeout("bounded timeout")
+
+    monkeypatch.setattr(filter_, "_post_context", timeout)
+
+    result = anyio.run(lambda: filter_.inlet(body, __user__={"id": "u"}))
+    assert len(result["messages"]) == 2
+    system_msg = result["messages"][0]
+    assert system_msg["role"] == "system"
+    assert system_msg["content"].startswith("<assistant_context>\n<tool_policy>\n")
+    assert system_msg["content"].endswith("</assistant_context>")
+    assert "search_personal_context" in system_msg["content"]
+    assert "save_memory" in system_msg["content"]
+
+
+def test_tool_policy_valve_disables_injection(monkeypatch: pytest.MonkeyPatch) -> None:
+    filter_ = Filter()
+    filter_.valves.inject_temporal_anchor = False
+    filter_.valves.inject_tool_policy = False
+    body = {"messages": [{"role": "user", "content": "hello"}]}
+
+    async def empty_context(_: dict) -> dict:
+        return {"context_text": ""}
+
+    monkeypatch.setattr(filter_, "_post_context", empty_context)
+
+    result = anyio.run(lambda: filter_.inlet(body, __user__={"id": "u"}))
+    assert all(
+        "<tool_policy>" not in str(message.get("content")) for message in result["messages"]
+    )
 
 
 def test_outlet_selects_current_pair_by_stable_ids_and_forwards_only_visible_fields(

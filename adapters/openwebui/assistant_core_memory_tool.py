@@ -79,8 +79,10 @@ class Tools:
         limit: int = 10,
         __user__: dict | None = None,
     ) -> str:
-        """Search and list currently active user memories by keyword, key, or category.
-        
+        """List the user's active durable memories, optionally filtered by keyword or category.
+
+        Use when the user wants to review what you remember, verify whether a specific
+        fact is stored before claiming its absence, or browse one domain of memories.
         :param query: Optional keyword search across statements and keys.
         :param category: Optional domain category filter (e.g. 'career', 'infrastructure', 'preference', 'fact', 'homelab').
         :param limit: Maximum memories to return (1-50, default 10).
@@ -143,8 +145,12 @@ class Tools:
         expires_at: str = "",
         __user__: dict | None = None,
     ) -> str:
-        """Save a new memory or replace an existing memory key with updated facts/preferences.
-        
+        """Save a durable fact or preference about the user, or replace an existing memory key.
+
+        Call this whenever the user states a lasting personal fact or preference
+        ("I prefer...", "remember that...", "from now on..."), gives an explicit
+        instruction for future chats, or corrects something you previously recalled.
+        Do not save transient tasks, general knowledge, or chat-local details.
         :param key: Dotted lowercase identifier (e.g. 'career.current_job', 'preferences.editor', 'infra.traefik').
         :param statement: The authoritative statement to remember (e.g. 'User prefers neovim with tmux on Linux').
         :param category: Domain category slug (e.g. 'career', 'infrastructure', 'homelab', 'preference', 'fact', 'learning').
@@ -195,7 +201,9 @@ class Tools:
         __user__: dict | None = None,
     ) -> str:
         """Modify an existing memory record by its UUID (refine statement, change category, or adjust validity).
-        
+
+        Use for partial corrections when the user tweaks a remembered detail; use
+        save_memory instead when replacing an entire fact under its key.
         :param memory_id: UUID of the memory record to update.
         :param statement: Optional new statement text.
         :param category: Optional new category slug (e.g. 'career', 'infrastructure', 'homelab').
@@ -249,7 +257,9 @@ class Tools:
         __user__: dict | None = None,
     ) -> str:
         """Archive and forget an obsolete, superseded, or unwanted memory by ID or key.
-        
+
+        Use when the user says to forget something, or when you discover a stored
+        memory is wrong and no corrected replacement is being saved.
         :param memory_id: UUID of the memory to forget.
         :param key: Or the dotted key (e.g. 'career.current_job') to archive all matching active entries.
         :param reason: Optional reason for forgetting (e.g. 'Project completed', 'Fact was invalidated').

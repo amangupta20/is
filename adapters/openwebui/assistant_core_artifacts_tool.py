@@ -230,6 +230,7 @@ class Tools:
         __request__: object | None = None,
     ) -> str:
         """Create a styled multi-tab Excel spreadsheet (.xlsx) with auto-widths, formulas, and number formats.
+        Use whenever the user asks for a spreadsheet, table export, budget, tracker, or any downloadable Excel file.
         sheets_json must be a JSON array of sheets: [{"name": "Sheet1", "headers": ["A", "B"], "rows": [[1, 2]], "column_types": ["text", "currency"], "totals_row": true}]
         """
         try:
@@ -280,6 +281,7 @@ class Tools:
         __request__: object | None = None,
     ) -> str:
         """Create a styled Word document (.docx) with typography, callouts, images, and data tables.
+        Use whenever the user asks for a Word document or downloadable report/letter in .docx form.
         sections_json: JSON array of sections: [{"heading": "Sec 1", "level": 1, "paragraphs": ["..."], "bullets": ["..."], "callout": "...", "image_url": "https://...", "image_caption": "Figure 1", "table": {"headers": ["A", "B"], "rows": [["1", "2"]]}}]
         theme: Color theme preset ('slate', 'navy', 'emerald', 'crimson', 'dark').
         """
@@ -339,6 +341,7 @@ class Tools:
         __request__: object | None = None,
     ) -> str:
         """Create a 16:9 widescreen PowerPoint presentation (.pptx) deck with images, native charts, and milestone timelines.
+        Use whenever the user asks for slides, a deck, or a downloadable presentation.
         slides_json: JSON array of slides. Layout options:
           - 'bullets': {"title": "...", "bullets": ["..."]}
           - 'cards': {"title": "...", "cards": [{"title": "KPI", "value": "$1.2M", "description": "..."}]}
@@ -402,6 +405,7 @@ class Tools:
         __request__: object | None = None,
     ) -> str:
         """Create a styled publication-ready PDF document (.pdf) with typography, callouts, images, and data tables.
+        Use whenever the user asks for a polished downloadable PDF (reports, notes, one-pagers) without needing Word format.
         sections_json: JSON array of sections: [{"heading": "Sec 1", "level": 1, "paragraphs": ["..."], "bullets": ["..."], "callout": "...", "image_url": "https://...", "image_caption": "Figure 1", "table": {"headers": ["A", "B"], "rows": [["1", "2"]]}}]
         theme: Color theme preset ('slate', 'navy', 'emerald', 'crimson', 'dark').
         """
@@ -461,6 +465,7 @@ class Tools:
         __event_emitter__: Any = None,
     ) -> str:
         """Create a publication-quality PDF document (.pdf) compiled directly from Typst markup.
+        Use for precise, complex PDF layouts (papers, specs, formatted documents) when full layout control is needed and plain sections_json is insufficient.
         markup: Typst markup source code (e.g. '= Title\\n\\n== Heading\\nParagraph text...').
         change_summary: Summary of this generation or revision.
         """
@@ -510,6 +515,7 @@ class Tools:
         __event_emitter__: Any = None,
     ) -> str:
         """Create a professional, publication-grade PDF resume (.pdf) compiled via Typst from structured JSON.
+        Use whenever the user asks to build, format, or export a resume or CV.
         resume_json: JSON string representing ResumeSpec:
           - 'name': Full name (str)
           - 'title': Professional subtitle/title (optional str)
