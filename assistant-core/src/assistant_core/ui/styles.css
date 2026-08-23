@@ -602,6 +602,7 @@ select:focus {
 
 .badge-active { background: var(--success-subtle); color: var(--success); }
 .badge-tombstoned { background: var(--danger-subtle); color: var(--danger); }
+.badge-transient { background: hsla(38, 92%, 50%, 0.15); color: hsl(38, 92%, 60%); }
 .badge-queued { background: var(--warning-subtle); color: var(--warning); }
 .badge-running { background: var(--primary-subtle); color: var(--primary); }
 .badge-completed { background: var(--success-subtle); color: var(--success); }

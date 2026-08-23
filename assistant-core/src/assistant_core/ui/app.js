@@ -772,13 +772,18 @@ class DashboardApp {
           <td><code>${this.escapeHtml(f.native_user_id)}</code></td>
           <td><strong>${f.total_chunks}</strong></td>
           <td>${f.total_characters.toLocaleString()}</td>
-          <td><span class="badge badge-${f.status}">${f.status}</span></td>
+          <td><span class="badge badge-${f.status}">${f.status}</span>${f.transient ? ' <span class="badge badge-transient" title="Pasted-text file: excluded from default retrieval and memory extraction">transient</span>' : ''}</td>
           <td><small class="text-muted">${this.formatDate(f.created_at)}</small></td>
           <td>
             <div style="display: flex; gap: 6px;">
               <button class="btn btn-secondary btn-sm" onclick="app.viewFileDetail('${f.native_file_id}')">
                 Inspect
               </button>
+              ${f.transient ? `
+                <button class="btn btn-secondary btn-sm" title="Include in default retrieval and memory extraction" onclick="app.promoteFile('${f.native_file_id}')">
+                  Promote
+                </button>
+              ` : ''}
               ${f.status === 'active' ? `
                 <button class="btn-icon btn-danger-icon" title="Delete / Tombstone" onclick="app.deleteFile('${f.native_file_id}')">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
@@ -858,6 +863,21 @@ class DashboardApp {
     try {
       await this.api(`/v1/admin/files/${nativeFileId}`, { method: 'DELETE' });
       this.showToast('Document tombstoned', 'success');
+      this.loadFiles();
+    } catch {
+      // Error handled in api()
+    }
+  }
+
+  async promoteFile(nativeFileId) {
+    try {
+      const data = await this.api(`/v1/admin/files/${nativeFileId}/promote`, { method: 'POST' });
+      this.showToast(
+        data.status === 'promoted'
+          ? `Promoted (${data.references_updated} chunk references updated)`
+          : 'File was already promoted',
+        'success',
+      );
       this.loadFiles();
     } catch {
       // Error handled in api()

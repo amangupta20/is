@@ -147,9 +147,7 @@ class MediaSegment(Base):
     search_vector: Mapped[Any] = mapped_column(
         TSVECTOR,
         Computed(
-            text(
-                "to_tsvector('english', coalesce(label, '') || ' ' || coalesce(content, ''))"
-            ),
+            text("to_tsvector('english', coalesce(label, '') || ' ' || coalesce(content, ''))"),
             persisted=True,
         ),
         nullable=False,

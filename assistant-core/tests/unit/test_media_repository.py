@@ -160,10 +160,12 @@ async def test_store_media_analysis_update_existing_document() -> None:
 
     # 1. select existing doc returns existing_doc
     # 2. delete old segments execute
-    session = MockAsyncSession([
-        MockResult(scalar=existing_doc),
-        MockResult(rowcount=2),
-    ])
+    session = MockAsyncSession(
+        [
+            MockResult(scalar=existing_doc),
+            MockResult(rowcount=2),
+        ]
+    )
 
     doc = await store_media_analysis(
         session,
@@ -215,10 +217,12 @@ async def test_get_media_document() -> None:
 
     # 1. select document
     # 2. select segments
-    session = MockAsyncSession([
-        MockResult(scalar=mock_doc),
-        MockResult(scalars_list=[mock_seg]),
-    ])
+    session = MockAsyncSession(
+        [
+            MockResult(scalar=mock_doc),
+            MockResult(scalars_list=[mock_seg]),
+        ]
+    )
 
     detail = await get_media_document(session, doc_id, user_id=user_id)
     assert detail is not None
@@ -252,13 +256,17 @@ async def test_get_media_document_by_url() -> None:
     # 1. select by url
     # 2. select doc by id (inside get_media_document)
     # 3. select segments
-    session = MockAsyncSession([
-        MockResult(scalar=mock_doc),
-        MockResult(scalar=mock_doc),
-        MockResult(scalars_list=[]),
-    ])
+    session = MockAsyncSession(
+        [
+            MockResult(scalar=mock_doc),
+            MockResult(scalar=mock_doc),
+            MockResult(scalars_list=[]),
+        ]
+    )
 
-    detail = await get_media_document_by_url(session, user_id, "https://www.youtube.com/watch?v=xyz")
+    detail = await get_media_document_by_url(
+        session, user_id, "https://www.youtube.com/watch?v=xyz"
+    )
     assert detail is not None
     assert detail.title == "XYZ Video"
 
@@ -326,10 +334,12 @@ async def test_search_media() -> None:
 
     # 1. Lexical query returns (seg, doc)
     # 2. Vector query returns (seg, doc)
-    session = MockAsyncSession([
-        MockResult(all_list=[(seg, doc)]),
-        MockResult(all_list=[(seg, doc)]),
-    ])
+    session = MockAsyncSession(
+        [
+            MockResult(all_list=[(seg, doc)]),
+            MockResult(all_list=[(seg, doc)]),
+        ]
+    )
 
     hits = await search_media(
         session,

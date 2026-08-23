@@ -557,6 +557,7 @@ def test_search_and_read_file_passages(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(personal_context, "search_media_segments", no_memories)
     monkeypatch.setattr(personal_context, "read_media_segment", no_memory_read)
     monkeypatch.setattr(personal_context, "get_media_document", no_memory_read)
+
     class FakeSession:
         async def __aenter__(self) -> Self:
             return self
@@ -739,6 +740,7 @@ def test_search_and_read_topic_episodes(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(personal_context, "search_media_segments", no_memories)
     monkeypatch.setattr(personal_context, "read_media_segment", no_memory_read)
     monkeypatch.setattr(personal_context, "get_media_document", no_memory_read)
+
     class FakeSession:
         async def __aenter__(self) -> Self:
             return self
@@ -846,7 +848,9 @@ def test_search_and_read_media_segments(monkeypatch: pytest.MonkeyPatch) -> None
     async def mock_search_media(*_args: object, **_kwargs: object) -> list[MediaSearchHit]:
         return [med_hit]
 
-    async def mock_read_segment(*_args: object, **_kwargs: object) -> tuple[MediaSegment, MediaDocument] | None:
+    async def mock_read_segment(
+        *_args: object, **_kwargs: object
+    ) -> tuple[MediaSegment, MediaDocument] | None:
         return seg_obj, doc_obj
 
     async def no_memories(*_args: object, **_kwargs: object) -> list[object]:

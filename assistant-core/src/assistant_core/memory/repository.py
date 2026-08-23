@@ -403,8 +403,7 @@ async def consolidate_user_memories(
             .group_by(MemoryEvidence.memory_record_id)
         )
         evidence_counts = {
-            record_id: int(count)
-            for record_id, count in (await session.execute(counts_stmt)).all()
+            record_id: int(count) for record_id, count in (await session.execute(counts_stmt)).all()
         }
 
     memory_dicts = [

@@ -15,7 +15,9 @@ class MediaSegmentAnalysis(BaseModel):
     start_time_seconds: int = Field(default=0, ge=0, description="Start time in seconds.")
     end_time_seconds: int = Field(default=0, ge=0, description="End time in seconds.")
     label: str | None = Field(default=None, max_length=256, description="Chapter or topic title.")
-    content: str = Field(..., description="Detailed textual description/transcript of this segment.")
+    content: str = Field(
+        ..., description="Detailed textual description/transcript of this segment."
+    )
 
 
 class MediaAnalysisResult(BaseModel):
@@ -26,7 +28,9 @@ class MediaAnalysisResult(BaseModel):
     url: str = Field(..., max_length=2048, description="Media URL (e.g. YouTube URL).")
     media_type: str = Field(default="youtube", max_length=64, description="Media format/platform.")
     title: str = Field(..., max_length=500, description="Media title.")
-    description: str | None = Field(default=None, description="Original or synthesized description.")
+    description: str | None = Field(
+        default=None, description="Original or synthesized description."
+    )
     channel_or_author: str | None = Field(
         default=None, max_length=256, description="Creator or channel name."
     )
@@ -37,9 +41,7 @@ class MediaAnalysisResult(BaseModel):
     key_takeaways: list[str] = Field(
         default_factory=list, description="Key insights, takeaways, or instructions."
     )
-    topics: list[str] = Field(
-        default_factory=list, description="Topical tags or domains covered."
-    )
+    topics: list[str] = Field(default_factory=list, description="Topical tags or domains covered.")
     segments: list[MediaSegmentAnalysis] = Field(
         default_factory=list, description="Chronological timestamped segments."
     )

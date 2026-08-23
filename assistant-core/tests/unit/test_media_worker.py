@@ -21,7 +21,9 @@ from assistant_core.turns.models import CompletedTurn
 
 
 class MockSession:
-    def __init__(self, turns: list[CompletedTurn] | None = None, event: EventInbox | None = None) -> None:
+    def __init__(
+        self, turns: list[CompletedTurn] | None = None, event: EventInbox | None = None
+    ) -> None:
         self.turns = turns or []
         self.event = event
         self.added: list[object] = []
@@ -71,7 +73,9 @@ class MockSession:
         return ExecResult(self.turns)
 
 
-def _make_completed_event(user_content: str, assistant_content: str = "Assistant reply") -> EventInbox:
+def _make_completed_event(
+    user_content: str, assistant_content: str = "Assistant reply"
+) -> EventInbox:
     user_hash = hashlib.sha256(user_content.encode("utf-8")).hexdigest()
     asst_hash = hashlib.sha256(assistant_content.encode("utf-8")).hexdigest()
     return EventInbox(
@@ -143,16 +147,13 @@ async def test_process_event_enqueues_index_media_on_youtube_url(
     async def mock_get_turn(*args: object, **kwargs: object) -> CompletedTurn:
         return turn
 
-    monkeypatch.setattr(
-        "assistant_core.jobs.worker.materialize_completed_turn", mock_materialize
-    )
-    monkeypatch.setattr(
-        "assistant_core.jobs.worker.get_completed_turn_for_event", mock_get_turn
-    )
+    monkeypatch.setattr("assistant_core.jobs.worker.materialize_completed_turn", mock_materialize)
+    monkeypatch.setattr("assistant_core.jobs.worker.get_completed_turn_for_event", mock_get_turn)
 
     await handle(session, "process_event", {"event_id": event.event_id})
     media_stmts = [
-        s for s in session.statements
+        s
+        for s in session.statements
         if hasattr(s, "compile") and s.compile().params.get("kind") == "index_media"
     ]
     assert len(media_stmts) == 2
@@ -191,16 +192,13 @@ async def test_process_event_no_youtube_url_skips_index_media(
     async def mock_get_turn(*args: object, **kwargs: object) -> CompletedTurn:
         return turn
 
-    monkeypatch.setattr(
-        "assistant_core.jobs.worker.materialize_completed_turn", mock_materialize
-    )
-    monkeypatch.setattr(
-        "assistant_core.jobs.worker.get_completed_turn_for_event", mock_get_turn
-    )
+    monkeypatch.setattr("assistant_core.jobs.worker.materialize_completed_turn", mock_materialize)
+    monkeypatch.setattr("assistant_core.jobs.worker.get_completed_turn_for_event", mock_get_turn)
     await handle(session, "process_event", {"event_id": event.event_id})
 
     media_stmts = [
-        s for s in session.statements
+        s
+        for s in session.statements
         if hasattr(s, "compile") and s.compile().params.get("kind") == "index_media"
     ]
     assert len(media_stmts) == 0
@@ -262,9 +260,7 @@ async def test_handle_index_media_success(monkeypatch: pytest.MonkeyPatch) -> No
     async def mock_store(*args: object, **kwargs: object) -> MediaDocument:
         return doc
 
-    monkeypatch.setattr(
-        "assistant_core.jobs.worker.store_media_analysis", mock_store
-    )
+    monkeypatch.setattr("assistant_core.jobs.worker.store_media_analysis", mock_store)
 
     await handle(
         session,

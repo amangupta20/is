@@ -145,6 +145,7 @@ async def test_analyze_media_empty_url_raises_error() -> None:
 @pytest.mark.anyio
 async def test_analyze_media_http_error() -> None:
     """Verify HTTP error raises MediaAnalysisError."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"error": "internal server error"})
 
@@ -164,6 +165,7 @@ async def test_analyze_media_http_error() -> None:
 @pytest.mark.anyio
 async def test_analyze_media_malformed_json() -> None:
     """Verify invalid json response raises MediaAnalysisError."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,

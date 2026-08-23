@@ -57,9 +57,7 @@ async def store_media_analysis(
             doc.embedding = document_embedding
 
         # Delete old segments
-        await session.execute(
-            sa_delete(MediaSegment).where(MediaSegment.document_id == doc.id)
-        )
+        await session.execute(sa_delete(MediaSegment).where(MediaSegment.document_id == doc.id))
     else:
         doc = MediaDocument(
             id=uuid.uuid4(),
@@ -354,13 +352,10 @@ async def tombstone_media_document(
     if user_id is not None:
         conditions.append(MediaDocument.user_id == user_id)
 
-    stmt = (
-        update(MediaDocument)
-        .where(*conditions)
-        .values(tombstoned_at=func.now())
-    )
+    stmt = update(MediaDocument).where(*conditions).values(tombstoned_at=func.now())
     result = await session.execute(stmt)
     return bool(getattr(result, "rowcount", 0) and getattr(result, "rowcount", 0) > 0)
+
 
 search_media = search_media_segments
 
@@ -377,9 +372,8 @@ async def read_media_segment(
         MediaSegment.id == segment_id,
         MediaDocument.tombstoned_at.is_(None),
     ]
-    stmt = (
-        select(MediaSegment, MediaDocument)
-        .join(MediaDocument, MediaSegment.document_id == MediaDocument.id)
+    stmt = select(MediaSegment, MediaDocument).join(
+        MediaDocument, MediaSegment.document_id == MediaDocument.id
     )
     if user_id is not None:
         stmt = stmt.where(MediaSegment.user_id == user_id)
