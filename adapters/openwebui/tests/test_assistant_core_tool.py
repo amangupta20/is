@@ -427,14 +427,9 @@ def test_media_context_search_read_and_process_tool(monkeypatch: pytest.MonkeyPa
             "content": "# Media: Deep Learning Fundamentals\nDetailed transcript of gradient descent.",
         },
         "/v1/personal-context/process-media": {
-            "id": source_id,
+            "status": "queued",
             "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            "title": "Deep Learning Fundamentals",
-            "total_segments": 4,
-            "duration_seconds": 600,
-            "summary": "An introduction to deep learning and backprop.",
-            "key_takeaways": ["Gradient descent minimizes loss", "Activations introduce non-linearity"],
-            "topics": ["AI", "Machine Learning"],
+            "media_type": "youtube",
         },
     }
 
@@ -465,9 +460,33 @@ def test_media_context_search_read_and_process_tool(monkeypatch: pytest.MonkeyPa
     assert "Detailed transcript of gradient descent." in read_out
 
     process_out = asyncio.run(tool.process_media_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ", __user__=user))
-    assert "Processed & Indexed Media: Deep Learning Fundamentals" in process_out
-    assert "Timestamped Segments: 4" in process_out
-    assert "Gradient descent minimizes loss" in process_out
+    assert "Queued for deep media indexing" in process_out
+    assert "search_personal_context" in process_out
+
+    duplicate_payloads = {
+        "/v1/personal-context/process-media": {
+            "status": "duplicate",
+            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "media_type": "youtube",
+        }
+    }
+
+    class _DuplicateClient:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, url: str, **_kwargs: Any) -> _Response:
+            path = "/" + url.split("/", 3)[3]
+            return _Response(duplicate_payloads[path])
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda *, timeout: _DuplicateClient())
+    dup_out = asyncio.run(
+        tool.process_media_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ", __user__=user)
+    )
+    assert "already indexed or queued" in dup_out
 
 
 def test_media_time_str_handles_fractional_zero_and_invalid_seconds() -> None:

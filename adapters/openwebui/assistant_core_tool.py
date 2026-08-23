@@ -613,11 +613,11 @@ class Tools:
         __user__: dict | None = None,
         __metadata__: dict | None = None,
     ) -> str:
-        """Process and deeply index a YouTube/media URL with timestamped multimodal understanding.
+        """Queue a YouTube/media URL for deep background indexing with timestamped understanding.
 
-        Use ONCE per new media link when the user shares one and its content matters
-        beyond this chat; afterwards answer media questions via
-        search_personal_context, which returns timestamped segments.
+        Returns immediately. Use ONCE per new media link when its content matters
+        beyond this chat; analysis completes in the background within minutes, after
+        which search_personal_context returns its timestamped segments.
         :param url: The YouTube or supported media URL to analyze and index.
         """
         clean_url = url.strip()
@@ -630,23 +630,18 @@ class Tools:
         }
         try:
             response = await self._signed_json_post("/v1/personal-context/process-media", payload)
-            if not isinstance(response, dict):
+            if not isinstance(response, dict) or set(response) != {"status", "url", "media_type"}:
                 return self._UNAVAILABLE
-            title = response.get("title") or clean_url
-            segments = response.get("total_segments", 0)
-            summary = response.get("summary") or ""
-            takeaways = response.get("key_takeaways") or []
-            lines = [
-                f"🎬 Processed & Indexed Media: {title}",
-                f"🔗 URL: {clean_url}",
-                f"📊 Timestamped Segments: {segments}",
-            ]
-            if summary:
-                lines.append(f"\nSummary:\n{summary}")
-            if takeaways and isinstance(takeaways, list):
-                lines.append("\nKey Takeaways:")
-                for t in takeaways:
-                    lines.append(f"- {t}")
-            return "\n".join(lines)
+            if response["status"] == "duplicate":
+                return (
+                    f"ℹ️ Media already indexed or queued: {response['url']}\n"
+                    "Answer questions about it via search_personal_context."
+                )
+            return (
+                f"🎬 Queued for deep media indexing: {clean_url}\n"
+                "Background analysis usually takes a few minutes. Once it completes, "
+                "answer questions about this media via search_personal_context, "
+                "which returns timestamped segments."
+            )
         except Exception:  # noqa: BLE001
             return self._UNAVAILABLE

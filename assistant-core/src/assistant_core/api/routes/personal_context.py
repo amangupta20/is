@@ -9,6 +9,7 @@ from typing import Literal
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy.dialects.postgresql import insert
 
 from assistant_core.api.dependencies import require_adapter_signature
 from assistant_core.conversation.embedder import (
@@ -1000,18 +1001,13 @@ class PersonalContextProcessMediaRequest(BaseModel):
 
 
 class PersonalContextProcessMediaResponse(BaseModel):
-    """Structured response from on-demand media processing."""
+    """Acknowledgement that a media URL was accepted for background indexing."""
 
     model_config = ConfigDict(extra="forbid")
 
-    id: uuid.UUID
+    status: Literal["queued", "duplicate"]
     url: str
-    title: str
-    total_segments: int
-    duration_seconds: int | None = None
-    summary: str
-    key_takeaways: list[str] = Field(default_factory=list)
-    topics: list[str] = Field(default_factory=list)
+    media_type: str
 
 
 @router.post(
@@ -1022,13 +1018,13 @@ class PersonalContextProcessMediaResponse(BaseModel):
 async def process_personal_context_media(
     body: PersonalContextProcessMediaRequest, request: Request
 ) -> PersonalContextProcessMediaResponse:
-    """Analyze and index a media URL on-demand for personal context."""
+    """Queue one media URL for deep multimodal indexing by the background worker."""
     from sqlalchemy import select
 
     from assistant_core.identity.models import UserIdentity
-    from assistant_core.jobs.worker import get_media_analyzer
-    from assistant_core.media.repository import store_media_analysis
+    from assistant_core.jobs.models import Job
 
+    clean_url = body.url.strip()
     async with request.app.state.session_factory() as session:
         user_res = (
             await session.execute(
@@ -1042,47 +1038,31 @@ async def process_personal_context_media(
         else:
             user_id = user_res
 
-        analyzer = get_media_analyzer(request.app.state.settings)
-        analysis = await analyzer.analyze_media(url=body.url, media_type=body.media_type)
-
-        embedder = None
-        try:
-            embedder = get_conversation_embedder(request.app.state.settings)
-        except Exception:  # noqa: BLE001
-            embedder = None
-
-        doc_emb: list[float] | None = None
-        seg_embs: list[list[float] | None] | None = None
-        if embedder is not None:
-            try:
-                doc_emb = await asyncio.to_thread(
-                    embedder.embed_one, f"{analysis.title}\n{analysis.summary}"
-                )
-            except Exception:  # noqa: BLE001
-                doc_emb = None
-
-            if analysis.segments:
-                seg_texts = [f"{s.label or ''}\n{s.content}" for s in analysis.segments]
-                try:
-                    seg_embs = [await asyncio.to_thread(embedder.embed_one, t) for t in seg_texts]
-                except Exception:  # noqa: BLE001
-                    seg_embs = None
-        doc = await store_media_analysis(
-            session,
-            user_id=user_id,
-            analysis=analysis,
-            document_embedding=doc_emb,
-            segment_embeddings=seg_embs,
+        result = await session.execute(
+            insert(Job)
+            .values(
+                id=uuid.uuid4(),
+                identity_key=f"media:{clean_url}",
+                kind="index_media",
+                status="queued",
+                payload={"url": clean_url, "user_id": str(user_id)},
+                attempts=0,
+            )
+            .on_conflict_do_nothing(index_elements=[Job.identity_key])
+            .returning(Job.id)
         )
+        queued = result.scalar_one_or_none() is not None
         await session.commit()
 
-        return PersonalContextProcessMediaResponse(
-            id=doc.id,
-            url=doc.url,
-            title=doc.title,
-            total_segments=doc.total_segments,
-            duration_seconds=doc.duration_seconds,
-            summary=doc.summary,
-            key_takeaways=doc.key_takeaways or [],
-            topics=doc.topics or [],
-        )
+    LOGGER.info(
+        "personal_context_media_queued",
+        native_user_id=body.native_user_id,
+        url=clean_url,
+        media_type=body.media_type,
+        queued=queued,
+    )
+    return PersonalContextProcessMediaResponse(
+        status="queued" if queued else "duplicate",
+        url=clean_url,
+        media_type=body.media_type,
+    )
