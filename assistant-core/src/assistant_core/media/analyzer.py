@@ -1,4 +1,4 @@
-"""Multimodal media analysis engine utilizing Gemini / LiteLLM endpoints."""
+"""Gemini-native multimodal media analysis via YouTube URL file parts."""
 
 import json
 import re
@@ -10,90 +10,115 @@ from pydantic import ValidationError
 from assistant_core.media.schemas import MediaAnalysisResult
 
 MEDIA_ANALYSIS_FAILED_ERROR = "media_analysis_failed"
+GEMINI_GENERATE_CONTENT_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+)
 
-MEDIA_ANALYSIS_RUBRIC = """You are an expert multimodal media understanding engine.
-Analyze the provided video or media URL and provide a comprehensive structured analysis.
+ANALYSIS_PROMPT = """Watch this video in full and produce a factual structured analysis grounded ONLY in what you actually see and hear.
 
-Task:
-Extract detailed metadata, executive summary, key takeaways, topics, and timestamped segments/chapters.
+Return a JSON object with exactly these fields:
+- title: the video's actual on-screen/stated title
+- description: one-sentence factual description
+- channel_or_author: the actual channel name or speaker
+- duration_seconds: integer total duration in seconds
+- summary: dense multi-paragraph synthesis of the key points actually presented
+- key_takeaways: array of distinct conclusions or facts established in the video
+- topics: array of subject keywords covered
+- segments: chronological timestamped chapters covering the whole video, each with:
+  - segment_index: 0-indexed integer
+  - start_time_seconds: integer seconds (MM:SS timestamps you observe)
+  - end_time_seconds: integer seconds
+  - label: concise chapter label
+  - content: rich factual summary of what is said and shown during this span,
+    including notable visual demonstrations, not just spoken words
 
-Required Output Fields:
-1. url: The URL of the media being analyzed.
-2. media_type: "youtube" (or relevant media format).
-3. title: A concise, descriptive title of the video or media.
-4. description: A brief summary or description of the media.
-5. channel_or_author: Name of the creator, presenter, or YouTube channel.
-6. duration_seconds: Total duration in seconds (integer) if known or estimated, otherwise null.
-7. summary: A dense, multi-paragraph executive synthesis of the key points, concepts, explanations, and demonstrations in the video.
-8. key_takeaways: Array of distinct, actionable takeaways, conclusions, or facts established.
-9. topics: Array of relevant subject categories, technologies, or keywords.
-10. segments: Array of chronological timestamped segments/chapters:
-    - segment_index: 0-indexed integer (0, 1, 2, ...)
-    - start_time_seconds: Start timestamp in seconds (integer)
-    - end_time_seconds: End timestamp in seconds (integer)
-    - label: Concise chapter title or section topic
-    - content: Rich textual summary of what is discussed, demonstrated, or taught during this timestamp span.
-
-Output Format:
-Return a valid JSON object matching the required fields only.
-"""
+Rules:
+- Use ONLY information present in the video. Never guess metadata.
+- Cover the entire runtime; do not invent content beyond it."""
 
 
 class MediaAnalysisError(ValueError):
-    """Raised when task-model media analysis fails or produces invalid output."""
+    """Raised when Gemini media analysis fails or produces invalid output."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def canonical_media_url(url: str) -> str | None:
+    """Normalize any YouTube URL form to one canonical watch URL for dedup."""
+    text = (url or "").strip()
+    if not text:
+        return None
+    patterns = (
+        r"^https?://(?:www\.|m\.)?youtube\.com/watch\?(?:[^#]*&)?v=([\w-]{6,20})",
+        r"^https?://(?:www\.)?youtu\.be/([\w-]{6,20})",
+        r"^https?://(?:www\.|m\.)?youtube\.com/shorts/([\w-]{6,20})",
+        r"^https?://(?:www\.)?youtube\.com/embed/([\w-]{6,20})",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, text)
+        if match:
+            return f"https://www.youtube.com/watch?v={match.group(1)}"
+    return None
 
 
 class MediaAnalyzer:
-    """Invokes multimodal Gemini / LiteLLM endpoints to analyze video and media resources."""
+    """Analyze public YouTube videos through Gemini's native video understanding."""
 
     def __init__(
         self,
         *,
-        base_url: str,
-        api_key: str | None,
-        model: str,
-        timeout_seconds: float = 120.0,
+        api_key: str,
+        model: str = "gemini-2.5-flash",
+        timeout_seconds: float = 300.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._model = model
         self._timeout_seconds = timeout_seconds
         self._transport = transport
+
+    async def analyze_youtube(self, url: str) -> MediaAnalysisResult:
+        return await self.analyze_media(url=url, media_type="youtube")
 
     async def analyze_media(
         self,
         url: str,
         media_type: str = "youtube",
     ) -> MediaAnalysisResult:
-        """Analyze a media URL (e.g. YouTube video) and return structured understanding."""
-        if not url or not url.strip():
+        """Send one YouTube URL as a native video part and parse structured output."""
+        canonical = canonical_media_url(url) if media_type == "youtube" else None
+        target = canonical or (url or "").strip()
+        if not target:
             raise MediaAnalysisError(MEDIA_ANALYSIS_FAILED_ERROR)
 
-        user_prompt = f"Please analyze this {media_type} video in detail:\nURL: {url.strip()}"
-
         payload: dict[str, Any] = {
-            "model": self._model,
-            "messages": [
-                {"role": "system", "content": MEDIA_ANALYSIS_RUBRIC},
-                {"role": "user", "content": user_prompt},
+            "contents": [
+                {
+                    "parts": [
+                        {"file_data": {"file_uri": target}},
+                        {"text": ANALYSIS_PROMPT},
+                    ]
+                }
             ],
-            "temperature": 0.1,
-            "response_format": {"type": "json_object"},
+            "generationConfig": {
+                "temperature": 0.1,
+                "responseMimeType": "application/json",
+            },
         }
-
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
 
         try:
             async with httpx.AsyncClient(
                 transport=self._transport, timeout=self._timeout_seconds
             ) as client:
                 response = await client.post(
-                    f"{self._base_url}/chat/completions",
+                    GEMINI_GENERATE_CONTENT_URL.format(model=self._model),
                     json=payload,
-                    headers=headers,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": self._api_key,
+                    },
                 )
                 response.raise_for_status()
                 data = response.json()
@@ -101,30 +126,27 @@ class MediaAnalyzer:
             raise MediaAnalysisError(MEDIA_ANALYSIS_FAILED_ERROR) from exc
 
         try:
-            raw_content = data["choices"][0]["message"]["content"]
-            parsed_json = self._parse_json_robust(raw_content)
-            # Ensure url and media_type fallback if omitted by LLM
-            if isinstance(parsed_json, dict):
-                if not parsed_json.get("url"):
-                    parsed_json["url"] = url
-                if not parsed_json.get("media_type"):
-                    parsed_json["media_type"] = media_type
-            result = MediaAnalysisResult.model_validate(parsed_json)
-            # Fix up segment indices if necessary
-            for idx, seg in enumerate(result.segments):
-                if seg.segment_index is None or seg.segment_index == 0:
-                    seg.segment_index = idx
+            candidates = data["candidates"]
+            parts = candidates[0]["content"]["parts"]
+            raw_text = "".join(part.get("text", "") for part in parts if isinstance(part, dict))
+            parsed = self._parse_json_robust(raw_text)
+            if not isinstance(parsed, dict):
+                raise TypeError("analysis payload was not a JSON object")
+            if not parsed.get("url"):
+                parsed["url"] = target
+            if not parsed.get("media_type"):
+                parsed["media_type"] = media_type
+            result = MediaAnalysisResult.model_validate(parsed)
+            for idx, segment in enumerate(result.segments):
+                if segment.segment_index is None or segment.segment_index == 0:
+                    segment.segment_index = idx
             return result
         except (KeyError, IndexError, TypeError, ValueError, ValidationError) as exc:
             raise MediaAnalysisError(MEDIA_ANALYSIS_FAILED_ERROR) from exc
 
-    async def analyze_youtube(self, url: str) -> MediaAnalysisResult:
-        """Convenience wrapper for YouTube URLs."""
-        return await self.analyze_media(url=url, media_type="youtube")
-
     @staticmethod
     def _parse_json_robust(content: str) -> dict[str, Any]:
-        """Robustly parse JSON string from model response, stripping markdown blocks if present."""
+        """Parse the model's JSON text, tolerating markdown fences."""
         text = content.strip()
         if text.startswith("```"):
             text = re.sub(r"^```(?:json)?\n?", "", text, flags=re.IGNORECASE)
@@ -137,7 +159,6 @@ class MediaAnalyzer:
         except json.JSONDecodeError:
             pass
 
-        # Match the first outermost JSON object
         match = re.search(r"\{[\s\S]*\}", text)
         if match:
             try:

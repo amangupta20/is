@@ -106,17 +106,22 @@ def _make_completed_event(
 def test_get_media_analyzer_factory() -> None:
     """Verify get_media_analyzer constructs MediaAnalyzer with configured settings."""
     settings = Settings(
-        task_model_base_url="https://test.litellm.local/v1",
-        task_model_api_key=SecretStr("secret-key"),
-        task_model_model="gemini-2.0-flash",
-        task_model_timeout_seconds=90.0,
+        gemini_api_key=SecretStr("secret-key"),
+        gemini_model="gemini-2.5-flash",
+        gemini_timeout_seconds=300.0,
     )
     analyzer = get_media_analyzer(settings)
     assert isinstance(analyzer, MediaAnalyzer)
-    assert analyzer._base_url == "https://test.litellm.local/v1"
     assert analyzer._api_key == "secret-key"
-    assert analyzer._model == "gemini-2.0-flash"
-    assert analyzer._timeout_seconds == 120.0
+    assert analyzer._model == "gemini-2.5-flash"
+    assert analyzer._timeout_seconds == 300.0
+
+
+def test_get_media_analyzer_requires_gemini_key() -> None:
+    from assistant_core.jobs.worker import MediaConfigurationError
+
+    with pytest.raises(MediaConfigurationError):
+        get_media_analyzer(Settings())
 
 
 @pytest.mark.anyio
@@ -160,7 +165,7 @@ async def test_process_event_enqueues_index_media_on_youtube_url(
     keys = {s.compile().params.get("identity_key") for s in media_stmts}
     assert keys == {
         "media:https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-        "media:https://youtu.be/sample123",
+        "media:https://www.youtube.com/watch?v=sample123",
     }
 
 

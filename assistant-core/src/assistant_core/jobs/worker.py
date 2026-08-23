@@ -61,6 +61,7 @@ from assistant_core.jobs.models import Job
 from assistant_core.jobs.repository import claim_next_job, complete_job, fail_job
 from assistant_core.media.analyzer import (
     MediaAnalyzer,
+    canonical_media_url,
 )
 from assistant_core.media.repository import store_media_analysis
 from assistant_core.memory.consolidator import (
@@ -90,11 +91,9 @@ MEMORY_CONSOLIDATION_FAILED_ERROR = "memory_consolidation_failed"
 CLAIMED_JOB_MISSING_ERROR = "claimed_job_missing"
 INVALID_JOB_CLAIM_ERROR = "invalid_job_claim"
 TASK_MODEL_CONFIGURATION_ERROR = "task_model_configuration_error"
+MEDIA_CONFIGURATION_ERROR = "media_configuration_error"
 IDLE_POLL_SECONDS = 1.0
 LOGGER = structlog.get_logger("assistant_core.worker")
-YOUTUBE_URL_REGEX = re.compile(
-    r"https?://(?:www\.)?(?:youtube\.com/watch\?v=[\w-]+|youtu\.be/[\w-]+)"
-)
 
 
 class UnsupportedJobKindError(ValueError):
@@ -111,6 +110,10 @@ class InvalidJobClaimError(RuntimeError):
 
 class TaskModelConfigurationError(ValueError):
     """Raised with one content-free code for missing worker task-model config."""
+
+
+class MediaConfigurationError(ValueError):
+    """Raised with one content-free code for missing worker media config."""
 
 
 def _task_model_configuration(settings: Settings) -> tuple[str, str]:
@@ -181,16 +184,15 @@ def get_conversation_embedder(
 
 
 def get_media_analyzer(settings: Settings | None = None) -> MediaAnalyzer:
-    """Build the task-model media analyzer for multimodal media understanding."""
+    """Build the Gemini-native media analyzer for multimodal media understanding."""
     resolved_settings = settings or get_settings()
-    base_url, model = _task_model_configuration(resolved_settings)
-    api_key = resolved_settings.task_model_api_key
-    timeout = max(120.0, resolved_settings.task_model_timeout_seconds)
+    api_key = resolved_settings.gemini_api_key
+    if api_key is None:
+        raise MediaConfigurationError("gemini_api_key_is_required")
     return MediaAnalyzer(
-        base_url=base_url,
-        api_key=api_key.get_secret_value() if api_key is not None else None,
-        model=model,
-        timeout_seconds=timeout,
+        api_key=api_key.get_secret_value(),
+        model=resolved_settings.gemini_model,
+        timeout_seconds=resolved_settings.gemini_timeout_seconds,
     )
 
 
@@ -322,7 +324,12 @@ async def _handle_process_event(session: AsyncSession, payload: dict[str, JsonVa
             user_content_str = turn.user_content or ""
 
         if user_content_str:
-            for media_url in sorted(set(YOUTUBE_URL_REGEX.findall(user_content_str))):
+            canonical_urls = {
+                canonical
+                for candidate in re.findall(r"https?://\S+", user_content_str)
+                if (canonical := canonical_media_url(candidate)) is not None
+            }
+            for media_url in sorted(canonical_urls):
                 await session.execute(
                     insert(Job)
                     .values(

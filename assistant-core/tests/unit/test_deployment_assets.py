@@ -132,6 +132,9 @@ def test_env_example_has_only_safe_documented_assistant_settings() -> None:
         "ASSISTANT_TASK_MODEL_API_KEY",
         "ASSISTANT_TASK_MODEL_MODEL",
         "ASSISTANT_TASK_MODEL_TIMEOUT_SECONDS",
+        "ASSISTANT_GEMINI_API_KEY",
+        "ASSISTANT_GEMINI_MODEL",
+        "ASSISTANT_GEMINI_TIMEOUT_SECONDS",
     }
     assert assignments["ASSISTANT_ENVIRONMENT"] == "production"
     assert "REPLACE" in assignments["ASSISTANT_DATABASE_URL"]

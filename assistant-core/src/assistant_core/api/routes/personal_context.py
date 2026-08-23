@@ -1023,8 +1023,13 @@ async def process_personal_context_media(
 
     from assistant_core.identity.models import UserIdentity
     from assistant_core.jobs.models import Job
+    from assistant_core.media.analyzer import canonical_media_url
 
     clean_url = body.url.strip()
+    if body.media_type == "youtube":
+        canonical = canonical_media_url(clean_url)
+        if canonical is not None:
+            clean_url = canonical
     async with request.app.state.session_factory() as session:
         user_res = (
             await session.execute(

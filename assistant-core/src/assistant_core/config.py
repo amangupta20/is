@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     task_model_api_key: SecretStr | None = None
     task_model_model: str | None = Field(default=None, min_length=1, max_length=200)
     task_model_timeout_seconds: float = Field(default=60.0, ge=1, le=300)
+    gemini_api_key: SecretStr | None = None
+    gemini_model: str = Field(default="gemini-2.5-flash", min_length=1, max_length=100)
+    gemini_timeout_seconds: float = Field(default=300.0, ge=30, le=900)
     embedding_base_url: str | None = Field(default=None, min_length=1, max_length=2_048)
     embedding_api_key: SecretStr | None = None
     embedding_model: str | None = Field(default=None, min_length=1, max_length=200)
@@ -68,6 +71,7 @@ class Settings(BaseSettings):
         "onlyoffice_jwt_secret",
         "oikb_api_key",
         "admin_token",
+        "gemini_api_key",
         mode="before",
     )
     @classmethod
