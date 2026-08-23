@@ -141,3 +141,29 @@ The assistant core exposes an administrative web interface at `GET /` served fro
 Disable the adapters first so ordinary Open WebUI chat continues without the
 companion. In Dokploy, select and redeploy the prior known-good Git commit, then verify
 liveness/readiness before re-enabling adapters. Database migrations are never automatically downgraded: rollback has no automatic database downgrade; do not run a reverse migration automatically. Stop and review migration compatibility if the prior Git commit cannot use the current schema.
+
+## Historical Chat Backfill (manual, one-shot)
+
+Imported chats (ChatGPT/Gemini via Open WebUI's Import Chats) exist only in Open
+WebUI until backfilled. Run this manually inside the running `assistant-core`
+container whenever you want history to become searchable — it is never scheduled:
+
+```bash
+# preview counts without writing:
+python -m assistant_core.scripts.backfill_chats \
+  --open-webui-url http://open-webui:8080 \
+  --token "<openwebui-api-key>" \
+  --dry-run
+
+# real run (idempotent; safe to rerun):
+python -m assistant_core.scripts.backfill_chats \
+  --open-webui-url http://open-webui:8080 \
+  --token "<openwebui-api-key>"
+```
+
+Behavior: walks each chat's active branch, pairs user/assistant messages into
+historical completed turns with original timestamps, and enqueues conversation
+index jobs only (chunking, dedup, embeddings). Memory extraction is deliberately
+skipped for imported history. Topic episodes compile later via the normal
+3-hour inactivity sweep. Progress: dashboard Jobs tab; verify recall with the
+search playground afterwards.
