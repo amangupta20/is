@@ -14,27 +14,29 @@ GEMINI_GENERATE_CONTENT_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
 
-ANALYSIS_PROMPT = """Watch this video in full and produce a factual structured analysis grounded ONLY in what you actually see and hear.
+ANALYSIS_PROMPT = """Watch this video in full and transcribe it completely.
 
-Return a JSON object with exactly these fields:
-- title: the video's actual on-screen/stated title
-- description: one-sentence factual description
+Return ONLY a JSON object with exactly these fields:
+- title: the video's actual title (title card or spoken intro)
+- description: one factual sentence describing the video
 - channel_or_author: the actual channel name or speaker
 - duration_seconds: integer total duration in seconds
-- summary: dense multi-paragraph synthesis of the key points actually presented
-- key_takeaways: array of distinct conclusions or facts established in the video
+- summary: one factual sentence (the full content lives in segments)
+- key_takeaways: leave as an empty array; do not editorialize
 - topics: array of subject keywords covered
-- segments: chronological timestamped chapters covering the whole video, each with:
+- segments: chronological spans covering 100% of the runtime in roughly 30-60 second chunks:
   - segment_index: 0-indexed integer
-  - start_time_seconds: integer seconds (MM:SS timestamps you observe)
-  - end_time_seconds: integer seconds
-  - label: concise chapter label
-  - content: rich factual summary of what is said and shown during this span,
-    including notable visual demonstrations, not just spoken words
+  - start_time_seconds: integer start in seconds (use observed MM:SS timestamps)
+  - end_time_seconds: integer end in seconds
+  - label: short chapter-style label for the span
+  - content: the near-verbatim spoken transcript of this span, preserving actual
+    wording, names, and terms; when something notable happens visually, append a
+    separate line starting with "Visual: " (demos, on-screen text, scene changes)
 
 Rules:
-- Use ONLY information present in the video. Never guess metadata.
-- Cover the entire runtime; do not invent content beyond it."""
+- Transcribe EVERYTHING said from start to finish; never summarize within a span.
+- Spans must be contiguous and cover the entire runtime with no gaps.
+- Never invent content; use exact names and terms as spoken or shown."""
 
 
 class MediaAnalysisError(ValueError):

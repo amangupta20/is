@@ -63,7 +63,7 @@ async def test_analyze_media_sends_native_file_part_and_parses() -> None:
         assert parts[0] == {
             "file_data": {"file_uri": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
         }
-        assert parts[1]["text"].startswith("Watch this video")
+        assert parts[1]["text"].startswith("Watch this video in full and transcribe")
         assert body["generationConfig"]["responseMimeType"] == "application/json"
         return httpx.Response(200, json=_gemini_payload(_analysis()))
 
