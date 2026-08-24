@@ -576,8 +576,8 @@ class Tools:
     ) -> str:
         """Fetch and reconstruct the complete text of an indexed document by file id or exact filename.
 
-        Use when the user asks for the full contents of an uploaded or pasted file, or
-        when a relevant passage needs its complete surrounding document.
+        Use for files from EARLIER chats or uploads not attached to this one. For
+        files already attached to the current chat, prefer the native file tools.
         :param file_id_or_name: The native file id, or the exact filename (e.g. "specs.md").
         """
         try:

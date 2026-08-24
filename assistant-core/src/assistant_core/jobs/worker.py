@@ -887,6 +887,12 @@ async def process_one(session: AsyncSession) -> bool:
         error_code = (
             f"file_fetch_failed_{exc.status_code}" if exc.status_code else "file_fetch_failed"
         )
+        LOGGER.warning(
+            "file_job_fetch_failed",
+            job_id=job_id,
+            file_id=job.payload.get("file_id") if isinstance(job.payload, dict) else None,
+            status_code=exc.status_code,
+        )
     except MediaConfigurationError as exc:
         error_code = MEDIA_CONFIGURATION_ERROR
         LOGGER.warning(
@@ -904,8 +910,15 @@ async def process_one(session: AsyncSession) -> bool:
             attempts=job.attempts,
             reason=str(exc)[:300],
         )
-    except Exception:  # noqa: BLE001 - all ordinary handler failures share one safe code
+    except Exception as exc:  # noqa: BLE001 - all ordinary handler failures share one safe code
         error_code = "handler_failed"
+        LOGGER.warning(
+            "job_failed_with_exception",
+            job_id=job_id,
+            job_kind=job.kind,
+            payload_keys=sorted(job.payload.keys()) if isinstance(job.payload, dict) else [],
+            exception_type=type(exc).__name__,
+        )
     else:
         if expected_claimed_at is None:
             raise InvalidJobClaimError(INVALID_JOB_CLAIM_ERROR) from None
