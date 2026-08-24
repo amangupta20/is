@@ -304,15 +304,17 @@ def fetch_openwebui_file(
     # Check direct metadata markers
     source_val = str(data.get("source") or meta_dict.get("source") or "").strip().lower()
     type_val = str(data.get("type") or meta_dict.get("type") or "").strip().lower()
+    marker_fields = {
+        "collection_id",
+        "collection_name",
+        "knowledge_id",
+        "knowledge_name",
+    }
+    matched_markers = sorted(
+        field for field in marker_fields if data.get(field) or meta_dict.get(field)
+    )
     if (
-        data.get("collection_id")
-        or data.get("collection_name")
-        or data.get("knowledge_id")
-        or data.get("knowledge_name")
-        or meta_dict.get("collection_id")
-        or meta_dict.get("collection_name")
-        or meta_dict.get("knowledge_id")
-        or meta_dict.get("knowledge_name")
+        matched_markers
         or source_val in ("knowledge", "collection", "kb", "vault")
         or type_val in ("collection", "knowledge", "kb", "vault")
     ):
@@ -321,6 +323,9 @@ def fetch_openwebui_file(
             file_id=file_id,
             source=source_val,
             type=type_val,
+            matched=matched_markers,
+            data_keys=sorted(k for k in data if k != "data"),
+            meta_keys=sorted(meta_dict.keys()),
         )
         return None
 
