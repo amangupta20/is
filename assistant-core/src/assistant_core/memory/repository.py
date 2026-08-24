@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
 
+import structlog
 from sqlalchemy import exists, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +21,8 @@ from assistant_core.memory.models import (
 )
 from assistant_core.memory.schemas import ExplicitMemoryCandidate
 from assistant_core.turns.models import CompletedTurn
+
+LOGGER = structlog.get_logger("assistant_core.memory.repository")
 
 
 def _normalized_tokens(value: str) -> tuple[str, ...]:
@@ -272,18 +275,42 @@ async def _apply_inferred_candidate(
     return record
 
 
+def _normalized_evidence_text(value: str) -> str:
+    """Normalize text so cosmetic whitespace/case drift does not break matching."""
+    return " ".join(value.split()).casefold()
+
+
 async def apply_explicit_candidates(
     session: AsyncSession,
     turn: CompletedTurn,
     candidates: list[ExplicitMemoryCandidate],
 ) -> list[MemoryRecord]:
-    """Apply exact-quote candidates once; explicit records supersede, inferred accumulate."""
-    full_turn_text = f"{turn.user_content}\n{turn.assistant_content}"
-    if any(candidate.evidence_quote not in full_turn_text for candidate in candidates):
-        raise ValueError("memory evidence quote is not present in the completed turn content")
+    """Apply evidence-backed candidates once; explicit records supersede, inferred accumulate.
+
+    Candidates whose quote is absent from the turn (even after normalization)
+    are dropped with a warning instead of aborting the whole extraction.
+    """
+    full_turn_normalized = _normalized_evidence_text(
+        f"{turn.user_content}\n{turn.assistant_content}"
+    )
+    valid: list[ExplicitMemoryCandidate] = []
+    dropped = 0
+    for candidate in candidates:
+        if _normalized_evidence_text(candidate.evidence_quote) in full_turn_normalized:
+            valid.append(candidate)
+        else:
+            dropped += 1
+    if dropped:
+        LOGGER.warning(
+            "memory_candidates_dropped_missing_evidence",
+            dropped=dropped,
+            kept=len(valid),
+        )
+    if not valid:
+        return []
 
     applied: list[MemoryRecord] = []
-    ordered = sorted(candidates, key=lambda c: 0 if c.kind == "explicit" else 1)
+    ordered = sorted(valid, key=lambda c: 0 if c.kind == "explicit" else 1)
     for candidate in ordered:
         if candidate.kind == "inferred":
             record = await _apply_inferred_candidate(session, turn, candidate)

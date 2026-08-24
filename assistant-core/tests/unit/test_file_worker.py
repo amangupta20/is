@@ -145,12 +145,8 @@ def test_fetch_openwebui_file_success(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize(
     "kb_metadata",
     [
-        {"collection_id": "coll-123"},
-        {"collection_name": "Obsidian Vault"},
         {"knowledge_id": "kb-123"},
         {"knowledge_name": "Vault Knowledge"},
-        {"meta": {"collection_id": "coll-456"}},
-        {"meta": {"collection_name": "Obsidian Vault"}},
         {"meta": {"knowledge_id": "kb-456"}},
         {"source": "knowledge"},
         {"source": "collection"},
@@ -163,7 +159,7 @@ def test_fetch_openwebui_file_success(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_fetch_openwebui_file_skips_kb_metadata(
     monkeypatch: pytest.MonkeyPatch, kb_metadata: dict[str, object]
 ) -> None:
-    """fetch_openwebui_file returns None when file metadata marks it as a KB/collection document."""
+    """fetch_openwebui_file returns None for explicit knowledge linkage markers."""
     import httpx
 
     from assistant_core.files.client import fetch_openwebui_file
@@ -295,3 +291,47 @@ def test_fetch_openwebui_file_skips_kb_hash_match(monkeypatch: pytest.MonkeyPatc
         file_id="random-uuid-fid",
     )
     assert result is None
+
+
+def test_fetch_openwebui_file_indexes_despite_collection_name_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """meta.collection_name on ordinary chat attachments must NOT trigger a KB skip."""
+    import httpx
+
+    from assistant_core.files.client import fetch_openwebui_file
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/files/chat-file-id":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chat-file-id",
+                    "filename": "lecture.pdf",
+                    "meta": {
+                        "collection_name": "Obsidian Vault",
+                        "content_type": "application/pdf",
+                        "name": "lecture.pdf",
+                        "size": 123,
+                    },
+                    "data": {"content": "# Lecture\nActual slide text."},
+                },
+            )
+        if request.url.path == "/api/v1/knowledge/":
+            return httpx.Response(200, json={"items": []})
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+
+    def mock_client(*args: object, **kwargs: object) -> httpx.Client:
+        return real_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr("assistant_core.files.client.httpx.Client", mock_client)
+
+    result = fetch_openwebui_file(
+        base_url="http://test.local",
+        api_key="test-key",
+        file_id="chat-file-id",
+    )
+    assert result == ("lecture.pdf", "application/pdf", "# Lecture\nActual slide text.")

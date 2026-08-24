@@ -871,6 +871,14 @@ async def process_one(session: AsyncSession) -> bool:
     job_id = job.id
     expected_claimed_at = job.claimed_at
     error_code: str
+    # Snapshot plain values BEFORE dispatch: any handler failure may roll the
+    # session back, expiring ORM attributes; touching them afterwards triggers
+    # a synchronous lazy-load (MissingGreenlet) that would kill the worker.
+    job_kind_snapshot = job.kind
+    job_payload_snapshot = dict(job.payload) if isinstance(job.payload, dict) else {}
+    payload_url = job_payload_snapshot.get("url")
+    payload_file_id = job_payload_snapshot.get("file_id")
+    attempts_snapshot = job.attempts
     try:
         await handle(session, job.kind, job.payload)
     except InvalidTurnPayloadError:
@@ -890,7 +898,7 @@ async def process_one(session: AsyncSession) -> bool:
         LOGGER.warning(
             "file_job_fetch_failed",
             job_id=job_id,
-            file_id=job.payload.get("file_id") if isinstance(job.payload, dict) else None,
+            file_id=payload_file_id,
             status_code=exc.status_code,
         )
     except MediaConfigurationError as exc:
@@ -898,7 +906,7 @@ async def process_one(session: AsyncSession) -> bool:
         LOGGER.warning(
             "media_job_configuration_failed",
             job_id=job_id,
-            url=job.payload.get("url") if isinstance(job.payload, dict) else None,
+            url=payload_url,
             reason=str(exc),
         )
     except MediaAnalysisError as exc:
@@ -906,8 +914,8 @@ async def process_one(session: AsyncSession) -> bool:
         LOGGER.warning(
             "media_job_analysis_failed",
             job_id=job_id,
-            url=job.payload.get("url") if isinstance(job.payload, dict) else None,
-            attempts=job.attempts,
+            url=payload_url,
+            attempts=attempts_snapshot,
             reason=str(exc)[:300],
         )
     except Exception as exc:  # noqa: BLE001 - all ordinary handler failures share one safe code
@@ -915,8 +923,8 @@ async def process_one(session: AsyncSession) -> bool:
         LOGGER.warning(
             "job_failed_with_exception",
             job_id=job_id,
-            job_kind=job.kind,
-            payload_keys=sorted(job.payload.keys()) if isinstance(job.payload, dict) else [],
+            job_kind=job_kind_snapshot,
+            payload_keys=sorted(job_payload_snapshot.keys()),
             exception_type=type(exc).__name__,
         )
     else:

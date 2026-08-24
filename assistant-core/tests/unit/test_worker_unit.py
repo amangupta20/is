@@ -999,3 +999,51 @@ def test_main_runs_worker_coroutine(monkeypatch: pytest.MonkeyPatch) -> None:
     worker.main()
 
     assert len(submitted) == 1
+
+
+def test_process_one_survives_handler_failure_after_session_rollback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Except-path logging uses snapshots; expired ORM attributes are never touched."""
+    from assistant_core.jobs import worker
+
+    class PoisonJob:
+        def __init__(self) -> None:
+            self.id = uuid.uuid4()
+            self.claimed_at = datetime.now(UTC)
+            self.attempts = 3
+            self.payload = {"url": "https://example.com/watch?v=abc"}
+            self._expired = False
+
+        @property
+        def kind(self) -> str:
+            if self._expired:
+                raise RuntimeError("simulated MissingGreenlet on expired attribute")
+            return "index_media"
+
+    job = PoisonJob()
+
+    class Session:
+        async def rollback(self) -> None:
+            job._expired = True
+
+    failures: list[str] = []
+
+    async def claim(_session: object) -> PoisonJob:
+        return job
+
+    async def handle(_session: object, _kind: str, _payload: object) -> None:
+        await Session().rollback()
+        raise ValueError("memory evidence quote is not present")
+
+    async def record_failure(
+        _session: object, _job_id: uuid.UUID, _lease: object, code: str
+    ) -> None:
+        failures.append(code)
+
+    monkeypatch.setattr(worker, "claim_next_job", claim)
+    monkeypatch.setattr(worker, "handle", handle)
+    monkeypatch.setattr(worker, "_record_handler_failure", record_failure)
+
+    assert anyio.run(worker.process_one, Session()) is True  # type: ignore[arg-type]
+    assert failures == ["handler_failed"]

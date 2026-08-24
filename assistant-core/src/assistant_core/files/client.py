@@ -297,41 +297,41 @@ def fetch_openwebui_file(
         raise OpenWebUIFileFetchError(
             f"Failed to fetch metadata for file {file_id}: {exc}", status_code=status
         ) from exc
-
     raw_meta = data.get("meta")
     meta_dict: dict[str, Any] = raw_meta if isinstance(raw_meta, dict) else {}
 
-    # Check direct metadata markers
+    # Explicit knowledge linkage still indicates a KB document outright.
     source_val = str(data.get("source") or meta_dict.get("source") or "").strip().lower()
     type_val = str(data.get("type") or meta_dict.get("type") or "").strip().lower()
-    marker_fields = {
-        "collection_id",
-        "collection_name",
-        "knowledge_id",
-        "knowledge_name",
-    }
-    matched_markers = sorted(
-        field for field in marker_fields if data.get(field) or meta_dict.get(field)
-    )
-    if (
-        matched_markers
+    explicit_knowledge_linkage = (
+        bool(data.get("knowledge_id"))
+        or bool(data.get("knowledge_name"))
+        or bool(meta_dict.get("knowledge_id"))
+        or bool(meta_dict.get("knowledge_name"))
         or source_val in ("knowledge", "collection", "kb", "vault")
         or type_val in ("collection", "knowledge", "kb", "vault")
-    ):
+    )
+    if explicit_knowledge_linkage:
         LOGGER.info(
             "fetch_openwebui_file_skipped_kb_metadata",
             file_id=file_id,
             source=source_val,
             type=type_val,
-            matched=matched_markers,
-            data_keys=sorted(k for k in data if k != "data"),
-            meta_keys=sorted(meta_dict.keys()),
         )
         return None
 
     filename = str(data.get("filename") or meta_dict.get("name") or file_id)
     mime_type = str(meta_dict.get("content_type") or "text/plain")
 
+    # NOTE: presence of meta.collection_name is NOT treated as KB membership;
+    # current Open WebUI populates it on ordinary chat attachments too. The
+    # live knowledge-registry check below is the authoritative gate.
+    if meta_dict.get("collection_name"):
+        LOGGER.debug(
+            "fetch_openwebui_file_collection_label_observed",
+            file_id=file_id,
+            collection_name=str(meta_dict["collection_name"])[:120],
+        )
     # Check against knowledge registry
     kb_file_ids: set[str] = set()
     kb_hashes: set[str] = set()

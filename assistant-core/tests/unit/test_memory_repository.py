@@ -382,3 +382,80 @@ def test_consolidate_user_memories() -> None:
         assert run_logs[0].superseded_count == 3
 
     anyio.run(run_test)
+
+
+def test_apply_candidates_drops_drifted_quotes_and_applies_valid() -> None:
+    """Paraphrased quotes are dropped with a warning; cosmetic drift still matches."""
+    from assistant_core.memory.models import MemoryRecord
+    from assistant_core.memory.repository import apply_explicit_candidates
+    from assistant_core.memory.schemas import ExplicitMemoryCandidate
+
+    turn = completed_turn(content="I live in Pune.", message_id="user-1")
+    drifted = ExplicitMemoryCandidate(
+        key="profile.other_city",
+        category="fact",
+        statement="Unverifiable claim.",
+        evidence_quote="I reside within the city of Pune presently",
+    )
+    exact = ExplicitMemoryCandidate(
+        key="profile.home_city",
+        category="fact",
+        statement="The user lives in Pune.",
+        evidence_quote="I live in Pune.",
+    )
+    cosmetic = ExplicitMemoryCandidate(
+        key="profile.hometown_note",
+        category="fact",
+        statement="Pune is the user's home city.",
+        evidence_quote="i  LIVE   in pune.",
+    )
+
+    rec_exact = MemoryRecord(
+        id=uuid.uuid4(),
+        user_id=turn.user_id,
+        key=exact.key,
+        category="fact",
+        statement=exact.statement,
+    )
+    rec_cosmetic = MemoryRecord(
+        id=uuid.uuid4(),
+        user_id=turn.user_id,
+        key=cosmetic.key,
+        category="fact",
+        statement=cosmetic.statement,
+    )
+    session = RecordingSession([None, rec_exact, None, None, rec_cosmetic, None])
+
+    async def exercise() -> list[MemoryRecord]:
+        return await apply_explicit_candidates(
+            session,
+            turn,
+            [drifted, exact, cosmetic],  # type: ignore[arg-type]
+        )
+
+    applied = anyio.run(exercise)
+
+    assert applied == [rec_exact, rec_cosmetic]
+    assert any("INSERT INTO assistant_core.memory_evidence" in str(s) for s in session.statements)
+    evidence_inserts = [s for s in session.statements if "memory_evidence" in str(s)]
+    assert len(evidence_inserts) == 2
+
+
+def test_apply_candidates_returns_empty_when_all_quotes_missing() -> None:
+    from assistant_core.memory.repository import apply_explicit_candidates
+    from assistant_core.memory.schemas import ExplicitMemoryCandidate
+
+    turn = completed_turn(content="Totally unrelated content.", message_id="user-9")
+    candidate = ExplicitMemoryCandidate(
+        key="profile.home_city",
+        category="fact",
+        statement="The user lives in Pune.",
+        evidence_quote="I live in Pune.",
+    )
+    session = RecordingSession([])
+
+    async def exercise() -> list[object]:
+        return await apply_explicit_candidates(session, turn, [candidate])  # type: ignore[arg-type]
+
+    assert anyio.run(exercise) == []
+    assert session.statements == []
