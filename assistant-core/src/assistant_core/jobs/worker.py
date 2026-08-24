@@ -676,6 +676,11 @@ async def _handle_compile_topic_episodes(
         )
         for t in turns
     ]
+    # Snapshot chat-scope columns now: the rollback below expires ORM state,
+    # and touching turns[0] afterwards would raise MissingGreenlet.
+    first_turn = turns[0]
+    chat_project_id = first_turn.native_project_id
+    chat_folder_id = first_turn.native_folder_id
 
     await session.rollback()
     extractor = get_episode_extractor()
@@ -708,8 +713,8 @@ async def _handle_compile_topic_episodes(
             session,
             user_id=user_id,
             native_chat_id=native_chat_id,
-            native_project_id=turns[0].native_project_id,
-            native_folder_id=turns[0].native_folder_id,
+            native_project_id=chat_project_id,
+            native_folder_id=chat_folder_id,
             extraction=ext,
             turn_count=len(turns),
             embedding=vector,
