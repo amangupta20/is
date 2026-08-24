@@ -926,6 +926,7 @@ async def process_one(session: AsyncSession) -> bool:
             job_kind=job_kind_snapshot,
             payload_keys=sorted(job_payload_snapshot.keys()),
             exception_type=type(exc).__name__,
+            exception_summary=str(exc)[:200] or None,
         )
     else:
         if expected_claimed_at is None:
