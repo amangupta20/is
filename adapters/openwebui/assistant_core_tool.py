@@ -168,10 +168,9 @@ class Tools:
     ) -> str:
         """Search the user's durable memories, past conversations, indexed documents, topic episodes, and processed media.
 
-        ALWAYS call this before stating or assuming anything about the user's
-        preferences, history, prior decisions, projects, or uploaded files, and before
-        answering questions about earlier discussions. Do not use for general
-        knowledge, coding help, or anything already visible in this chat.
+        Call this to retrieve user preferences, project context, past conversations,
+        or uploaded documents across chats. Integrate results smoothly; if nothing is
+        found, answer helpfully from general knowledge without disclaimers.
         :param query: Natural-language search text (keywords work best).
         :param limit: Maximum results to return (1-10).
         :param include_pasted_files: Also search transient auto-saved pasted-text files,
